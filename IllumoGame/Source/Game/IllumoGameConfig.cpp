@@ -2,11 +2,22 @@
 
 #include <Illumo/Services/IEnvVars.h>
 
+#include <string>
+
 void
 IllumoGameConfig::ApplyDefaults(IEnvVars* environment)
 {
   if (environment == nullptr) {
     return;
+  }
+
+  // A pre-family configuration may contain only ModeString. Seed the new
+  // ruleset key from that alias before filling defaults so it keeps its value.
+  if (environment->getVar("RuleSetString").value.empty()) {
+    const std::string legacyRule = environment->getVar("ModeString").value;
+    if (!legacyRule.empty()) {
+      environment->setVar("RuleSetString", legacyRule);
+    }
   }
 
   struct DefaultValue
@@ -17,14 +28,34 @@ IllumoGameConfig::ApplyDefaults(IEnvVars* environment)
   const DefaultValue defaults[] = {
     { "CanvasX", "80" },
     { "CanvasY", "60" },
+    { "FamilyString", "LIFE_LIKE_BINARY" },
+    { "RuleSetString", "GAME_OF_LIFE" },
     { "ModeString", "GAME_OF_LIFE" },
     { "WorldChunksX", "0" },
     { "WorldChunksY", "0" },
     { "speedFactor", "1" },
     { "tps", "30" },
     { "cellFadeSpeed", "8" },
-    { "uiScale", "1" },
+    // The interface follows the window size until the player picks a scale.
+    { "uiScale", "auto" },
     { "msaa", "4" },
+    { "reducedUiMotion", "0" },
+    { "showInspector", "0" },
+    { "editHints", "1" },
+    { "softwareCursor", "1" },
+    { "soundVolume", "80" },
+    { "musicVolume", "80" },
+    { "startPaused", "1" },
+    { "cellStyle", "led" },
+    { "cellGlow", "1" },
+    { "gridLines", "0" },
+    { "showFPS", "0" },
+    { "showMemory", "0" },
+    { "zoomStep", "0.15" },
+    { "invertZoom", "0" },
+    { "panSpeed", "600" },
+    { "autosaveMinutes", "0" },
+    { "confirmClear", "1" },
   };
   for (const DefaultValue& defaultValue : defaults) {
     if (environment->getVar(defaultValue.name).value.empty()) {

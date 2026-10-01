@@ -2,11 +2,16 @@
 #include <GL/glew.h>
 #include <Illumo/Rendering/IMesh.h>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 class GLMesh : public IMesh
 {
 public:
+  unsigned int getVAOID() const { return _vaoID; }
+  unsigned int getVBOID() const { return _vboID; }
+  unsigned int getEBOID() const { return _eboID; }
+
   static const unsigned int kCanvasFloatsPerVertex = 8;
   static const unsigned int kCanvasStrideBytes =
     kCanvasFloatsPerVertex * sizeof(float);
@@ -17,6 +22,7 @@ public:
     36; // pos3 float (12) + norm3 float (12) + color4 ubyte (4) + uv2 float (8)
   static const unsigned int kLitMeshStrideBytes =
     32; // pos3 float (12) + norm3 float (12) + uv2 float (8)
+  static const unsigned int kPos3StrideBytes = 12; // pos3 float (12)
 
   // Static mesh (Canvas / proof). Default layout Pos3Color3Uv2.
   GLMesh(const void* vertices,
@@ -32,8 +38,8 @@ public:
   {
   }
 
-  // Full create: dynamic=true means vertexSize is VBO capacity; vertices may be
-  // null.
+  // Full create: dynamic=true means the sizes are VBO/EBO capacities; either
+  // data pointer may be null.
   GLMesh(const void* vertices,
          size_t vertexSize,
          const void* indices,
@@ -49,6 +55,7 @@ public:
     _layout = layout;
     _dynamic = dynamic;
     _vboCapacityBytes = vertexSize;
+    _eboCapacityBytes = indexSize;
 
     if (vertices && vertexSize > 0 &&
         layout == MeshVertexLayout::Pos3Color3Uv2) {
@@ -74,6 +81,7 @@ public:
     _vertexData = vertexData;
     _indexData = indexData;
     _vboCapacityBytes = vertexData.size() * sizeof(float);
+    _eboCapacityBytes = indexData.size() * sizeof(unsigned int);
     uploadToGpu(_vertexData.empty() ? nullptr : _vertexData.data(),
                 _vboCapacityBytes);
   }
@@ -89,28 +97,57 @@ public:
     _dynamic = false;
     _vertexData = vertexData;
     _vboCapacityBytes = vertexData.size() * sizeof(float);
+    _eboCapacityBytes = 0;
     uploadToGpu(_vertexData.empty() ? nullptr : _vertexData.data(),
                 _vboCapacityBytes);
   }
 
-  ~GLMesh() = default;
+  ~GLMesh() override { Destroy(); }
+  GLMesh(const GLMesh&) = delete;
+  GLMesh& operator=(const GLMesh&) = delete;
+  GLMesh(GLMesh&&) = delete;
+  GLMesh& operator=(GLMesh&&) = delete;
+  bool isValid() const { return _vaoID != 0 && _vboID != 0; }
 
   void Bind() const { glBindVertexArray(_vaoID); }
 
   void Unbind() const { glBindVertexArray(0); }
 
-  void UpdateVertexData(const void* data,
+  bool UpdateVertexData(const void* data,
                         size_t sizeBytes,
                         size_t offsetBytes = 0) const
   {
-    if (!data || sizeBytes == 0) {
-      return;
+    if (!data || sizeBytes == 0 || !isValid() ||
+        offsetBytes > _vboCapacityBytes ||
+        sizeBytes > _vboCapacityBytes - offsetBytes) {
+      return false;
     }
     glBindBuffer(GL_ARRAY_BUFFER, _vboID);
     glBufferSubData(GL_ARRAY_BUFFER,
                     static_cast<GLintptr>(offsetBytes),
                     static_cast<GLsizeiptr>(sizeBytes),
                     data);
+    return true;
+  }
+
+  bool UpdateIndexData(const void* data,
+                       size_t sizeBytes,
+                       size_t offsetBytes = 0) const
+  {
+    if (!data || sizeBytes == 0 || !_hasIndexBuffer ||
+        offsetBytes > _eboCapacityBytes ||
+        sizeBytes > _eboCapacityBytes - offsetBytes) {
+      return false;
+    }
+    // GL_ELEMENT_ARRAY_BUFFER binding belongs to the active VAO. The copy
+    // target updates the same buffer without disturbing renderer VAO state.
+    glBindBuffer(GL_COPY_WRITE_BUFFER, _eboID);
+    glBufferSubData(GL_COPY_WRITE_BUFFER,
+                    static_cast<GLintptr>(offsetBytes),
+                    static_cast<GLsizeiptr>(sizeBytes),
+                    data);
+    glBindBuffer(GL_COPY_WRITE_BUFFER, 0);
+    return true;
   }
 
   unsigned int getUploadedIndexCount() const { return _uploadedIndexCount; }
@@ -136,11 +173,15 @@ public:
   }
 
 private:
+  unsigned int _vaoID = 0;
+  unsigned int _vboID = 0;
+  unsigned int _eboID = 0;
   unsigned int _uploadedIndexCount;
   bool _hasIndexBuffer;
   MeshVertexLayout _layout;
   bool _dynamic;
   size_t _vboCapacityBytes;
+  size_t _eboCapacityBytes;
 
   void storeIndices(const void* indices, size_t indexSize)
   {
@@ -253,8 +294,14 @@ private:
                             GL_FALSE,
                             kLitMeshStrideBytes,
                             reinterpret_cast<void*>(24));
+    } else if (_layout == MeshVertexLayout::Pos3) {
+      // Pos3: location 0 pos3 (12 bytes)
+      glEnableVertexAttribArray(0);
+      glVertexAttribPointer(
+        0, 3, GL_FLOAT, GL_FALSE, kPos3StrideBytes, reinterpret_cast<void*>(0));
     } else {
-      // Canvas: location 0 pos3, location 2 uv2
+      // Canvas: location 0 pos3, location 1 color3, location 2 uv2. The
+      // canvas shader reads the colour as its cell look.
       glEnableVertexAttribArray(0);
       glVertexAttribPointer(0,
                             3,
@@ -262,6 +309,13 @@ private:
                             GL_FALSE,
                             kCanvasStrideBytes,
                             reinterpret_cast<void*>(0));
+      glEnableVertexAttribArray(1);
+      glVertexAttribPointer(1,
+                            3,
+                            GL_FLOAT,
+                            GL_FALSE,
+                            kCanvasStrideBytes,
+                            reinterpret_cast<void*>(3 * sizeof(float)));
       glEnableVertexAttribArray(2);
       glVertexAttribPointer(2,
                             2,
@@ -274,6 +328,13 @@ private:
 
   void uploadToGpu(const void* vertices, size_t vertexSize)
   {
+    if (vertexSize == 0 || (!vertices && !_dynamic) ||
+        vertexSize >
+          static_cast<size_t>(std::numeric_limits<GLsizeiptr>::max()) ||
+        _eboCapacityBytes >
+          static_cast<size_t>(std::numeric_limits<GLsizeiptr>::max())) {
+      return;
+    }
     glGenVertexArrays(1, &_vaoID);
     glGenBuffers(1, &_vboID);
     glBindVertexArray(_vaoID);
@@ -297,16 +358,26 @@ private:
       _vboCapacityBytes = _vertexData.size() * sizeof(float);
     }
 
-    if (!_indexData.empty()) {
+    GLint64 vertexCapacity = 0;
+    glGetBufferParameteri64v(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &vertexCapacity);
+    bool storageValid =
+      _vaoID != 0 && _vboID != 0 &&
+      vertexCapacity == static_cast<GLint64>(_vboCapacityBytes);
+    if (_eboCapacityBytes > 0) {
       glGenBuffers(1, &_eboID);
       glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, _eboID);
-      glBufferData(
-        GL_ELEMENT_ARRAY_BUFFER,
-        static_cast<GLsizeiptr>(_indexData.size() * sizeof(unsigned int)),
-        _indexData.data(),
-        GL_STATIC_DRAW);
-      _uploadedIndexCount = static_cast<unsigned int>(_indexData.size());
+      glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                   static_cast<GLsizeiptr>(_eboCapacityBytes),
+                   _indexData.empty() ? nullptr : _indexData.data(),
+                   usage);
+      _uploadedIndexCount =
+        static_cast<unsigned int>(_eboCapacityBytes / sizeof(unsigned int));
       _hasIndexBuffer = true;
+      GLint64 indexCapacity = 0;
+      glGetBufferParameteri64v(
+        GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &indexCapacity);
+      storageValid = storageValid && _eboID != 0 &&
+                     indexCapacity == static_cast<GLint64>(_eboCapacityBytes);
     }
 
     setupAttributes();
@@ -314,5 +385,8 @@ private:
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    if (!storageValid) {
+      Destroy();
+    }
   }
 };

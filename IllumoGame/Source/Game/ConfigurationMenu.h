@@ -1,9 +1,13 @@
 #pragma once
 
+#include <Illumo/Gui/GuiDropdownList.h>
+#include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 class InputManager;
 class IRenderWindow;
@@ -11,16 +15,49 @@ class Renderer;
 
 struct SimulatorConfiguration
 {
+  std::string family = "LIFE_LIKE_BINARY";
   std::string ruleSet = "GAME_OF_LIFE";
   std::int64_t worldChunkWidth = 0;
   std::int64_t worldChunkHeight = 0;
-  long tps = 12;
+  long tps = 30;
   double speedFactor = 1.0;
-  double fadeSpeed = 6.0;
+  double fadeSpeed = 8.0;
   bool vsync = true;
+  bool editHints = true;
   bool fullscreen = false;
-  long uiScale = 1;
+  // Interface scale factor (fractions allowed), or 0 for automatic: the
+  // scale follows the window size.
+  double uiScale = 1.0;
   long msaa = 4;
+  // The rendering backend for the next launch, as GraphicsAPI spells it:
+  // "OPENGL" or "VULKAN".
+  std::string graphicsApi = "OPENGL";
+  long fpsCap = 60;
+  bool showInspector = false;
+  bool reducedUiMotion = false;
+  // CSim draws its own pointer and hides the system cursor.
+  bool softwareCursor = true;
+  // Sound effect and music volumes, 0 (off) to 100 percent.
+  long soundVolume = 80;
+  long musicVolume = 80;
+  // New and loaded canvases open paused in EDIT; off starts them running.
+  bool startPaused = true;
+  // Up-close cell look: LED keys or flat pixels, glow 0-2, grid lines.
+  bool ledCells = true;
+  double cellGlow = 1.0;
+  bool gridLines = false;
+  // CSim's corner performance readout.
+  bool showFps = false;
+  bool showMemory = false;
+  // Mouse-wheel zoom per notch (0.15 = 15%), its direction, and arrow-key
+  // panning in screen pixels per second (0 turns it off).
+  double zoomStep = 0.15;
+  bool invertZoom = false;
+  long panSpeed = 600;
+  // Minutes between autosaves to private storage; 0 turns autosave off.
+  long autosaveMinutes = 0;
+  // Clear and Reset (clear_canvas, reset_canvas) ask first.
+  bool confirmClear = true;
 };
 
 enum class ConfigurationMenuAction
@@ -31,17 +68,75 @@ enum class ConfigurationMenuAction
   Exit
 };
 
-// Release-visible, primitive-composed settings overlay. This owns one visual
-// and a draft value; it is deliberately not a retained widget hierarchy.
+// The menu's sections, in tab order.
+enum class ConfigurationTab
+{
+  Simulation,
+  Canvas,
+  Video,
+  Audio,
+  Controls,
+  General,
+  Count
+};
+
+// Every editable setting; each belongs to exactly one tab.
+enum class ConfigurationSetting
+{
+  Family,
+  Ruleset,
+  WorldWidth,
+  WorldHeight,
+  Tps,
+  Speed,
+  StartPaused,
+  CellStyle,
+  CellGlow,
+  GridLines,
+  Fade,
+  Inspector,
+  EditHints,
+  Fullscreen,
+  Vsync,
+  FpsCap,
+  Msaa,
+  Renderer,
+  ShowFps,
+  ShowMemory,
+  SoundVolume,
+  MusicVolume,
+  ZoomStep,
+  InvertZoom,
+  PanSpeed,
+  UiScale,
+  ReducedMotion,
+  SoftwareCursor,
+  Autosave,
+  ConfirmClear,
+  Count
+};
+
+// Release-visible, primitive-composed settings overlay. This owns a stack of
+// visuals and a draft value; it is deliberately not a retained widget
+// hierarchy.
+// Settings are grouped into tabs; Apply, Discard and Exit are footer buttons
+// shared by every tab. Selection indexes the active tab's rows first, then
+// the footer buttons.
 class ConfigurationMenu : public DrawableBase
 {
 public:
+  static const int kFooterButtonCount = 3;
+  static const int kApplyButton = 0;
+  static const int kDiscardButton = 1;
+  static const int kExitButton = 2;
+
   ConfigurationMenu(IRenderWindow* window, Renderer* renderer);
   ~ConfigurationMenu() override = default;
 
   ConfigurationMenu(const ConfigurationMenu&) = delete;
   ConfigurationMenu& operator=(const ConfigurationMenu&) = delete;
 
+  // Opens on the tab that was active when the menu last closed.
   void open(const SimulatorConfiguration& current);
   void close();
   bool isOpen() const { return openState; }
@@ -50,9 +145,18 @@ public:
   bool readConfiguration(SimulatorConfiguration* configuration,
                          std::string* error) const;
   void setError(const std::string& message);
-  GameVisual& getVisual() { return visual; }
+  // The rows' labels and controls and the footer help.
+  GameVisual& getVisual() { return layers[kContentLayer]; }
+  // Every layer, back to front, for tests that look across the whole menu.
+  static constexpr std::size_t layerCountForTesting() { return kLayerCount; }
+  GameVisual& layerForTesting(std::size_t index) { return layers[index]; }
 
+  ConfigurationTab getActiveTabForTesting() const { return activeTab; }
+  void selectTabForTesting(ConfigurationTab tab);
+  int getFirstVisibleRowForTesting() const { return firstVisibleRow; }
   int getSelectedRowForTesting() const { return selectedRow; }
+  // Row of a setting within its own tab, or -1.
+  static int rowOfSettingForTesting(ConfigurationSetting setting);
   float getAnimationProgressForTesting() const;
   float getSelectionPositionForTesting() const;
   float getValuePulseForTesting() const;
@@ -60,47 +164,103 @@ public:
   {
     return worldWidthText;
   }
+  // Window pixels per menu virtual unit.
+  float getLayoutScaleForTesting() const { return panelFit.layoutScale; }
+  // Virtual-space {x, y, width, height} of hit targets, as last laid out.
+  std::array<float, 4> getTabBoundsForTesting(ConfigurationTab tab) const;
+  std::array<float, 4> getFooterButtonBoundsForTesting(int button) const;
+  // The slider track of a row in the active tab (zero size if none).
+  std::array<float, 4> getSliderTrackBoundsForTesting(int row) const;
+  // The family or ruleset list, open while the player picks from it.
+  const GuiDropdownList& getDropdownForTesting() const { return dropdown; }
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
 
 private:
-  static const int kRulesetRow = 0;
-  static const int kWorldWidthRow = 1;
-  static const int kWorldHeightRow = 2;
-  static const int kTpsRow = 3;
-  static const int kSpeedRow = 4;
-  static const int kFadeRow = 5;
-  static const int kVsyncRow = 6;
-  static const int kFullscreenRow = 7;
-  static const int kUiScaleRow = 8;
-  static const int kMsaaRow = 9;
-  static const int kApplyRow = 10;
-  static const int kCancelRow = 11;
-  static const int kExitRow = 12;
-  static const int kRowCount = 13;
-  static constexpr float kOpenAnimationSeconds = 0.36f;
-  static constexpr float kSelectionAnimationSeconds = 0.14f;
-  static constexpr float kValuePulseSeconds = 0.20f;
+  enum class ControlKind
+  {
+    Choice,
+    Segments,
+    Slider,
+    Toggle
+  };
+
+  static const int kTabCount = static_cast<int>(ConfigurationTab::Count);
+  static const int kSettingCount =
+    static_cast<int>(ConfigurationSetting::Count);
+
+  // Back to front. The glass, the tab pill's glow, the selection drop and a
+  // lit footer button's glow breathe every frame, so each sits in its own
+  // layer between the still ones and the host re-records only those (D-R29).
+  // An open family or ruleset list (card, highlight drop, labels) lies above
+  // everything.
+  enum Layer : std::size_t
+  {
+    kGlassLayer,
+    kHeaderLayer,
+    kTabGlowLayer,
+    kTabLayer,
+    kDropLayer,
+    kContentLayer,
+    kFooterGlowLayer,
+    kFooterLayer,
+    kListCardLayer,
+    kListDropLayer,
+    kListTextLayer,
+    kLayerCount
+  };
 
   IRenderWindow* window;
   Renderer* renderer;
-  GameVisual visual;
+  std::array<GameVisual, kLayerCount> layers;
+  // The fitted scale every layer is drawn at.
+  float visualScale = 1.0f;
+  GuiMenuAnimator animator;
+  GuiPointerTracker pointer;
   bool openState;
-  bool mouseWasDown;
   bool replaceFieldOnType;
+  ConfigurationTab activeTab = ConfigurationTab::Simulation;
   int selectedRow;
-  float animationElapsed;
-  float selectionFromRow;
-  float selectionAnimationElapsed;
-  float valuePulseElapsed;
   float panelX;
   float panelY;
   float panelWidth;
   float panelHeight;
   float firstRowY;
   float rowHeight;
+  int firstVisibleRow = 0;
+  int visibleRows = 1;
+  GuiPanelFit panelFit;
+  // Row hover/focus emphasis (by row in the active tab), toggle knob travel,
+  // slider knob travel (0..1) and the lit segment (by setting), tab and
+  // footer emphasis, and the scrollbar thumb, all spring-driven.
+  GuiSpringArray rowFocus;
+  GuiSpringArray toggleKnobs;
+  GuiSpringArray sliderKnobs;
+  GuiSpringArray segmentKnobs;
+  GuiSpringArray tabFocus;
+  GuiSpringArray footerFocus;
+  GuiSpring scrollThumb;
+  // The lit tab pill glides between tabs (in tab units); a tab change
+  // swells the new rows in from the side it came from.
+  GuiSpring tabIndicator;
+  GuiSpring tabSwap;
+  float tabSwapDirection = 1.0f;
+  int hoveredTab = -1;
+  int hoveredFooterButton = -1;
+  // The slider being dragged with the pointer, or Count when none.
+  ConfigurationSetting dragSetting = ConfigurationSetting::Count;
+  bool dragChanged = false;
+  // The panel swivels toward the pointer; its layout origin carries the body
+  // shift, so rows are hit where they are drawn.
+  GuiPanelTilt tilt;
+  // The family and ruleset rows pick from a drop-down list: the open list,
+  // the row it belongs to, and the ids its items stand for.
+  GuiDropdownList dropdown;
+  int listRow = -1;
+  std::vector<std::string> listIds;
 
+  std::string family;
   std::string ruleSet;
   std::string worldWidthText;
   std::string worldHeightText;
@@ -108,22 +268,103 @@ private:
   std::string speedText;
   std::string fadeText;
   bool vsync;
+  bool editHints = true;
+  bool softwareCursor = true;
   bool fullscreen;
-  long uiScale;
+  double uiScale;
   long msaa;
+  std::string graphicsApi = "OPENGL";
+  std::string fpsCapText;
+  bool showInspector = false;
+  bool reducedUiMotion = false;
+  long soundVolume = 80;
+  long musicVolume = 80;
+  bool startPaused = true;
+  bool ledCells = true;
+  bool gridLines = false;
+  bool showFps = false;
+  bool showMemory = false;
+  bool invertZoom = false;
+  bool confirmClear = true;
+  // Slider-only numbers (no typed entry) are kept as doubles.
+  double cellGlow = 1.0;
+  double zoomStep = 0.15;
+  double panSpeed = 600.0;
+  double autosaveMinutes = 0.0;
   std::string errorMessage;
 
   void updateLayout();
   void rebuildVisual();
-  float animationProgress() const;
-  float panelReveal() const;
-  float panelOffsetY() const;
+  void drawHeader(float reveal, unsigned char panelOpacity);
+  void drawTabs(unsigned char panelOpacity, float breathe);
+  void drawRows(unsigned char panelOpacity, float breathe);
+  void drawRowControl(ConfigurationSetting setting,
+                      float y,
+                      float shiftX,
+                      float rowFontSize,
+                      bool selected,
+                      unsigned char rowOpacity);
+  void drawFooter(unsigned char panelOpacity, float breathe);
+
+  int rowCount() const;
+  bool footerSelected() const { return selectedRow >= rowCount(); }
+  ConfigurationSetting settingAt(int row) const;
+  ConfigurationSetting selectedSetting() const;
+  static ControlKind controlKind(ConfigurationSetting setting);
+  bool toggleValue(ConfigurationSetting setting) const;
+
+  // Slider model: each slider walks an ordered list of stops. Text-backed
+  // sliders also accept typed digits for an exact value.
+  // The draft behind a slider-only number (UI scale, glow, zoom step, pan
+  // speed, autosave), or nullptr.
+  double* sliderNumber(ConfigurationSetting setting);
+  const double* sliderNumber(ConfigurationSetting setting) const;
+  bool* toggleSlot(ConfigurationSetting setting);
+  std::string* sliderText(ConfigurationSetting setting);
+  const std::string* sliderText(ConfigurationSetting setting) const;
+  bool sliderValue(ConfigurationSetting setting, double* value) const;
+  // The draft behind a volume slider (sound or music), or nullptr.
+  long* volumeSlot(ConfigurationSetting setting);
+  const long* volumeSlot(ConfigurationSetting setting) const;
+  // Lets the player hear a volume draft: a cue at the sound level, or the
+  // playing music at the music level.
+  void previewVolume(ConfigurationSetting setting) const;
+  float sliderFraction(ConfigurationSetting setting) const;
+  bool setSliderStop(ConfigurationSetting setting, int stop);
+  bool stepSlider(ConfigurationSetting setting, int direction);
+  std::string sliderReadout(ConfigurationSetting setting) const;
+  void linkWorldAxes(ConfigurationSetting changed);
+
+  int segmentCount(ConfigurationSetting setting) const;
+  int segmentIndex(ConfigurationSetting setting) const;
+  std::string segmentLabel(ConfigurationSetting setting, int index) const;
+  void setSegment(ConfigurationSetting setting, int index);
+
+  // Value-column geometry shared by drawing and hit testing.
+  float valueLeft() const;
+  float valueRight() const;
+  float sliderTrackLeft() const;
+  float sliderTrackRight() const;
+  float rowTop(int row) const;
+  float footerTop() const;
+  std::array<float, 4> tabBounds(int tab) const;
+  std::array<float, 4> footerButtonBounds(int button) const;
+
+  void updateSprings(float deltaSeconds);
+  void snapSprings();
   float rowReveal(int row) const;
   float selectionRowPosition() const;
-  float valuePulse() const;
-  void triggerValuePulse();
   void selectRow(int row);
+  void selectTab(int tab);
   void cycleSelected(int direction);
+  bool dragSliderTo(ConfigurationSetting setting, float pointerX);
+  // The value box of a row in the active tab, as {x, y, width, height}.
+  std::array<float, 4> valueBox(int row) const;
+  void openList(int row);
+  void chooseFromList(int index);
+  // Routes a frame's input to the open list; the menu itself stays put.
+  void updateList(InputManager* inputManager);
+  void handlePointer(bool wheelScrolled, ConfigurationMenuAction* action);
   ConfigurationMenuAction activateSelected();
   void addCharacter(unsigned int codepoint);
   void eraseCharacter();

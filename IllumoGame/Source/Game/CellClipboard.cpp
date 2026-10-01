@@ -1,7 +1,8 @@
 #include "CellClipboard.h"
 #include "BuiltinPatterns.h"
+#include "CSimPlatform.h"
 #include "PatternCodec.h"
-#include <Illumo/Platform/Clipboard.h>
+#include <Illumo/Foundation/Profile.h>
 #include <limits>
 
 void
@@ -110,6 +111,7 @@ CellClipboard::captureSelection(const SparseCellGrid* grid,
                                 CellPattern* pattern,
                                 std::string* error) const
 {
+  ILLUMO_PROFILE_ZONE("CellClipboard.captureSelection");
   if (pattern == nullptr) {
     if (error != nullptr) {
       *error = "pattern output is null";
@@ -156,9 +158,9 @@ CellClipboard::captureSelection(const SparseCellGrid* grid,
     }
     return false;
   }
-  for (std::int64_t y = y0; y <= y1; ++y) {
-    for (std::int64_t x = x0; x <= x1; ++x) {
-      const CellAddress address{ x, y };
+  for (std::int64_t dy = 0; dy < height; ++dy) {
+    for (std::int64_t dx = 0; dx < width; ++dx) {
+      const CellAddress address{ x0 + dx, y0 + dy };
       if (!grid->isCellInWorldBounds(address)) {
         continue;
       }
@@ -166,8 +168,8 @@ CellClipboard::captureSelection(const SparseCellGrid* grid,
       if (state == SparseCellGrid::BackgroundState) {
         continue;
       }
-      if (!pattern->addCell(static_cast<std::int32_t>(x - x0),
-                            static_cast<std::int32_t>(y - y0),
+      if (!pattern->addCell(static_cast<std::int32_t>(dx),
+                            static_cast<std::int32_t>(dy),
                             state)) {
         if (error != nullptr) {
           *error = "selection exceeds occupancy cap";
@@ -182,11 +184,12 @@ CellClipboard::captureSelection(const SparseCellGrid* grid,
 bool
 CellClipboard::copySelection(const SparseCellGrid* grid, std::string* error)
 {
+  ILLUMO_PROFILE_ZONE("CellClipboard.copySelection");
   if (!captureSelection(grid, &m_clipboardPattern, error)) {
     return false;
   }
-  const std::string rle = PatternCodec::encodeRle(m_clipboardPattern);
-  Clipboard::SetText(rle);
+  CSimPlatform::current().writeClipboard(
+    PatternCodec::encodeRle(m_clipboardPattern));
   return true;
 }
 
@@ -195,6 +198,7 @@ CellClipboard::fillSelection(SparseCellGrid* grid,
                              CanvasView* canvas,
                              unsigned char state)
 {
+  ILLUMO_PROFILE_ZONE("CellClipboard.fillSelection");
   if (!m_hasSelection || grid == nullptr || canvas == nullptr) {
     return false;
   }
@@ -206,22 +210,19 @@ CellClipboard::fillSelection(SparseCellGrid* grid,
   if (x1 < x0 || y1 < y0) {
     return false;
   }
-  if (x1 == std::numeric_limits<std::int64_t>::max() ||
-      y1 == std::numeric_limits<std::int64_t>::max()) {
+  if ((x0 < 0 && x1 >= 4096) || (x0 <= -4096 && x1 >= 0) || (x1 - x0 >= 4096) ||
+      (y0 < 0 && y1 >= 4096) || (y0 <= -4096 && y1 >= 0) || (y1 - y0 >= 4096)) {
     return false;
   }
-  if ((x0 < 0 && x1 >= 4096) || (x0 <= -4096 && x1 >= 0) ||
-      (x1 - x0 >= 4096) || (y0 < 0 && y1 >= 4096) ||
-      (y0 <= -4096 && y1 >= 0) || (y1 - y0 >= 4096)) {
-    return false;
-  }
-  for (std::int64_t y = y0; y <= y1; ++y) {
-    for (std::int64_t x = x0; x <= x1; ++x) {
-      const CellAddress address{ x, y };
+  const std::int64_t width = x1 - x0 + 1;
+  const std::int64_t height = y1 - y0 + 1;
+  for (std::int64_t dy = 0; dy < height; ++dy) {
+    for (std::int64_t dx = 0; dx < width; ++dx) {
+      const CellAddress address{ x0 + dx, y0 + dy };
       if (!grid->isCellInWorldBounds(address)) {
         continue;
       }
-      canvas->setCanvasPixel(x, y, state);
+      canvas->setCanvasPixel(address.x, address.y, state);
     }
   }
   return true;
@@ -246,6 +247,7 @@ CellClipboard::pastePatternAt(SparseCellGrid* grid,
                               std::int64_t originY,
                               std::string* error)
 {
+  ILLUMO_PROFILE_ZONE("CellClipboard.pastePatternAt");
   if (grid == nullptr || canvas == nullptr) {
     if (error != nullptr) {
       *error = "grid or canvas is null";
@@ -279,21 +281,23 @@ CellClipboard::pastePatternAt(SparseCellGrid* grid,
 }
 
 bool
-CellClipboard::pasteAtCursor(SparseCellGrid* grid,
-                             CanvasView* canvas,
-                             std::int64_t hoverX,
-                             std::int64_t hoverY,
-                             std::string* error)
+CellClipboard::pasteText(SparseCellGrid* grid,
+                         CanvasView* canvas,
+                         const std::string& clipboardText,
+                         std::int64_t hoverX,
+                         std::int64_t hoverY,
+                         std::string* error)
 {
-  CellPattern pattern = m_clipboardPattern;
-  const std::string clipboardText = Clipboard::GetText();
-  if (!clipboardText.empty()) {
-    CellPattern parsed;
-    std::string parseError;
-    if (PatternCodec::parse(clipboardText, &parsed, &parseError) &&
-        !parsed.empty()) {
-      pattern = parsed;
+  ILLUMO_PROFILE_ZONE("CellClipboard.pasteText");
+  CellPattern pattern;
+  if (!PatternCodec::parse(clipboardText, &pattern, error)) {
+    return false;
+  }
+  if (pattern.empty()) {
+    if (error != nullptr) {
+      *error = "clipboard contains no pattern cells";
     }
+    return false;
   }
   if (!pastePatternAt(grid, canvas, pattern, hoverX, hoverY, error)) {
     return false;
@@ -326,14 +330,19 @@ CellClipboard::importPatternText(SparseCellGrid* grid,
                                  const std::string& text,
                                  std::int64_t originX,
                                  std::int64_t originY,
-                                 std::string* error)
+                                 std::string* error,
+                                 PatternFormat format)
 {
+  ILLUMO_PROFILE_ZONE("CellClipboard.importPatternText");
   CellPattern pattern;
-  if (!PatternCodec::parse(text, &pattern, error)) {
+  if (!PatternCodec::parse(text, &pattern, error, format)) {
+    return false;
+  }
+  if (!pastePatternAt(grid, canvas, pattern, originX, originY, error)) {
     return false;
   }
   m_clipboardPattern = pattern;
-  return pastePatternAt(grid, canvas, pattern, originX, originY, error);
+  return true;
 }
 
 bool

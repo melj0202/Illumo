@@ -2,7 +2,6 @@
 
 // Pure input service: no Game includes (D-E2).
 
-#include <Illumo/Foundation/ArrayQueue.h>
 #include <Illumo/Services/InputContext.h>
 #include <Illumo/Services/KeyCode.h>
 
@@ -10,6 +9,7 @@ struct GLFWwindow;
 #include <array>
 #include <queue>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #define MAX_INPUT_EVENTS 256
@@ -18,6 +18,7 @@ struct GLFWwindow;
 class InputManager
 {
   friend class InputManagerTestAccess;
+  friend class GuestInputProvider;
 
 public:
   struct KeyPressEvent
@@ -111,32 +112,73 @@ private:
   std::unordered_map<KeyCode, InputAction> inputStatesCurrent;
   std::unordered_map<KeyCode, InputAction> inputStatesPrevious;
   InputContext inputContexts[NUM_INPUT_CONTEXTS];
+  std::array<long, NUM_INPUT_CONTEXTS> contextIds;
+  InputContext neutralContext;
   InputContext* activeInputContext;
   std::queue<unsigned int> charQueue;
   std::queue<KeyPressEvent> keyQueue;
+  size_t m_droppedCharEvents = 0;
+  size_t m_droppedKeyEvents = 0;
 
-  long numInputContexts;
+  long nextContextId = 0;
   int m_modifierFlags;
+  std::array<double, 2> m_snapshotMouse{};
+  std::array<bool, static_cast<size_t>(KeyCode::F12) + 1> m_suppressedKeys{};
 
-  KeyCode TranslateKeyCodeToGLFW(int glfwKey);
+  static KeyCode TranslateKeyCodeToGLFW(int glfwKey);
 
   int TranslateKeyCodeFromGLFW(KeyCode keyCode);
 
-  [[nodiscard]] InputAction TranslateInputActionGLFW(int glfwAction);
+  [[nodiscard]] static InputAction TranslateInputActionGLFW(int glfwAction);
 
 public:
+  // GLFW key/action translation for secondary windows (the detached console)
+  // whose callbacks are not routed through this manager.
+  static KeyCode keyCodeFromGlfw(int glfwKey)
+  {
+    return TranslateKeyCodeToGLFW(glfwKey);
+  }
+  static InputAction inputActionFromGlfw(int glfwAction)
+  {
+    return TranslateInputActionGLFW(glfwAction);
+  }
+
   InputManager(GLFWwindow* window);
   ~InputManager();
+  InputManager(const InputManager&) = delete;
+  InputManager& operator=(const InputManager&) = delete;
+  InputManager(InputManager&&) = delete;
+  InputManager& operator=(InputManager&&) = delete;
 
   std::queue<unsigned int>& getCharQueue() { return charQueue; }
   std::queue<KeyPressEvent>& getKeyQueue() { return keyQueue; }
+  size_t droppedCharEvents() const { return m_droppedCharEvents; }
+  size_t droppedKeyEvents() const { return m_droppedKeyEvents; }
 
   void clearCharQueue();
   void clearKeyQueue();
 
   void update();
 
+  // Overlay capture masks keyboard polling until the next update. Queue
+  // ownership remains with the caller; mouse and modifier polling are
+  // unchanged.
+  void suppressKeyForFrame(KeyCode key);
+  bool isKeySuppressed(KeyCode key) const;
+
   InputAction GetInputAction(KeyCode keyCode);
+  // Published frame state includes Press-to-Hold transitions and overlay masks.
+  // GetInputAction is the raw platform poll used while constructing that state.
+  InputAction frameAction(KeyCode key) const
+  {
+    if (isKeySuppressed(key)) {
+      return InputAction::None;
+    }
+    const std::unordered_map<KeyCode, InputAction>::const_iterator found =
+      inputStatesCurrent.find(key);
+    return found == inputStatesCurrent.end() ? InputAction::None
+                                             : found->second;
+  }
 
   bool isKeyPressed(KeyCode key);
 
@@ -152,11 +194,15 @@ public:
 
   bool isMouseButtonReleased(KeyCode mouseButton);
 
-  void setActiveInputContext(long inputContext);
+  // IDs are manager-local and never reused. Invalid selection leaves the
+  // current context unchanged; retiring the active context selects neutral
+  // input.
+  bool setActiveInputContext(long inputContext);
+  bool unregisterInputContext(long inputContext);
 
   InputContext* getActiveInputContext() { return activeInputContext; }
 
-  [[nodiscard]] bool isActionActive(std::string actionTag);
+  [[nodiscard]] bool isActionActive(std::string_view actionTag);
 
   [[nodiscard]] long registerInputContext(InputContext inputContext);
 

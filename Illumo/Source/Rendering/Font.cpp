@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/ITexture.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -5,6 +6,7 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_MULTIPLE_MASTERS_H
 
 #include <algorithm>
 #include <cmath>
@@ -77,6 +79,17 @@ resolveFontPath(const std::string& requestedPath)
 Font::Font() = default;
 
 Font::~Font() = default;
+
+std::shared_ptr<Font>
+Font::createFallback(float pixelSize)
+{
+  if (!std::isfinite(pixelSize) || pixelSize < 1 || pixelSize > 256) {
+    return nullptr;
+  }
+  std::shared_ptr<Font> font = std::make_shared<Font>();
+  font->buildFallbackAtlas(pixelSize);
+  return font;
+}
 
 std::shared_ptr<Font>
 Font::loadFromFile(const std::string& path, float pixelSize)
@@ -170,9 +183,48 @@ Font::clearCache()
   s_defaultFont.reset();
 }
 
+// Instances a variable face at `weight` on its 'wght' axis; other axes keep
+// their defaults. Static faces and faces without the axis are left alone.
+static void
+setFaceWeight(FT_Library library, FT_Face face, float weight)
+{
+  if (!(weight > 0.0f) || !FT_HAS_MULTIPLE_MASTERS(face)) {
+    return;
+  }
+  FT_MM_Var* variation = nullptr;
+  if (FT_Get_MM_Var(face, &variation) != 0 || variation == nullptr) {
+    return;
+  }
+  std::vector<FT_Fixed> coordinates(variation->num_axis);
+  bool hasWeight = false;
+  for (FT_UInt axis = 0; axis < variation->num_axis; ++axis) {
+    const FT_Var_Axis& info = variation->axis[axis];
+    coordinates[axis] = info.def;
+    if (info.tag == FT_MAKE_TAG('w', 'g', 'h', 't')) {
+      const FT_Fixed requested = static_cast<FT_Fixed>(weight * 65536.0f);
+      coordinates[axis] = std::clamp(requested, info.minimum, info.maximum);
+      hasWeight = true;
+    }
+  }
+  if (hasWeight) {
+    FT_Set_Var_Design_Coordinates(
+      face, variation->num_axis, coordinates.data());
+  }
+  FT_Done_MM_Var(library, variation);
+}
+
 bool
 Font::loadFile(const std::string& path, float pixelSize)
 {
+  return loadFile(path, pixelSize, FontFaceOptions{});
+}
+
+bool
+Font::loadFile(const std::string& path,
+               float pixelSize,
+               const FontFaceOptions& options)
+{
+  ILLUMO_PROFILE_ZONE("Font.loadFile");
   sourcePath = path;
   FT_Library library = getFreeTypeLibrary();
   if (library == nullptr) {
@@ -184,8 +236,19 @@ Font::loadFile(const std::string& path, float pixelSize)
   if (err != 0 || face == nullptr) {
     return false;
   }
+  setFaceWeight(library, face, options.weight);
 
-  bool ok = rasterizeFace(face, pixelSize);
+  // A missing fallback only costs the glyphs the primary face lacks.
+  FT_Face fallback = nullptr;
+  if (!options.fallbackPath.empty() &&
+      FT_New_Face(library, options.fallbackPath.c_str(), 0, &fallback) != 0) {
+    fallback = nullptr;
+  }
+
+  bool ok = rasterizeFace(face, fallback, pixelSize, options.glyphs);
+  if (fallback != nullptr) {
+    FT_Done_Face(fallback);
+  }
   FT_Done_Face(face);
   return ok;
 }
@@ -210,22 +273,40 @@ Font::loadMemory(const unsigned char* data, size_t size, float pixelSize)
     return false;
   }
 
-  bool ok = rasterizeFace(face, pixelSize);
+  bool ok = rasterizeFace(face, nullptr, pixelSize, std::string());
   FT_Done_Face(face);
   return ok;
 }
 
 bool
-Font::rasterizeFace(void* ftFace, float pixelSize)
+Font::rasterizeFace(void* ftFace,
+                    void* ftFallbackFace,
+                    float pixelSize,
+                    const std::string& glyphSet)
 {
+  ILLUMO_PROFILE_ZONE("Font.rasterizeFace");
   if (ftFace == nullptr) {
     return false;
   }
   FT_Face face = static_cast<FT_Face>(ftFace);
+  FT_Face fallback = static_cast<FT_Face>(ftFallbackFace);
 
   FT_Error err = FT_Set_Pixel_Sizes(face, 0, static_cast<FT_UInt>(pixelSize));
   if (err != 0) {
     return false;
+  }
+  if (fallback != nullptr &&
+      FT_Set_Pixel_Sizes(fallback, 0, static_cast<FT_UInt>(pixelSize)) != 0) {
+    fallback = nullptr;
+  }
+
+  // Printable ASCII, or the requested subset of it plus space and '?'.
+  std::vector<char32_t> codepoints;
+  for (char32_t cp = 32; cp <= 126; ++cp) {
+    if (glyphSet.empty() || cp == U' ' || cp == U'?' ||
+        glyphSet.find(static_cast<char>(cp)) != std::string::npos) {
+      codepoints.push_back(cp);
+    }
   }
 
   metrics.pixelSize = pixelSize;
@@ -256,14 +337,19 @@ Font::rasterizeFace(void* ftFace, float pixelSize)
   };
 
   std::vector<RenderedGlyph> renderedGlyphs;
-  renderedGlyphs.reserve(96);
+  renderedGlyphs.reserve(codepoints.size());
 
-  for (char32_t cp = 32; cp <= 126; ++cp) {
+  for (char32_t cp : codepoints) {
     RenderedGlyph rg;
     rg.codepoint = cp;
-    FT_Error loadErr = FT_Load_Char(face, cp, FT_LOAD_RENDER);
-    if (loadErr == 0 && face->glyph != nullptr) {
-      FT_GlyphSlot slot = face->glyph;
+    FT_Face source = face;
+    if (fallback != nullptr && FT_Get_Char_Index(face, cp) == 0 &&
+        FT_Get_Char_Index(fallback, cp) != 0) {
+      source = fallback;
+    }
+    FT_Error loadErr = FT_Load_Char(source, cp, FT_LOAD_RENDER);
+    if (loadErr == 0 && source->glyph != nullptr) {
+      FT_GlyphSlot slot = source->glyph;
       rg.width = slot->bitmap.width;
       rg.height = slot->bitmap.rows;
       rg.bearingX = slot->bitmap_left;
@@ -372,6 +458,7 @@ Font::rasterizeFace(void* ftFace, float pixelSize)
 void
 Font::buildFallbackAtlas(float pixelSize)
 {
+  ILLUMO_PROFILE_ZONE("Font.buildFallbackAtlas");
   atlasWidth = 256;
   atlasHeight = 256;
   atlasPixels.assign(static_cast<size_t>(atlasWidth * atlasHeight * 4), 0);
@@ -438,114 +525,45 @@ Font::buildFallbackAtlas(float pixelSize)
   valid = true;
 }
 
-const GlyphInfo*
-Font::getGlyph(char32_t codepoint) const
-{
-  std::unordered_map<char32_t, GlyphInfo>::const_iterator it =
-    glyphs.find(codepoint);
-  if (it != glyphs.end()) {
-    return &it->second;
-  }
-  // Fallback to '?'
-  it = glyphs.find(static_cast<char32_t>('?'));
-  if (it != glyphs.end()) {
-    return &it->second;
-  }
-  return nullptr;
-}
-
-TextBounds
-Font::measureText(const std::string& text, float sizePt) const
-{
-  return measureTextRange(text.data(), text.size(), sizePt);
-}
-
-TextBounds
-Font::measureTextRange(const char* text, size_t length, float sizePt) const
-{
-  TextBounds bounds;
-  if (text == nullptr || length == 0) {
-    return bounds;
-  }
-
-  const float scale =
-    metrics.pixelSize > 0.0f ? (sizePt / metrics.pixelSize) : 1.0f;
-  float currentX = 0.0f;
-  float maxX = 0.0f;
-  int lineCount = 1;
-
-  for (size_t i = 0; i < length; ++i) {
-    char c = text[i];
-    if (c == '\n') {
-      if (currentX > maxX) {
-        maxX = currentX;
-      }
-      currentX = 0.0f;
-      ++lineCount;
-      continue;
-    }
-    const GlyphInfo* g = getGlyph(static_cast<unsigned char>(c));
-    if (g != nullptr) {
-      currentX += g->advanceX * scale;
-    }
-  }
-
-  if (currentX > maxX) {
-    maxX = currentX;
-  }
-
-  bounds.width = maxX;
-  bounds.height = static_cast<float>(lineCount) * getLineHeight(sizePt);
-  return bounds;
-}
-
-float
-Font::getAdvance(char32_t codepoint, float sizePt) const
-{
-  const GlyphInfo* g = getGlyph(codepoint);
-  const float scale =
-    metrics.pixelSize > 0.0f ? (sizePt / metrics.pixelSize) : 1.0f;
-  return g != nullptr ? (g->advanceX * scale) : 0.0f;
-}
-
-float
-Font::getLineHeight(float sizePt) const
-{
-  const float scale =
-    metrics.pixelSize > 0.0f ? (sizePt / metrics.pixelSize) : 1.0f;
-  return metrics.lineHeight * scale;
-}
-
-float
-Font::getAscender(float sizePt) const
-{
-  const float scale =
-    metrics.pixelSize > 0.0f ? (sizePt / metrics.pixelSize) : 1.0f;
-  return metrics.ascender * scale;
-}
-
-float
-Font::getDescender(float sizePt) const
-{
-  const float scale =
-    metrics.pixelSize > 0.0f ? (sizePt / metrics.pixelSize) : 1.0f;
-  return metrics.descender * scale;
-}
-
 TextureHandle
 Font::getTextureHandle(Renderer* renderer)
 {
   if (renderer == nullptr) {
-    return textureHandle;
+    return lastRendererLifetime.expired() ? TextureHandle{} : textureHandle;
   }
-  if (enrolledRenderer != renderer || !textureHandle.isValid()) {
+  for (std::map<std::weak_ptr<const void>,
+                TextureHandle,
+                std::owner_less<std::weak_ptr<const void>>>::iterator it =
+         rendererTextures.begin();
+       it != rendererTextures.end();) {
+    if (it->first.expired()) {
+      it = rendererTextures.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  lastRendererLifetime = renderer->getLifetimeIdentity();
+  TextureHandle& cached = rendererTextures[lastRendererLifetime];
+  if (!cached.isValid() || !renderer->getBackend()->IsTextureValid(cached)) {
+    ILLUMO_PROFILE_ZONE("Font.enrollAtlas");
     TextureOptions options;
     options.filter = TextureFilter::Linear;
     options.wrapX = TextureWrap::ClampToEdge;
     options.wrapY = TextureWrap::ClampToEdge;
-    textureHandle = renderer->enrollTexture(
+    cached = renderer->enrollTexture(
       atlasPixels.data(), atlasWidth, atlasHeight, 4, options);
-    enrolledRenderer = renderer;
   }
+  textureHandle = cached;
   return textureHandle;
+}
+
+void
+Font::adoptTextureHandle(Renderer* renderer, TextureHandle handle)
+{
+  if (renderer == nullptr) {
+    return;
+  }
+  lastRendererLifetime = renderer->getLifetimeIdentity();
+  rendererTextures[lastRendererLifetime] = handle;
+  textureHandle = handle;
 }

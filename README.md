@@ -1,191 +1,573 @@
-# Illumo workspace
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/github/readme-banner-dark.png">
+    <img alt="Illumo" src="docs/brand/github/readme-banner-light.png" width="640">
+  </picture>
+</h1>
 
-Illumo is a reusable static C++ runtime/rendering foundation for current and
-future projects. In-tree applications consume it through
-`CreateIllumoApplication`: `IllumoGame` is the cellular-automata simulator,
-and `IllEd` is the SceneGraph world editor used to author `.ilsc` scenes for
-later Illumo applications. Moving a product to a downstream repository is a
-separate packaging step.
+Illumo is a reusable C++23 static runtime and rendering library. This
+repository is a source workspace: the library, the `IllumoRuntime` host built
+on it, and the in-tree applications, which run on that host as WASM programs.
+It is not an installable SDK or a stable DLL ABI. Moving a product to a
+downstream repository is a separate packaging step.
+
+Illumo owns the generic application runner, platform entry and native
+dialogs, BuildInfo, SysCmdLine, host, services, persistent `SceneGraph`,
+token renderer, assets, and the frame phases. It does not depend on Game,
+Rulesets, or IllEd. Application policy stays in the consuming product.
+
+## What this repository is
+
+| Piece | Role |
+|---|---|
+| `Illumo/` | Static library: runner, platform, services, SceneGraph, OpenGL token renderer, assets |
+| `IllumoGame/` | Cellular-automata sandbox, shipped only as the isolated `IllumoGame.wasm` package. Saves write sparse `.csim` version 4; loads versions 4, 3, and 2 plus legacy dense / `.illumo` |
+| `IllumoRuntime` | Generic native host (Windows x64): window, OpenGL or Vulkan, services and a Wasmtime sandbox. Runs every interactive client program as a WASM package staged beside it in `apps/<name>/`, and captures PNG frames with `--capture` ([docs/wasm-game-runtime-design.md](docs/wasm-game-runtime-design.md), [docs/frame-capture.md](docs/frame-capture.md)) |
+| `IllumoGuest/` | Guest SDK and WASI build tree: ABI wire headers, guest-side engine and program (`GuestProgram`), recording backend |
+| `IllEd/` | SceneGraph world editor, shipped as the `IllEd.wasm` package (`--app illed`). Writes `.ilsc` format 2 scenes for later Illumo applications; its Hierarchy, Assets, Tools and Inspector panels dock or pop out into their own windows |
+| `IllMeshViewer/` | `.obj` mesh and `.ilsc` scene viewer with orbit, pan, zoom, and rotate, and detachable Info and Display panels, shipped as the `IllMeshViewer.wasm` package (`--app meshviewer`) |
+| `build.py` | Standard-library Python 3.10+ front end for the CMake build |
+
+`SparseCellGrid` is the production simulator domain. `SceneGraph` is the
+retained world hierarchy used by IllEd (and optional 3D diagnostics); it is
+not CA cell storage. Dense `CellGrid` / `Canvas` remain compatibility
+fixtures. Production drawing appends `RenderCommand` tokens; `IBackend`
+executes them (`GLBackend` or headless `MockBackend`).
+
+Architecture, decisions, and current-state truth:
+[docs/architecture-consensus.md](docs/architecture-consensus.md).
+
+## Platform status
+
+| Platform | Status |
+|---|---|
+| Windows, GLFW, OpenGL, MSVC | Supported, verified production path |
+| Linux, Ubuntu 24.04 x86_64, X11/XWayland, GCC 13+ or Clang 18, gtkmm-3 | Sources and CMake repaired so the engine libraries and native test suites configure, compile, and run; the WASM runtime and its apps are Windows x64 only. That is **not a support claim** until native GUI smoke on that host. See [docs/packages/platform-linux.md](docs/packages/platform-linux.md) |
+| macOS | Not targeted; no port sources are retained |
+
+The stack is C++23, CMake 3.25 or newer, and vendored GLFW, GLEW, GLM, and
+FreeType. GLFW, GLEW, and OpenGL stay behind Illumo; game and rules code do
+not issue raw OpenGL calls.
 
 ## Layout
 
 ```
 illumo/
-  CMakeLists.txt         # Canonical Illumo workspace entrypoint
-  docs/                 # All first-party documentation and LaTeX sources
-    latex/              # Prose-book and chart-pack PDF entrypoints
-    packages/           # Source-package maps formerly scattered by code
-    sessions/           # Dated implementation and verification records
-    history/            # Superseded/original material
-  Illumo/               # Standalone static-library project
-    Include/Illumo/     # Supported consumer headers
-    Source/             # Private library implementation
-      Engine/           # Generic host, application runner + module lifetime
-      Scene/            # Persistent hierarchy, transforms + render extraction
-      Rendering/        # Graphics / backend interfaces
-      Services/         # Log, input, env, system CLI, allocators
-      Foundation/       # Build metadata, macros and shared helpers
-      Platform/         # OS entry and native save/load dialogs
-    TestSupport/        # MockBackend and shared test-only headers
-    Tests/              # Illumo.* library cases
-    Shader/             # GLSL shaders
-    Assets/             # Runtime asset files (fonts, …)
-    thirdparty/         # Vendored dependencies
-  IllumoGame/           # Simulator product project
-    Source/Game/        # CA domain, config, module factory, editor, persistence
-    Source/Rulesets/    # Cellular-automata rules
-    Tests/              # IllumoGame.* product cases
-    envvars.json        # Product configuration seed
-  IllEd/                # World-editor product project
-    Source/             # Editor module, document, .ilsc codec, toolbar
-    Tests/              # IllEd.* product cases
-    envvars.json        # Product configuration seed
-  archive/              # Historical / non-build material
+  CMakeLists.txt         # Canonical workspace entrypoint
+  build.py               # Interactive / CLI CMake front end
+  cmake/                 # Shared CMake (tidy, coverage, Linux deps hook)
+  tools/                 # install-linux-deps.sh, create_project.py, tests
+  docs/                  # Architecture, packages, LaTeX, session records
+    brand/               # Logo, icon and README banner kit
+  Illumo/                # Standalone static-library project
+    Include/Illumo/      # Supported consumer headers (<Illumo/...>)
+    Source/              # Private library implementation
+    TestSupport/         # MockBackend and shared test-only headers
+    Tests/               # Illumo.* library cases
+    Shader/ Assets/      # Runtime files staged beside executables
+    thirdparty/          # Vendored dependencies
+  IllumoGame/            # CA simulator sources, catalogs and illumo.json manifest
+  IllumoGuest/           # WASM guest SDK and guest build tree (WASI SDK)
+  IllEd/                 # SceneGraph world editor and illumo.json manifest
+  IllMeshViewer/         # Mesh viewer and illumo.json manifest
+  archive/               # Historical / non-build material
 ```
 
-## Design documentation
+Product `envvars.json` files are product-owned. Each package's copy is
+staged in its `apps/<name>/` directory and supplies that app's first-run
+defaults.
 
-All first-party architecture, decision, package, history, and build notes live
-under `docs/`. Start with:
+## Get the build running
 
-- `docs/README.md` — documentation map and PDF build commands
-- `docs/architecture-consensus.md` — canonical current architecture
-- `docs/scene-graph-v1-design.md` — retained scene hierarchy contract and scope
-- `docs/latex/illumo.tex` — the canonical prose-book entrypoint
-- `docs/latex/architecture-map.tex` — the current chart-only entrypoint
-- `docs/output/*.pdf` — generated locally; never sources of truth
-
-**Current stack (short):** reusable 2D token renderer (`AppendCommands` →
-`IBackend`) with typed generational handles, a persistent handle-based scene
-hierarchy, painter-correct primitives, dynamic quad buffers,
-primitive-composed themed UI, and asynchronous texture/shader assets. The
-retained `SceneGraph` is extracted as one drawable into the existing per-frame
-render list; it does not replace CSim's sparse domain. `SparseCellGrid` uses
-published dual-grid simulation,
-exact retained candidate topology, direct-source parallel preparation and
-evaluation, recycled transactional chunk nodes, adaptive frontier stepping,
-cached 256x9 transitions, and infinite or finite toroidal topology.
-`CanvasView` presents a padded, integer-LOD
-camera cache through a world-space `GameVisual` sprite, with active-texel RGB
-fades and tiled multi-rectangle uploads through a non-waiting PBO ring.
-Headless `IllumoTests` and `IllumoGameTests` use `Illumo::TestSupport` and
-`MockBackend`. Windows is the supported runtime;
-Linux and macOS retain stale source/CMake scaffolding pending native validation.
-
-**Architecture (single source for later sessions):** [`docs/architecture-consensus.md`](docs/architecture-consensus.md) — unified consensus (purpose, history of old plans, current renderer/sim truth, decisions, bugs, debt, work order).
-
-Contribution rules are in [`docs/contributing.md`](docs/contributing.md).
-
-Third-party software and font acknowledgements, license choices, and the
-source/binary redistribution checklist are in
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
-
-## Build
-
-`build.py` is the convenient front end for the existing CMake build. It requires
-Python 3.10 or later, uses only the standard library, prints every command it
-runs, and leaves all CMake files and targets authoritative. From an interactive
-terminal, open its build console with:
+Clone and work from the repository root:
 
 ```bash
-python build.py
+git clone https://github.com/melj0202/Illumo.git
+cd Illumo
 ```
 
-Use the arrow keys to choose `Release`, `Debug`, or `RelWithDebInfo`, toggle
-documentation and Tracy, select build parallelism, and run a focused action.
-The same operations remain available as explicit commands for scripts, CI, or
-anyone who prefers a shell. For example, a Debug build is:
+`ILLUMO_ENABLE_CLANG_TIDY` defaults **ON**. Configure fails if `clang-tidy`
+is not on `PATH`. This repository also defaults `ILLUMO_BUILD_DOCUMENTATION`
+**ON** when the LaTeX sources exist. First-time builds should pass
+`--no-tidy --no-docs` (or the matching `-D` flags) unless LLVM and a TeX
+toolchain are already installed.
 
-```bash
-python build.py build --config Debug
+Do not reuse a CMake cache across operating systems. Use a separate `-B`
+directory on each host.
+
+### Windows (supported)
+
+**Prerequisites**
+
+- Windows 10 or 11, x64
+- Visual Studio with the **Desktop development with C++** workload: MSVC
+  with C++23 (`cxx_std_23`) and a current Windows 10/11 SDK. OpenGL
+  (`opengl32`) comes with the SDK. A verified development machine uses
+  Visual Studio 18 / MSVC; any current VS toolchain that provides C++23 and
+  CMake 3.25 is the practical requirement
+- [CMake 3.25+](https://cmake.org/download/) on `PATH`
+- Python 3.10+ on `PATH` if you use `build.py` (standard library only)
+- Git
+- The pinned WASM toolchain (Wasmtime 48.0.2 C API and WASI SDK 34.0). Run
+  `python build.py wasm-tools` (or `.\tools\bootstrap-wasm.ps1`) once; it
+  downloads SHA256-verified archives into `build-wasm-tools/` without
+  touching `PATH`. IllumoGame, IllEd and IllMeshViewer are built only as WASM
+  packages, so a default Windows configure requires these tools. `--no-wasm` /
+  `-DILLUMO_BUILD_WASM_RUNTIME=OFF` builds the engine libraries and native
+  test suites without `IllumoRuntime` or any runnable application
+- Optional: LLVM so `clang-tidy` is on `PATH`
+- Optional: PowerShell plus `latexmk`/TeX for the PDF book
+  (`docs/build.ps1`). Not required to run the applications
+
+Third-party libraries are vendored under `Illumo/thirdparty/`. There is no
+vcpkg or extra package manager step. If `cmake` cannot find `cl`, use a
+**Developer Command Prompt for VS** or the VS generator from an environment
+where the compiler is registered.
+
+**Recommended first build** (skip tidy and PDFs until those tools exist):
+
+```powershell
+python build.py doctor
+python build.py build --config Release --no-tidy --no-docs
+python build.py play --config Release --no-tidy --no-docs
 ```
 
-Common focused workflows are:
+`build.py` writes to `build-workspace/` by default. With LLVM and TeX already
+installed, omit `--no-tidy` and `--no-docs`. `doctor` reports the WASM
+toolchain, whether the tree holds `IllumoRuntime` with its staged
+`apps\<name>\` packages, and stale pre-WASM outputs to delete (native
+`IllumoGame.exe`, `IllEd.exe`, `IllMeshViewer.exe`, `IllumoCapture.exe` and an
+old `game\` folder). A successful build ends with a summary of those outputs.
 
-```bash
-python build.py build --config Debug --target IllumoGame --parallel
-python build.py test
-python build.py test --list-tests
-python build.py test --test IllumoGame.CellGame.SaveLoadRoundTrip
-python build.py run -- -ww 1280 -wh 720
-python build.py run --config Debug --no-build
-python build.py stats
-python build.py stats --json
-python build.py coverage
-python build.py tidy
-python build.py docs
-```
+**Direct CMake** (Visual Studio generator; artifacts under `build/Release/`):
 
-`stats` reports the current Git branch, commit, working-tree counts, tracked
-file count, and categorized first-party lines. LOC counts nonblank lines in
-the current contents of tracked source, tests, shaders, build tooling,
-documentation, and configuration files. It excludes build trees, `archive/`,
-`Illumo/thirdparty/`, `docs/output/`, and binary assets. Use `--json` for
-machine-readable output; the interactive build console exposes the same report
-through **Repository statistics**.
-
-When standard input or output is redirected, running `python build.py` without
-a command performs the normal Release build instead of opening the console.
-That build retains CMake's existing all-target behavior: it builds the
-library, `IllumoGame`, both test runners, every registered workspace case, and
-the PDFs when the documentation toolchain is available.
-
-Use `--no-docs` for a build tree that should skip the optional PDF target,
-`--generator` and `--architecture` to select a CMake generator, and repeated
-`--cmake-arg=-DNAME=VALUE` options for an uncommon CMake setting. `--dry-run`
-prints the commands without running them. The orchestrator defaults to
-`build-workspace` and coverage defaults to `build-workspace-coverage`, keeping
-the workspace separate from standalone or pre-extraction build trees. It never
-deletes a build tree and rejects a cache created from another source root; use a
-separate `--build-dir` when changing source roots or generators.
-
-The dashboard's **Run existing build** action, or `run --no-build`, launches
-the selected executable immediately and fails clearly if that configuration
-has not been built yet. The normal `run` command still configures and builds
-before launching.
-
-Direct CMake remains fully supported and is the escape hatch for anything the
-front end does not expose:
-
-```bash
-cmake -S . -B build
+```powershell
+cmake -S . -B build -DILLUMO_ENABLE_CLANG_TIDY=OFF -DILLUMO_BUILD_DOCUMENTATION=OFF
 cmake --build build --config Release
 ```
 
-The canonical workspace build produces `Illumo`, `IllumoGameCore`,
-`IllumoGame`, `IllEdCore`, `IllEd`, `IllumoTests`, `IllumoGameTests`,
-`IllEdTests`, and the consumer-header smoke target in a single output
-folder. With a Visual Studio generator, the orchestrator's default artifacts
-are under `build-workspace/Release/`; the direct CMake example above uses
-`build/Release/` instead.
+**Run** `IllumoRuntime.exe` from the staged configuration directory. It works
+from its own directory wherever it is started, so `Shader/`, `Assets/` and
+`apps\` are always found beside it; relative command-line paths resolve
+against the directory you started it from. With no arguments it plays the
+IllumoGame package in `apps\game\` and keeps its settings, saves and user
+rule catalogs in `storage\csim\`. `--app` selects another installed package
+and `--open` hands it one document:
 
-The library can also configure independently, without IllumoGame:
+```powershell
+cd build-workspace\Release
+.\IllumoRuntime.exe
+.\IllumoRuntime.exe --app illed --open scene.ilsc
+.\IllumoRuntime.exe --app meshviewer --open model.obj
+```
+
+Or `python build.py play --app game|illed|meshviewer --config Release
+--no-build`. Direct CMake uses `build\Release\` instead of
+`build-workspace\Release\`.
+
+**Test**
+
+```powershell
+ctest --test-dir build-workspace -C Release -L IllumoWorkspace --output-on-failure
+```
+
+Headless tests do not prove the live OpenGL window or native Win32 dialogs.
+
+| Problem | What to do |
+|---|---|
+| `ILLUMO_ENABLE_CLANG_TIDY=ON requires clang-tidy` | Install LLVM, or `--no-tidy` / `-DILLUMO_ENABLE_CLANG_TIDY=OFF` |
+| CMake older than 3.25 | Upgrade CMake |
+| No compiler / Windows SDK | Install the VS Desktop C++ workload; use a VS Developer Prompt if `cl` is missing |
+| Foreign or Linux CMake cache | New `-B` directory, or `python build.py build --fresh` |
+| Docs want `latexmk` | `--no-docs` until TeX is installed |
+| `Missing .../wasmtime.h` / `The pinned WASM toolchain is incomplete` | `python build.py wasm-tools`, or `--no-wasm` / `-DILLUMO_BUILD_WASM_RUNTIME=OFF` to skip the runtime and its apps |
+| No `IllumoRuntime.exe` or `apps\` after a build | `python build.py doctor`; `build.py` always passes `ILLUMO_BUILD_WASM_RUNTIME`, so a rebuild replaces a stale cached `OFF` |
+| Old `IllEd.exe`, `IllMeshViewer.exe`, `IllumoCapture.exe`, `IllumoGame.exe` or `game\` in the build tree | Stale pre-WASM outputs that nothing builds or launches; `python build.py doctor` lists them for deletion |
+
+### Linux (Ubuntu 24.04 x86_64 — repaired, not supported)
+
+Windows remains the verified production path. The pinned WASM runtime is
+Windows x64 only, and every interactive application (IllumoGame, IllEd,
+IllMeshViewer) and the capture mode now run only inside it, so a Linux tree
+has no runnable applications until a Linux Wasmtime pin is added and
+verified. It still builds the engine libraries and the native test suites
+(`IllumoTests`, `IllumoGameTests`, `IllEdTests`, `IllMeshViewerTests`). Use a Linux tree only on a real
+Ubuntu 24.04 x86_64 host with X11 or XWayland, GCC 13+ or Clang 18+, and
+CMake 3.25+. Ubuntu 22.04's default GCC 11 and CMake 3.22 are not sufficient
+(`std::ios::noreplace`, CMake 3.25). Native Wayland GLFW is off
+(`GLFW_BUILD_WAYLAND=OFF`) because gtkmm-3 plus GLFW can deadlock.
+
+WSL can configure and compile. Platform GUI and dialog smoke still need a
+working GLX display. If `glxinfo -B` fails, that is a driver or session
+problem, not an Illumo CMake bug.
+
+Full package list, failure table, and human GUI smoke:
+[docs/packages/platform-linux.md](docs/packages/platform-linux.md).
+
+**Packages.** On Debian/Ubuntu, CMake runs `tools/install-linux-deps.sh`
+during configure when `ILLUMO_INSTALL_LINUX_DEPS` is ON (the default on
+UNIX-not-Apple). That needs root or **passwordless** sudo. If sudo asks for a
+password, run the script once in a terminal, then reconfigure. Disable the
+helper with `-DILLUMO_INSTALL_LINUX_DEPS=OFF` when the image already has the
+packages. Non-Debian hosts skip apt.
+
+The script installs the toolchain, Ninja, pkg-config, Python 3, Mesa/GLX
+OpenGL (`libgl1-mesa-dev`, `libopengl-dev`, and `libglx-mesa-dev` when that
+name exists in the archive), X11 libraries for vendored GLFW,
+`libgtkmm-3.0-dev`, and `mesa-utils`. `--tidy` adds `clang-tidy`; `--docs`
+adds `latexmk` only (not a full TeX live). It is safe to re-run. Unknown
+package names are skipped (some Ubuntu archives have `libglx-dev` instead of
+`libglx-mesa-dev`).
 
 ```bash
-cmake -S Illumo -B build-illumo
+bash tools/install-linux-deps.sh
+pkg-config --modversion gtkmm-3.0   # expect 3.24.x on Ubuntu 24.04
+cmake --version
+g++ --version
+echo "$XDG_SESSION_TYPE"
+glxinfo -B
+```
+
+**Recommended first build.** Prefer RelWithDebInfo. Skip docs and tidy so
+configure does not wait on `latexmk`/`clang-tidy`, and so you do not pay
+Debug AddressSanitizer on `Illumo.SceneGraph.Oracle` (tens of minutes on
+some hosts). Use a dedicated Linux tree; do not reuse a Windows cache.
+
+```bash
+python3 build.py build --config RelWithDebInfo --no-docs --no-tidy
+```
+
+`build.py` still defaults to `build-workspace/RelWithDebInfo/` on Linux.
+The direct CMake examples below use a dedicated `build-linux/` tree so a
+Windows cache is never reused.
+
+Direct CMake / Ninja:
+
+```bash
+cmake -S . -B build-linux -G Ninja \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DILLUMO_BUILD_DOCUMENTATION=OFF \
+  -DILLUMO_ENABLE_CLANG_TIDY=OFF
+cmake --build build-linux --parallel
+```
+
+Ninja stages runtimes under `build-linux/RelWithDebInfo/` (or `Debug/`) so
+executables do not collide with CMake directories named `IllumoGame/`.
+
+**Run.** There is nothing to launch on Linux yet: IllumoGame, IllEd,
+IllMeshViewer and frame capture run only as WASM packages inside the Windows
+x64 `IllumoRuntime`. The staged directory holds the native test runners.
+
+**Test.** The default Ninja `ALL` target also runs `IllumoRunTests`. For a
+faster headless pass:
+
+```bash
+ctest --test-dir build-linux -L IllumoWorkspace -E "Bench|Oracle" --output-on-failure
+```
+
+Headless tests do not prove GLFW, OpenGL, or GTK dialogs. Complete the smoke
+list in [docs/packages/platform-linux.md](docs/packages/platform-linux.md)
+before treating the port as done.
+
+| Problem | What to do |
+|---|---|
+| dpkg/apt lock (`/var/lib/dpkg/lock-frontend`) | Wait for the other `apt-get`, then re-run CMake or the script |
+| sudo needs a password | Run `bash tools/install-linux-deps.sh` yourself; then reconfigure |
+| `Could NOT find OpenGL` (`OPENGL_glx_LIBRARY` / `OPENGL_INCLUDE_DIR`) | Install the Mesa/GLX `-dev` packages; CMake 4 FindOpenGL is GLVND-based |
+| `libglx-mesa-dev` skipped (not in this apt archive) | Expected on some Ubuntu variants; remaining GL packages may still be enough |
+| `ILLUMO_ENABLE_CLANG_TIDY` / missing `clang-tidy` | `--no-tidy`, or install `clang-tidy` (`--tidy` on the script) |
+| Configure error shows `--tidy;--docs` | CMake list join; those are flags passed to the helper |
+| Debug ASan / `Illumo.SceneGraph.Oracle` very slow | First GUI smoke: RelWithDebInfo; or `ctest -E "Bench\|Oracle"` |
+| `glxinfo` / window creation fails | Driver or session; use X11 or XWayland |
+| `gtkmm-3.0` not found | Install `libgtkmm-3.0-dev` |
+| Reused Windows CMake cache | New `-B build-linux` |
+
+### What the build produces
+
+A successful workspace build stages, in one configuration folder:
+
+- Runtime (Windows x64): `IllumoRuntime` plus `apps/game/`
+  (`IllumoGame.wasm`), `apps/illed/` (`IllEd.wasm`) and `apps/meshviewer/`
+  (`IllMeshViewer.wasm`), each with its `illumo.json` manifest; private
+  `storage/<id>/` directories are created on first launch
+- Tools: `IllumoPack` (`IllumoPack <package-dir> <out.ilpk>` packs a
+  package; `IllumoPack --verify <file.ilpk>` checks one)
+- Tests: `IllumoTests`, `IllumoGameTests`, `IllEdTests`,
+  `IllMeshViewerTests`, `IllumoPublicHeaderSmoke`, and on Windows the WASM
+  host and package test runners
+- Runtime files: `Shader/`, `Assets/`, `envvars.json`, `THIRD_PARTY_NOTICES.md`
+
+Windows (VS generator): `build-workspace/Release/` for `build.py`, or
+`build/Release/` for `-B build`. Linux (Ninja): `build-linux/<CONFIG>/`.
+
+The default `ALL` target also runs the `IllumoWorkspace` CTest label via
+`IllumoRunTests`. Debug builds enable AddressSanitizer on MSVC and GCC/Clang
+(`ILLUMO_ENABLE_ASAN`, default `ON`). Debug is the sanitizer profile: its
+WASM guests also run with explicit bounds checks on every memory access, so
+it is markedly slower to play. Play and profile with RelWithDebInfo
+(`python build.py play --profile dev`), which keeps the developer console
+and profiler; `--profile debug-noasan` keeps Debug code generation without
+the sanitizer.
+
+The library can configure independently, without the products:
+
+```bash
+cmake -S Illumo -B build-illumo -DILLUMO_BUILD_DOCUMENTATION=OFF
 cmake --build build-illumo --config Release
 ctest --test-dir build-illumo -C Release -L Illumo --output-on-failure
 ```
 
-When Windows PowerShell and `latexmk` are on `PATH`, the default build also runs
-`IllumoDocs` and writes `docs/output/illumo.pdf` plus
-`docs/output/architecture-map.pdf`. Disable that optional target at configure
-time with `-DILLUMO_BUILD_DOCUMENTATION=OFF`.
+When Windows PowerShell and `latexmk` are on `PATH`, the default Windows
+build also runs `IllumoDocs` and writes `docs/output/illumo.pdf` plus
+`docs/output/architecture-map.pdf`. On Linux that target is skipped even if
+documentation is enabled. Turn PDFs off with
+`-DILLUMO_BUILD_DOCUMENTATION=OFF`.
 
-Headless tests (no GPU):
+## Run the applications
+
+Every interactive application is a WASM package run by `IllumoRuntime.exe`
+from the staged configuration directory (see above; Windows x64 only).
+Installed packages live in `apps\<name>\` (or `apps\<name>.ilpk`), each with an
+`illumo.json` manifest:
+
+| `--app` | Module | Manifest notes | Private storage |
+|---|---|---|---|
+| `game` (default) | `IllumoGame.wasm` | | `storage\csim\` |
+| `illed` | `IllEd.wasm` | `launchAccess: "edit"`; preloads `Assets/IllEd/editor-ui-atlas.jpg` | `storage\illed\` |
+| `meshviewer` | `IllMeshViewer.wasm` | `launchAccess: "read"`; preloads `Assets/Skybox/skybox-daylight.png` | `storage\meshviewer\` |
+
+```text
+IllumoRuntime.exe [--app name] [--open file] [-ww width] [-wh height] [--graphics-api opengl|vulkan]
+IllumoRuntime.exe [--app name] [--open file] --capture new.png [--capture-frame n] [--capture-script file]
+IllumoRuntime.exe --package dir|file.ilpk [--storage dir]
+IllumoRuntime.exe [--app name] [--mount dir|file.ilpk]... [--project dir]
+IllumoRuntime.exe --game module.wasm --package dir --storage dir
+IllumoRuntime.exe --help
+```
+
+`--app` cannot be combined with `--package` or `--game`. Every package in
+`packages\` beside the runtime (directories with an `illumo.json` and `*.ilpk`
+files), and each `--mount`, is mounted on the host's virtual file tree at
+`/packages/<id>`; content packages that declare an overlay of `/app` for the
+launched application also layer over its files. `--project dir` mounts a
+writable authoring directory at `/project`. The host console command
+`vfs mounts|ls|tree|stat|cat` explores the tree; in Debug and RelWithDebInfo
+builds, `files [path]` opens a keyboard browser over it (arrows navigate,
+Escape closes). `--open` hands one
+document to the app: the guest sees only the file's base name, and the host
+grants the file as the selection `launch`, writable when the manifest says
+`launchAccess: "edit"`. The window title comes from the manifest `title`.
+Runtime settings live in `envvars.json` beside the runtime, including the
+last restored window size (`WinX`/`WinY`; a minimized window keeps the
+previous size, and a non-positive saved size opens at 1280x720); each app keeps
+its own settings in its storage directory, seeded from the package's
+`envvars.json` on first run. `--help` and `--version` work on the runtime.
+Design and cutover record:
+[docs/wasm-apps-cutover-plan.md](docs/wasm-apps-cutover-plan.md).
+
+Host-wide shortcuts (yield while the developer console is open):
+
+- **F11** — fullscreen
+- **F3** — FPS overlay (`showFPS`)
+- **F5** — reload managed textures and shaders
+- **Grave / tilde** — developer console (Debug and RelWithDebInfo;
+  `DebugOverlay`)
+
+Applications also honor the window-manager close button. **Q** is not a
+global quit key: IllumoGame uses it to request exit; IllEd and IllMeshViewer
+bind **Q** to camera motion.
+
+Presentation is monitor-synchronized by default (`"vsync": "1"`). Set
+`vsync` to `0` for uncapped profiling.
+
+Rendering uses OpenGL by default. To switch to the Vulkan backend (Vulkan 1.3
+driver required, no SDK), launch once with `--graphics-api vulkan`, set
+`"GraphicsAPI": "VULKAN"` in the runtime's `envvars.json`, or enter
+`set GraphicsAPI vulkan` in the developer console; the choice is saved and
+applies from the next launch. `--graphics-api opengl` switches back. Both
+backends draw the same images; if Vulkan cannot start, the runtime logs why and
+starts with OpenGL, keeping the saved choice. `--capture` and `--bench-frames`
+work with either.
+
+### IllumoGame
+
+Cellular-automata sandbox. The whole product (menus, canvas, editor, console
+commands, save/load, clipboard, ruleset workshop and the 3D diagnostic)
+executes inside `IllumoGame.wasm`; `IllumoRuntime` supplies only the window,
+input, rendering, file, dialog, clipboard, display and console services.
+Catalogs may add ruleset IDs; F2 on the canvas edits a rule. See
+[docs/packages/game.md](docs/packages/game.md) and
+[docs/wasm-game-cutover-plan.md](docs/wasm-game-cutover-plan.md).
+
+`apps\game\illumo.json` names the module and the simulation lane worker and
+requests memory, metering (`epoch`: calls are bounded by a wall-clock
+deadline, not fuel), deadline and lane budgets; the runtime clamps them to
+host ceilings. `--memory-mib`, `--deadline-ms` and `--fuel` (which forces fuel
+metering) override a launch. Launch options are never persisted. Game settings (`tps`, ruleset, fade, `render3dTest`, ...) live in
+the game's own `storage\csim\envvars.json`; the host console's `set`/`get`
+address runtime settings, while the game's commands are forwarded into the
+package.
+
+- **E** — Edit / Normal (starts in edit, same as paused)
+- **Left mouse** (Edit) — live cells; **Right mouse** — dead / erase
+- **Shift+left drag** (Edit) — rectangle select
+- **Ctrl+C / X / V**, **Delete**, **R** / **F** — copy / cut / paste / erase /
+  rotate / flip
+- **Middle drag / wheel** — pan / zoom
+- **I** — inspector
+- **F1** — settings (ruleset, world size in 16x16 chunks, TPS, fade, VSync,
+  fullscreen, UI scale, MSAA, FPS cap). Apply takes effect immediately except
+  MSAA. Positive width and height select a finite torus; `0`/`0` or
+  `inf`/`inf` is the infinite canvas; mixed axes are rejected. Topology
+  changes start a fresh world
+- **Q** — request quit (exit confirmation on the canvas)
+- Bottom control hints are on by default; toggle **Edit control hints** in
+  F1. Painting, selecting, and camera motion do not hit through that band
+
+Saves append `.csim` when no extension is given. Writes are sparse version 4
+(family and ruleset IDs, topology, camera, sorted chunks). Loads validate
+before replacing the canvas.
+
+Set `"render3dTest": "1"` in `storage\csim\envvars.json` for an opt-in 3D
+diagnostic scene (`IllumoGame/Scenes/render3d-test.ilsc`, not the normal
+canvas). Set it back to `0` to
+restore the orthographic CA view. Its lit meshes cast into the runtime's
+shared shadow pass through frame schema version 2.
+
+Simulation publishes each frame's due generations as one update, so the
+rate can exceed the frame rate. The game store runs as many as fit 4 ms of
+the frame; when that cannot keep up, blocks of up to 32 generations run on
+up to eight isolated simulation lanes (`CSimWorkerGuest.wasm` stores, each
+owning a balanced run of chunk rows, or chunk columns for elementary 1D
+rules, which run one generation per block) while frames keep rendering.
+Editing, loading or saving while running discards at most the block in
+flight. `status` shows where generations execute. Overdue whole steps are
+dropped. The visible viewport is a padded, integer-LOD
+cache with tiled uploads. Timing, fade, and upload details:
+[docs/packages/game.md](docs/packages/game.md).
+
+### IllEd
+
+SceneGraph world editor. It does not simulate cellular automata. File / Edit /
+Create / View authors `.ilsc` format 2 scenes: primitives, meshes, sprites,
+lights and cameras with an environment and skybox, undo and redo,
+multi-selection, translate/rotate/scale gizmos, a typed inspector, clipboard
+and a hierarchy with reordering. With `--project dir`, the asset browser
+places files from the virtual file tree, and File offers Import to Project,
+Save to Project and Pack Project (an `.ilpk`). The whole editor runs inside
+`IllEd.wasm`. Open a scene at startup with `--open`, or use File > Open.
+Because the manifest grants the launch document for editing, Ctrl+S saves it
+in place. Dialogs use pattern `*.ilsc`; save, open and close confirmation
+are asynchronous, and editing input is held while a transfer is in flight.
+See [docs/packages/illed.md](docs/packages/illed.md).
+
+```text
+IllumoRuntime.exe --app illed
+IllumoRuntime.exe --app illed --open scene.ilsc
+IllumoRuntime.exe --app illed --project my-project
+```
+
+### IllMeshViewer
+
+Displays one `.obj` mesh or `.ilsc` scene on a 3D reference grid inside `IllMeshViewer.wasm`. The
+launch document is read-only; its bytes are parsed in the guest with
+`MeshLoader::loadFromMemory`, large static meshes are uploaded once as
+retained host meshes (frame schema v3), and the skybox cross is preloaded
+from the package and drawn as a host cubemap. As in every app, dynamic UI and
+line geometry stays on the host and only changed bytes travel (frame schema
+v4). It also opens `.ilsc` scenes: pick one in the dialog, pass it with
+`--open`, or open one from any mounted package with the console command
+`viewer_open /packages/<id>/scenes/x.ilsc`. The scene's assets are fetched
+from the virtual file tree before it appears, and its own sky replaces the
+default one.
+
+```text
+IllumoRuntime.exe --app meshviewer
+IllumoRuntime.exe --app meshviewer --open model.obj
+IllumoRuntime.exe --app meshviewer --mount forest.ilpk
+```
+
+Controls:
+
+- LMB / RMB drag — orbit; MMB or Shift+drag — pan
+- WASD / arrows — pan; scroll — zoom
+- Q / E or Alt+drag — roll / tilt
+- **O** — open-mesh dialog; **R** / **F** — reset / frame; **G** — grid;
+  **X** — wireframe / bounds
+
+### Frame capture
+
+`IllumoRuntime --capture` replaces the former `IllumoCapture` tool. It runs
+the selected app until `--capture-frame` (default 60), reads back the
+presented backbuffer, writes a new PNG, prints one JSON result line and exits
+with 0 or 1. Real GPU required; the output must be a new `.png` path.
+`--capture-script file` first runs the same steps as `--bench-script` (below),
+so a capture can reach a later screen; the capture frame then counts from the
+end of the script. See [docs/frame-capture.md](docs/frame-capture.md).
+
+```powershell
+# Windows, from the staged Release directory
+.\IllumoRuntime.exe --app meshviewer --open model.obj --capture frame.png
+.\IllumoRuntime.exe --capture game.png --capture-frame 120 -ww 1280 -wh 720
+.\IllumoRuntime.exe --capture settings.png --capture-script f1.txt --capture-frame 30
+```
+
+`--bench-frames n` times `n` frames after `--bench-warmup` (default 120) and
+prints one JSON line (frame intervals, module update time, WASM exchange
+timings, frame payload counters); `--bench-script file` first runs console
+lines, `@key Name` presses and `@wait n` pauses. The in-app `wasm_stats`
+command shows the same exchange statistics. See
+[docs/frame-capture.md](docs/frame-capture.md).
+
+### Developer console
+
+Available in Debug and RelWithDebInfo (`DebugOverlay`). Type `help` or
+`help <command>`. The table is IllumoGame-oriented; other apps share the
+host overlay.
+
+| Group | Commands |
+|---|---|
+| Simulation | `pause`, `run`, `step [count]`, `status` |
+| Canvas | `clear_canvas`, `reset_canvas`, `randomize [percent]`, `setcell <x> <y> <state>` |
+| Rules and files | `ruleset [name]`, `save <file>`, `load <file>`, `save_dialog`, `load_dialog` |
+| Camera and display | `camera [x y [zoom]]`, `camera_reset`, `fullscreen`, `fps`, `memory` |
+| Renderer diagnostics | `renderer_demo [on|off]`, `assets`, `asset_reload <all|path>` |
+| Timing | `tps`, `speed`, `fade` |
+| Environment | `get`, `set`, `toggle`, `vars [filter]` |
+| Console/app | `help`, `echo`, `clear`, `close`, `quit` |
+
+`memory` controls the process-memory overlay (`showMemory`, default off).
+Windows supplies the counters; unsupported platforms show `Memory:
+unavailable`. Values are process working set / peak / private commit in MiB,
+not GPU memory. `profiler on` / **F6** is documented under Profiling below.
+
+## Tests, coverage, and clang-tidy
+
+CTest registers one process-isolated entry per logical case. All four
+runners support `--list` and exact `--run`. `build.py test` builds every
+executable CTest will run, including the `Illumo.Wasm.*` host tests and the
+package tests that drive each real app through the generic host:
+`IllumoGame.Wasm.GamePackage`, `IllEd.Wasm.Package` (launch scene,
+package-preloaded atlas, keyboard pan, Ctrl+S save in place) and
+`IllMeshViewer.Wasm.Package` (launch mesh as one retained host mesh, skybox
+cubemap). `Illumo.Runtime.Help` and `Illumo.Runtime.InvalidCaptureFrame`
+check the runtime command line headlessly; real captures are verified by
+`tools/verify_capture.py`. An exact `--test` name is resolved through
+CTest first and then by discovered product or runner prefix. Each case gets an isolated
+directory under `build/Testing/<runner-label>/` (or the equivalent in
+`build-workspace` / `build-linux`).
 
 ```bash
 ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
 ctest --test-dir build -C Release -N -L IllumoWorkspace
-# library: build/Release/IllumoTests.exe --run Illumo.Host.ConfigurationOwnership
-# game: build/Release/IllumoGameTests.exe --run IllumoGame.CellGame.SaveLoadRoundTrip
-# editor: build/Release/IllEdTests.exe --run IllEd.Ilsc.RoundTrip
+# library:  build/Release/IllumoTests.exe --run Illumo.Host.ConfigurationOwnership
+# game:     build/Release/IllumoGameTests.exe --run IllumoGame.CellGame.SaveLoadRoundTrip
+# editor:   build/Release/IllEdTests.exe --run IllEd.Ilsc.RoundTrip
+# viewer:   build/Release/IllMeshViewerTests.exe --list
 ```
 
-CTest registers one process-isolated entry per logical case. Both runners
-support `--list` and exact `--run`; `build.py test` dispatches by the
-`Illumo.*` or `IllumoGame.*` prefix. Each case gets an isolated directory
-under `build/Testing/Illumo/` or `build/Testing/IllumoGame/`.
+See `Illumo/Tests/README.md`, `IllumoGame/Tests/README.md`,
+`IllEd/Tests/README.md`, and `IllMeshViewer/Tests/README.md`.
 
 Clang/LLVM coverage (85% production-line gate and HTML report):
 
@@ -197,14 +579,12 @@ cmake -S . -B build-coverage -G Ninja \
 cmake --build build-coverage --target IllumoCoverage
 ```
 
-The combined report measures headless-testable first-party code from both
-production targets. Tests, TestSupport, vendored/system code, the concrete live
-window, and the OpenGL backend are excluded;
-native dialogs, window behavior, and live OpenGL still require smoke testing.
-See `Illumo/Tests/README.md` and `IllumoGame/Tests/README.md` for the exact
-scope and commands.
+The combined report measures headless-testable first-party code linked into
+all registered workspace test runners. Tests, TestSupport, vendored/system
+code, the live window, and the OpenGL backend are excluded. Native dialogs
+and live OpenGL still require smoke testing.
 
-clang-tidy (first-party sources, warnings as errors):
+clang-tidy (first-party sources, diagnostics as errors):
 
 ```bash
 cmake -S . -B build-tidy -G Ninja \
@@ -214,129 +594,484 @@ cmake -S . -B build-tidy -G Ninja \
 cmake --build build-tidy --target IllumoTidy
 ```
 
-`ILLUMO_ENABLE_CLANG_TIDY` defaults to ON, so a normal first-party compile
-runs `clang-tidy` with `.clang-tidy` and treats diagnostics as errors.
-Vendored translation units are excluded. Disable it with
+`python build.py tidy` configures a Ninja/Clang tree under
+`build-workspace-tidy`. Disable compile-time linting with
 `-DILLUMO_ENABLE_CLANG_TIDY=OFF` or `python build.py build --no-tidy`.
-`python build.py tidy` still configures a Ninja/Clang tree under
-`build-workspace-tidy` and builds the batch `IllumoTidy` target.
+Vendored translation units are excluded. Selection tests:
+`python -B -m unittest discover -s tools -p test_workspace_tidy.py`.
 
-### Optimized Tracy profiling
+## Build orchestrator
 
-Keep the normal Release optimization level while enabling application Tracy
-instrumentation:
+`build.py` is the convenient front end for the existing CMake build. It
+requires Python 3.10 or later, uses only the standard library, prints every
+command it runs, and leaves all CMake files and targets authoritative. From
+an interactive terminal:
 
 ```bash
-cmake -S . -B build-profile -DILLUMO_ENABLE_TRACY=ON -DILLUMO_BUILD_DOCUMENTATION=OFF
-cmake --build build-profile --config Release
+python build.py
 ```
 
-Visual Studio: open the generated solution from the build directory, or generate with the VS generator.
+The **Profile** setting cycles `Default`, the built-in profiles and any saved
+ones; changing a later setting marks the profile `(edited)` as a session
+override. Use the arrow keys to choose `Release`, `Debug`, `RelWithDebInfo`, or
+`MinSizeRel`, cycle the **Application** setting through the installed apps
+(IllumoGame / IllEd / Mesh Viewer), toggle documentation, Tracy and the WASM
+runtime, select build parallelism, and run a focused action: **Play**,
+**Build everything**, **Build runtime and apps**, **Run headless tests**,
+**Run existing build**, and the tools below. **Play** builds `IllumoRuntime`
+(which stages every package) and runs the selected app. The header line
+reports which apps are staged in the selected tree, whether the WASM
+toolchain is missing, and how many stale pre-WASM outputs remain; the line
+above it shows the Git branch, commit and working-tree state. Each action has
+a one-letter hotkey shown beside it (`p` Play, `b` Build everything, `a`
+runtime and apps, `t` tests, `r` Run existing build, `s` statistics, `o`
+Development Tools, `d` docs, `c` coverage, `i` clang-tidy); `/` opens a
+command palette that fuzzy-matches every action, tool, profile and setting
+value (`/ cfg deb` Enter selects Debug), `.` repeats the
+last action, `?` lists every shortcut with its command-line equivalent, Tab
+jumps between Settings and Actions, and Home/End/Page Up/Page Down move
+further. Recorded actions show their latest result for the selected tree
+(for example `✔ 3m 12s · 2h ago`) when the row has room. The bottom border
+explains the selected setting or shows the exact `python build.py ...`
+command the selected action runs. Terminals with at least 34 rows show a
+block-letter ILLUMO banner above the menu; the progress view and every
+Development Tools subview use the same rounded frame, with the title in the
+top border and the status message in the bottom one. Consoles whose encoding
+cannot show these glyphs (a redirected Windows stdout) get ASCII instead.
 
-## Controls
+The console is animated. The menu unrolls when it opens (any key finishes
+it), a sheen crosses the banner every few seconds, the selection marker
+pulses, and a changed status line gets one sheen. The progress view repaints
+about 16 times a second: the title's colors flow, a sheen runs along the
+filled bar, tools without a total show a streak with a fading tail, and the
+result badge flashes briefly when the action ends. Animation only changes
+colors, never positions, and idle frames that look the same are not
+redrawn. Set `ILLUMO_NO_ANIMATION=1` to turn all motion off; redirected
+output never animates. On Windows consoles, moving the mouse over a row
+highlights it without activating it. Left-click a setting to cycle forward
+or an action to run it. Click the setting's left arrow or right-click it to
+cycle backward; scroll over menu rows to move the selection. Button
+releases, dragging, and the second press of a double-click do not activate
+actions. Input mode is restored while commands run and when the dashboard
+exits. Other terminals retain keyboard controls. Mouse hit testing requires
+the whole dashboard to fit (at least 56 columns and 30 rows); enlarge the
+terminal if clicks are ignored.
 
-- **E** — Toggle Edit / Normal mode  
-  (Simulation starts in edit mode, same as paused)
-- **Left mouse** (Edit) — Place living cells
-- **Right mouse** (Edit) — Place dead cells
-- **C** (Edit) — Clear the cell colony
-- **F1** — Open the Release-visible simulator settings menu
-- **Q** / **ESC** — Quit
-- **`** — Toggle the developer console
-- **Console:** **Tab** completes commands, variables, and rulesets; **Left/Right**, **Home/End**, and **Delete** edit in place; hold **Ctrl** with Left/Right or Backspace/Delete for word edits; hold **Shift** while moving to select; **Ctrl+A** selects all
+Build, test, coverage, tidy, documentation and WASM-toolchain actions open a
+live progress view: a phase timeline (`✔ Configuring 4.1s › ⠹ Building`),
+the current command, total/phase elapsed time, a colorized recent-output
+panel, and warning/error line counts. CTest counts and Ninja/CMake progress
+are shown when the tools report them, with a rate-based ETA for step and
+test counts and a sparkline of the last 24 seconds' completions per second.
+These describe the current tool, not the whole action. MSBuild
+and quiet tools show an activity bar, or, when the same action last
+succeeded on the same tree, elapsed time against that run's duration. The
+window title follows the action, and Windows Terminal and ConEmu also show
+taskbar progress. Actions longer than 10 seconds ring the terminal bell on
+completion. A successful run is compared with the previous one ("12% faster
+than the last run"); a failed run lists its first errors above the output tail. From
+the final view, press `d` to open the run in the diagnostic browser, `l` to
+read the full log, or any other key to return to the menu.
 
-## Launch options
+Complete combined output is saved under Git-ignored
+`build-orchestrator-logs/`; logs are retained until you remove them. Ctrl+C
+cancels the active progress action and stops its owned processes. Windows
+uses a Job Object so compiler or test descendants cannot outlive the action.
+Application launches and statistics reports retain direct output. Explicit
+CLI commands retain their normal output.
 
-The executable keeps its persisted configuration in `envvars.json` beside the
-executable, independent of the process working directory. A first build places
-the tracked defaults there without overwriting an existing local configuration.
-Command-line dimensions override the persisted values:
+The same operations remain available as explicit commands:
 
-```text
-IllumoGame.exe [-ww width] [-wh height] [-cw canvas-width] [-ch canvas-height]
-IllumoGame.exe --help
-IllumoGame.exe --version
-IllEd.exe
-IllEd.exe --help
+```bash
+python build.py doctor
+python build.py wasm-tools
+python build.py build --config Debug
+python build.py build --config Debug --target IllumoRuntime --parallel
+python build.py build --no-wasm
+python build.py play
+python build.py play --app illed -- --open scene.ilsc
+python build.py play --app meshviewer --no-build -- --open model.obj --capture frame.png
+python build.py play --no-build -- --package D:\MyGame
+python build.py test
+python build.py test --list-tests
+python build.py test --test IllumoGame.CellGame.SaveLoadRoundTrip
+python build.py test --test IllumoGame.Wasm.GamePackage
+python build.py test --test IllEd.Wasm.Package
+python build.py watch
+python build.py watch --config RelWithDebInfo --target IllumoRuntime
+python build.py watch --test IllumoGame.CellGame.SaveLoadRoundTrip
+python build.py play --app illed -- -ww 1280 -wh 720
+python build.py run --config Debug --no-build
+python build.py stats
+python build.py stats --json
+python build.py file-stats
+python build.py file-stats -n 25
+python build.py coverage
+python build.py tidy
+python build.py docs
+python build.py version
+python build.py version --set 26.10
+python build.py new-project ../MyNewGame --name MyNewGame
 ```
 
-`IllEd.exe` is the SceneGraph world editor. It writes `.ilsc` JSON scenes
-(File / Edit / Create / View). Set `LaunchScene` in its `envvars.json` to
-open a file at startup. It does not simulate cellular automata.
+Builds are versioned `vYY.MM_B` (D-F2). `YY.MM` is the release in
+`VERSION.txt`; `B` counts first-parent commits since that file last changed,
+so it restarts at 0 each release and a merged pull request counts once.
+Every build stamps it into `BuildInfo` and the staged `illumo.json` manifests
+without any manual step. Products show `v26.09_12`; the log, the startup
+report and `IllumoRuntime --version` show `v26.09_12 (1f709073, dirty)`, and
+a tree without Git history shows `v26.09_0 (unknown)`. `version` prints the
+current build's version (`--json` for every field). To cut a release, run
+`version --set YY.MM`: it writes `VERSION.txt` and commits that file alone,
+and that commit is build 0 of the new release. Release builds need a full
+clone, because a shallow one cannot count commits and builds as `_0`.
 
-Presentation is synchronized to the monitor by default (`"vsync": "1"`). Set
-`vsync` to `0` for uncapped profiling; Debug builds also apply `toggle vsync`
-live. The Debug FPS overlay reports frame-paced swap cadence separately from
-CPU submissions so an uncapped submission rate is not presented as display FPS.
+`watch` configures once, builds, then polls first-party sources, shaders,
+CMake files and JSON manifests (build trees, `archive/`, `Illumo/thirdparty/`,
+`docs/` and dot-directories excluded) and rebuilds after each save, waiting
+for bursts of writes to settle. With `--test NAME` it also runs that exact
+CTest case after each build. Failures are reported and watching continues;
+Ctrl+C stops it. `--interval` sets the polling period (default 1 second).
 
-Set `"render3dTest": "1"` in `envvars.json` to replace the cellular canvas
-with an opt-in 3D diagnostic scene: a `SceneGraph` of `MeshVisual` attachments
-(axes/grid plus orbiting cubes) drawn through the product camera in perspective.
-It is a rendering smoke path, not a model or lighting feature; set it back to
-`0` to restore the normal orthographic canvas.
+When standard input or output is redirected, `python build.py` with no
+command performs the normal Release build instead of opening the console.
+That build retains CMake's all-target behavior: library, `IllumoRuntime` with
+every app package, all test runners, every registered workspace case, and
+the PDFs when the documentation toolchain is available.
 
-The F1 menu configures ruleset, world width/height in 16x16 chunks, TPS,
-simulation speed, fade speed, VSync, and fullscreen in both Debug and Release.
-Positive width and height select a finite torus whose opposite edges are
-adjacent. Enter `0`/`0` or `inf`/`inf` for the infinite canvas; mixed finite and
-infinite axes are rejected. The finite world is drawn once inside its centered
-rectangle; camera space outside it stays blank while simulation still wraps
-across opposite edges. Applying a topology change starts a fresh world. Menu
-labels use larger, high-contrast text, readable ruleset names, and contextual
-help for the selected setting. The final menu action exits through Illumo's
-normal runtime shutdown path; Discard, Escape, and F1 only close the menu. A short eased
-reveal, gliding row highlight, and value-change pulse provide motion without
-delaying input.
+Use `--no-docs` to skip the optional PDF target, `--generator` and
+`--architecture` to select a CMake generator, and repeated
+`--cmake-arg=-DNAME=VALUE` for an uncommon CMake setting. `--dry-run`
+prints the commands without running them. The orchestrator defaults to
+`build-workspace` and coverage defaults to `build-workspace-coverage`. It
+never deletes a build tree and rejects a cache created from another source
+root; use a separate `--build-dir` when changing source roots or generators.
 
-## Global hotkeys
+The dashboard's **Run existing build** action, or `play --no-build`, launches
+the selected app immediately and fails clearly if that configuration has not
+staged it yet. The normal `play` command still configures and builds before
+launching. `run` launches native executables, which in this workspace means
+only `IllumoRuntime`.
 
-The engine host handles common shortcuts across applications:
+Direct CMake remains the escape hatch:
 
-- **F11**: Toggle fullscreen mode.
-- **F3**: Toggle the FPS overlay (`showFPS`).
-- **F5**: Reload all managed asset resources (textures and shaders).
+```bash
+cmake -S . -B build
+cmake --build build --config Release
+```
 
-Global shortcuts yield while typing in the developer console (`~` / Grave).
+### Profiles and diagnostics
 
-## Developer console commands
+The dashboard's **Development Tools** submenu completes the build/test/debug
+loop without leaving the console:
 
-The in-app console is provided by `DebugModule`, so it is available in Debug
-builds only. It is a global overlay: grave/tilde toggles it on the main menu,
-settings, and cell canvas. Type `help` for the live list or `help <command>`
-for details.
+- **Test explorer** reads names, labels, commands, working directories, and
+  timeouts from CTest's JSON inventory. `/` edits a name search; Enter
+  applies it and Escape cancels editing. Ordinary characters (including `q`,
+  `h`, `j`, `k`, and `l`) remain text while editing; Backspace edits. The
+  project-label action cycles filters. Hovering or selecting a test only
+  displays its details. Choose **Run Selected**, **Run Matching**, or
+  **Rerun Failed** explicitly.
+- Test actions configure and build CMake's declared discovery targets and
+  smoke targets first. The execution-mode action offers **Run Existing** to
+  skip preparation. **Refresh Inventory** explicitly prepares the selected
+  tree; merely opening or searching the explorer never builds. Missing
+  configuration discovery files and mismatched single-configuration caches
+  are rejected, even when CMake's discovery helper could fall back to
+  another configuration.
+- Selected tests run through CTest with escaped, anchored name filters split
+  into bounded batches. CTest retains its working directories and timeouts.
+  An empty selection never runs anything. Local
+  `-T Test --no-compress-output` reports are captured per batch; nothing is
+  submitted to a dashboard server. Results retain status and duration.
+  Reruns use only the latest test run for the same checkout, build
+  directory, and configuration. Cancelled/incomplete runs and missing tests
+  require explicit selection rather than a guessed rerun.
+- **Diagnostic browser** browses recorded runs with error, warning, and all
+  filters. It recognizes MSVC, Clang/clang-tidy, and CMake locations. Select
+  a diagnostic for a preview, then use **Inspect selected diagnostic** for
+  raw log context and a read-only **CURRENT SOURCE** view. Relative paths
+  use the recorded command directory. Missing files and invalid locations
+  are reported; the browser never searches for replacement files. **Browse
+  raw log** retains messages without recognized locations. Current files may
+  differ from the run.
+- **Profile picker** previews built-in and saved settings, including
+  directory, configuration, generator, architecture, feature flags, extra
+  CMake arguments, and parallelism. **Apply selected profile** carries them
+  into ordinary build, test, and launch actions. Manual dashboard changes
+  are session overrides; applying another profile clears them. Saving is
+  explicit: type a name with `/`, apply the text, then choose **Save current
+  settings**. Coverage and tidy retain their dedicated Debug/Ninja trees and
+  honor selected parallelism.
+- **Artifact shortcuts** offers existing build directories, the latest log
+  for the selected build identity, the coverage HTML report, generated
+  PDFs, and the orchestrator log folder. Opening uses Windows' default
+  handler and never starts a build.
+- **Build trends** charts each action's recorded runs, oldest to newest, as
+  a duration sparkline colored by outcome, with the median duration and
+  success rate; details compare the latest success with the median.
+- **Watch** runs `build.py watch` with the current settings in the console;
+  Ctrl+C stops it and returns to the menu.
+- **Toolchain doctor** runs `build.py doctor` with the current settings;
+  **Fetch the pinned WASM toolchain** runs `build.py wasm-tools` in the
+  progress view. **Keyboard shortcuts** is the same page as `?`.
 
-| Group | Commands |
-|---|---|
-| Simulation | `pause`, `run`, `step [count]`, `status` |
-| Canvas | `clear_canvas`, `randomize [percent]`, `setcell <x> <y> <state>` |
-| Rules and files | `ruleset [name]`, `save <file>`, `load <file>`, `save_dialog`, `load_dialog` |
-| Camera and display | `camera [x y [zoom]]`, `camera_reset`, `fullscreen`, `fps` |
-| Renderer diagnostics | `renderer_demo [on|off]`, `assets`, `asset_reload <all|path>` |
-| Timing | `tps`, `speed`, `fade` |
-| Environment | `get`, `set`, `toggle`, `vars [filter]` |
-| Console/app | `help`, `echo`, `clear`, `close`, `quit` |
+The recorded-runs list shows each run's outcome, action, configuration,
+duration and age. Subviews scroll with arrows, the wheel, Page Up/Down, and
+Home/End, with a scrollbar once a list overflows. Hit
+regions follow the visible viewport; hover changes selection and only action
+rows execute work. `q` or Escape returns to the previous view outside text
+entry. Source-file statistics is also available in Development Tools.
 
-Normal mode keeps at most one generation in flight on a persistent worker and
-publishes completed sparse grids only at frame boundaries. It never builds a
-catch-up backlog; overdue whole steps are dropped while the fractional clock
-remainder is retained. Pause, edit, save/load, ruleset changes, manual stepping,
-and shutdown drain first. `status` reports requested and achieved published TPS
-plus rolling 256-sample simulation, cache-refill, upload-byte, and
-upload-rectangle p50/p95/max values. Broad generations publish a lightweight
-replacement marker rather than a complete chunk snapshot: the spare grid reads
-the immutable published grid directly, updates retained nodes in place, and
-reuses exact candidate topology when the same source grid returns unchanged.
+Each recorded dashboard log has a version-1 `.json` sidecar containing build
+identity, effective settings, wrapper and child command directories,
+completion status, and available test results. `.tests.json`, per-batch XML,
+and command context files support interrupted runs. Raw `.log` files remain
+authoritative; older logs remain browsable without metadata but cannot
+supply trusted reruns. All records stay under the ignored log directory
+until explicitly removed. The toolbox uses only the standard library inside
+`build.py`, so generated projects retain it when copying the orchestrator.
 
-The visible viewport samples from a globally aligned cache padded by two
-16-cell chunks on each side. Camera motion inside that cache changes only the
-MVP. Far zoom uses integer density LOD with 80% refinement hysteresis. Dirty
-16x16-texel tiles merge into at most eight upload rectangles. Uploads through
-64 KiB use direct `glTexSubImage2D`; larger uploads use the first available slot
-in a non-waiting three-PBO/fence ring and fall back to direct upload when all
-slots are busy or mapping fails. Replacements preserve the opaque handle while
-deleting the old GL texture, PBOs, and fences.
+Use `python build.py profiles` to list named configurations (`--json` is
+also available). Built-in `debug` and `release` profiles select their
+configuration and separate `build-workspace-debug` /
+`build-workspace-release` directories; `dev` is RelWithDebInfo in
+`build-workspace-dev` (play and profile), and `debug-noasan` is Debug without
+AddressSanitizer in `build-workspace-debug-noasan`; `tracy` is Release with
+Tracy zones in the host and every guest in `build-workspace-tracy`
+([docs/tracy-profiling.md](docs/tracy-profiling.md)). A saved profile with a
+built-in's name replaces it. Commands without a profile retain their
+existing defaults.
 
-Save commands append `.illumo` when no extension is supplied. Version 3 saves
-include world topology as well as ruleset, camera, and sorted sparse chunks.
-Loading validates the save before changing the canvas, reads version 3,
-version 2, and legacy dense files, and activates the stored ruleset.
+```bash
+python build.py doctor --profile release
+python build.py play --profile dev
+python build.py build --profile debug --parallel 4
+python build.py profile-save mine --profile debug --no-docs --parallel 4
+python build.py test --profile mine
+python build.py build --profile mine --docs --config RelWithDebInfo --dry-run
+```
+
+Profiles apply to `configure`, `build`, `test`, `run`, `doctor`, and
+`profile-save`. Explicit CLI settings override profile values; repeated
+`--cmake-arg` values append after the profile's arguments. Use `--docs`,
+`--tests`, `--tidy`, or `--no-tracy` to reverse saved boolean choices.
+Application arguments after `run --` remain application arguments.
+Coverage and tidy retain their dedicated toolchains and build directories.
+
+`profile-save NAME` creates or replaces that name in the Git-ignored
+`build-profiles.local.json`. It preserves other names and replaces the file
+atomically. `--dry-run` previews without writing. Only reusable
+configuration, build-directory, generator, architecture, parallelism,
+feature flags, and extra CMake arguments are saved; target, application,
+clean, fresh, and dry-run choices are not saved. Treat extra CMake arguments
+as trusted local build configuration.
+
+For a shared file, pass `--profiles-file PATH` explicitly. Relative
+profile-file and build-directory paths resolve from the repository root,
+including when the shell is elsewhere. The file's parent directory must
+already exist. Its format is:
+
+```json
+{
+  "version": 1,
+  "profiles": {
+    "dev": {
+      "config": "Debug",
+      "build_dir": "build-workspace-dev",
+      "no_docs": true,
+      "parallel": 4
+    }
+  }
+}
+```
+
+Allowed keys are `config`, `build_dir`, `generator`, `architecture`,
+`tracy`, `no_tests`, `no_docs`, `no_tidy`, `parallel`, and `cmake_arg` (a
+string array). Parallelism is `null` for no explicit limit option, `0` for
+automatic, or a positive job count. On the CLI, `--parallel` or
+`--parallel=auto` selects automatic parallelism. Saved profiles replace
+matching built-in definitions; there is no inheritance. Unknown keys and
+malformed values are rejected.
+
+`doctor` checks the selected cache and required tools, reports versions and
+optional documentation tools, reports an `apps` check for the staged
+`apps\<name>\` packages, flags stale native `IllumoGame.exe`, `IllEd.exe`,
+`IllMeshViewer.exe`, `IllumoCapture.exe` and an old `game\` folder for
+deletion, and supports `--json`. Errors return a nonzero
+exit code. It runs bounded tool-version probes but never configures, builds,
+downloads, or repairs anything. A successful report does not prove that a
+compiler and Windows SDK can compile the project; CMake configuration
+remains that check. Builds reject foreign caches and conflicting explicit
+generator/architecture choices. Use a separate build directory, or
+explicitly `--fresh` for a same-source generator change. Failed commands
+report their exit code, elapsed time, working directory, and command while
+preserving native tool diagnostics.
+
+`stats` reports the current Git branch, commit, working-tree counts, tracked
+file count, and categorized first-party lines. LOC counts nonblank lines in
+the current contents of tracked source, tests, shaders, build tooling,
+documentation, and configuration files. It excludes build trees, `archive/`,
+`Illumo/thirdparty/`, `docs/output/`, and binary assets. Use `--json` for
+machine-readable output; the interactive build console exposes the same
+report through **Repository statistics**.
+
+`file-stats` (aliases: `source-stats`, `stats --by-file`) provides a
+per-file breakdown of first-party source files sorted from largest to
+smallest by LOC. Options include `-n COUNT` / `--top COUNT`, `--min-loc`,
+`--include-tests`, `--category`, `--sort`, and `--json`. The interactive
+build console exposes this through **Source file statistics**.
+
+Run the orchestrator regression suite with:
+
+```bash
+python -m unittest discover -s tools -p test_build.py -v
+```
+
+## Creating an application
+
+Standalone generated workspaces include `engine-provenance.json`: source
+commit, dirty/unknown status, template and creation options. A dirty source
+copy is not an exact Git pin; retain its changes with the generated project.
+Git-unavailable sources record unknown identity explicitly. Source must
+remain unchanged during copying; the generator does not lock the checkout or
+create a Git snapshot.
+
+Names must be ASCII C++ identifiers and must not collide with Windows device
+names or workspace/build infrastructure, ignoring case (for example
+`Illumo`, `IllEd`, `cmake`, `build`, or `IllumoTests`). Rejection happens
+before copying.
+
+```bash
+python build.py new-project <destination_path> [--name <ApplicationName>]
+```
+
+Or invoke the standalone script directly:
+
+```bash
+python tools/create_project.py <destination_path> --name MyGame
+```
+
+This generates a turnkey standalone workspace:
+
+- `Illumo/`: engine sources (`Include/`, `Source/`, `Shader/`, `Assets/`,
+  `thirdparty/`, `TestSupport/`, `Tests/`, `cmake/`), IllumoRuntime included
+- `IllumoGuest/`: the guest SDK and WASI guest build
+- `IllEd/`: SceneGraph world editor (a WASM program)
+- `<ApplicationName>/` (default `IllumoGame/`): the starter template, a WASM
+  scene program (D-E31). Its `GuestProgram` adds one `SpinningCubeScene` (a
+  3D lit spinning cube with perspective camera, controls, configuration and a
+  scene console command) to its `SceneDirector`. `GuestTargets.cmake` builds
+  the module, `PackageTargets.cmake` stages `apps/<id>` (the name in lower
+  case), and the headless tests run the scene through a director.
+- `cmake/`, `tools/bootstrap-wasm.ps1`, `build.py`, `CMakeLists.txt` (which
+  lists the programs in `ILLUMO_PROGRAMS`), `README.md`
+
+Starter controls yield while the console is open. Keys held during capture
+must be released before they can control the cube again; animation
+continues.
+
+- **Space** — pause / resume rotation
+- **R** — reset rotation angle to 0
+- **G** — toggle 3D reference grid
+- **Up / Down** — rotation speed
+- **`cube_speed [value]`** — console command, while the cube scene is active
+
+Generated workspaces omit engine PDF sources, so
+`ILLUMO_BUILD_DOCUMENTATION` defaults off there. This repository defaults it
+on when the documentation inputs are present. Explicitly enabling it without
+those inputs fails at configure time.
+
+Parallel builds order shared asset/shader staging for each runtime
+directory. Default-file seeding locks its check-and-copy operation and
+preserves existing settings; the first successful seed supplies a missing
+file.
+
+To exercise project creation and a complete default generated build on a
+Windows development machine with CMake, LLVM, PowerShell, and LaTeX
+installed:
+
+```powershell
+$env:ILLUMO_TEST_GENERATED_BUILD = "1"
+python -B -m unittest discover -s tools -p test_create_project.py
+Remove-Item Env:ILLUMO_TEST_GENERATED_BUILD
+```
+
+To build and run the newly generated application (Windows x64, where the
+pinned WASM toolchain runs):
+
+```bash
+cd <destination_path>
+python build.py wasm-tools
+python build.py play --app <application id>
+python build.py test
+```
+
+## Documentation and contributing
+
+All first-party architecture, decision, package, history, and build notes
+live under `docs/`. Start with:
+
+- [docs/README.md](docs/README.md) — documentation map and PDF commands
+- [docs/architecture-consensus.md](docs/architecture-consensus.md) —
+  canonical current architecture
+- [docs/scene-graph-v2-design.md](docs/scene-graph-v2-design.md) —
+  compiled scene/snapshot contract
+- [docs/scene-graph-v2-plan.md](docs/scene-graph-v2-plan.md) —
+  implementation and validation record
+- [docs/charter-direction.md](docs/charter-direction.md) — later
+  requirements vs current contracts
+- [docs/frame-capture.md](docs/frame-capture.md) — `IllumoRuntime --capture`
+  and the `FrameCapture` API
+- [docs/packages/](docs/packages/) — per-package maps
+- `docs/latex/illumo.tex` / `docs/latex/architecture-map.tex` — prose book
+  and chart pack; generated PDFs under `docs/output/` are not sources of
+  truth
+
+Contribution rules: [docs/contributing.md](docs/contributing.md) (no `auto`,
+no namespaces, no recursion, Mozilla `clang-format`, `clang-tidy` during
+the default build).
+
+Third-party software and font acknowledgements:
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). A normal build copies
+that notice and license files into `licenses/` beside the executables.
+
+Rebuild the PDFs from the repository root:
+
+```powershell
+.\docs\build.ps1
+```
+
+## Profiling
+
+In **Debug and RelWithDebInfo**, press **F6** or run `profiler on` in the
+console for the in-game timing pie. `profiler off` hides it; `profiler
+toggle` toggles it, and `profiler` reports its state. It starts off each
+run, independently of FPS and memory visibility. Close the console, then
+press **1–3** to inspect Update, Rendering, or Presentation / waits, and
+**0** to return to Frame. Number keys belong to the profiler while it is
+visible.
+
+The chart shows average milliseconds and percentages over the latest **120
+completed frames**, refreshed four times per second. These are
+**main-thread elapsed times**: CPU command submission is separate from
+presentation / swap and the frame limiter. GPU execution and asynchronous
+simulation-worker time are excluded. See
+[docs/frame-profiler.md](docs/frame-profiler.md). Use Tracy for deeper
+analysis.
+
+The `tracy` build profile is Release with Tracy zones in the host and in
+every WASM guest, including IllumoGame's simulation lanes; connect the Tracy
+0.14.1 GUI to the running `IllumoRuntime`:
+
+```bash
+python build.py play --profile tracy --app game
+```
+
+Or configure any tree with `-DILLUMO_ENABLE_TRACY=ON`. Markers use
+`<Illumo/Foundation/Profile.h>` (`ILLUMO_PROFILE_ZONE` and friends), which
+reaches Tracy from guests through the host's `illumo_profile` imports. See
+[docs/tracy-profiling.md](docs/tracy-profiling.md).
+
+Visual Studio: open the generated solution from the build directory, or
+generate with the VS generator.

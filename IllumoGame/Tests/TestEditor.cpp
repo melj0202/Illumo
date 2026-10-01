@@ -1,26 +1,34 @@
 #include "Game/BuiltinPatterns.h"
+#include "Game/CanvasCoordinatePolicy.h"
+#include "Game/CanvasEditIcons.h"
 #include "Game/CellClipboard.h"
-#include "Game/CellGameModule.h"
+#include "Game/CanvasScene.h"
 #include "Game/CellPattern.h"
 #include "Game/IllumoCodec.h"
 #include "Game/PatternCodec.h"
+#include "Game/RuleCatalogLoader.h"
 #include "Game/SparseCellGrid.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include "TestAccess.h"
 #include "TestHarness.h"
-#include <filesystem>
-#include <limits>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Rendering/CommandQueue.h>
+#include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/TextPrimitive.h>
+#include <Illumo/Rendering/Primitives/UiTheme.h>
 #include <Illumo/Rendering/RenderCommand.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -50,12 +58,12 @@ struct EditorFixture
   CommandRegistry registry;
   CommandLine console;
   InputManager input;
-  Scene scene;
+  DrawList scene;
   IllumoContext context;
-  CellGameModule module;
+  CanvasScene module;
   bool started;
 
-  EditorFixture()
+  explicit EditorFixture(bool showInspector = false)
     : window(640, 480)
     , env()
     , camera(glm::vec2(1.0f, 1.0f), 1.0f, &env)
@@ -70,10 +78,18 @@ struct EditorFixture
     , module()
     , started(false)
   {
+    RuleCatalogLoader::loadFromDefaultLocations(RuleSetRegistry::instance());
+    // Preferences are explicit so repeated runs cannot inherit a saved draft.
+    env.setVar("fps", 60);
+    env.setVar("showInspector", showInspector);
+    env.setVar("reducedUiMotion", false);
+    env.setVar("uiScale", 1);
     env.setVar("WinX", 640);
     env.setVar("WinY", 480);
     env.setVar("CanvasX", 8);
     env.setVar("CanvasY", 6);
+    env.setVar("FamilyString", "LIFE_LIKE_BINARY");
+    env.setVar("RuleSetString", "GAME_OF_LIFE");
     env.setVar("ModeString", "GAME_OF_LIFE");
     env.setVar("tps", 30);
     env.setVar("speedFactor", 1.0);
@@ -82,14 +98,15 @@ struct EditorFixture
     env.setVar("WorldChunksY", 0);
     env.setVar("vsync", true);
     env.setVar("fullscreen", false);
+    env.setVar("editHints", true);
     mock.Initialize();
-    started = module.Start(&context);
+    started = module.start(context);
   }
 
   ~EditorFixture()
   {
     if (started) {
-      module.Exit();
+      module.stop();
     }
   }
 };
@@ -130,7 +147,7 @@ testCopyPasteIdentity()
   EditorFixture fixture;
   testTrue(g, fixture.started, "editor fixture starts");
   CellContext* cellContext =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   SparseCellGrid* grid = cellContext->getGrid();
   grid->clear();
   grid->setCell(CellAddress{ 0, 0 }, 0);
@@ -153,14 +170,14 @@ testTorusSkip()
   testSection("Editor: finite torus skips out-of-bounds paste");
   EditorFixture fixture;
   CellContext* cellContext =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   SimulatorConfiguration configuration =
-    CellGameModuleTestAccess::currentConfiguration(fixture.module);
+    CanvasSceneTestAccess::currentConfiguration(fixture.module);
   configuration.worldChunkWidth = 1;
   configuration.worldChunkHeight = 1;
   testTrue(
     g,
-    CellGameModuleTestAccess::applyConfiguration(fixture.module, configuration),
+    CanvasSceneTestAccess::applyConfiguration(fixture.module, configuration),
     "1x1 chunk torus applies");
   SparseCellGrid* grid = cellContext->getGrid();
   grid->clear();
@@ -213,12 +230,166 @@ testRleGliderRoundTrip()
 }
 
 static void
+testRleByteStates()
+{
+  testSection("Editor: RLE byte-state round trips");
+  std::string error;
+  for (int state = 0; state <= 255; ++state) {
+    CellPattern original;
+    original.setExtent(3, 2);
+    if (state != 1) {
+      for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 3; ++x) {
+          original.addCell(x, y, static_cast<unsigned char>(state));
+        }
+      }
+    }
+    CellPattern parsed;
+    bool exact = PatternCodec::parseRle(
+                   PatternCodec::encodeRle(original), &parsed, &error) &&
+                 parsed.getWidth() == 3 && parsed.getHeight() == 2 &&
+                 parsed.getCells().size() == original.getCells().size();
+    for (std::size_t i = 0; exact && i < parsed.getCells().size(); ++i) {
+      const CellPatternCell& actual = parsed.getCells()[i];
+      const CellPatternCell& expected = original.getCells()[i];
+      exact = actual.dx == expected.dx && actual.dy == expected.dy &&
+              actual.state == expected.state;
+    }
+    testTrue(
+      g, exact, ("RLE exact byte state " + std::to_string(state)).c_str());
+  }
+  CellPattern mixed;
+  mixed.addCell(0, 0, 2);
+  mixed.addCell(1, 0, 0);
+  mixed.addCell(2, 0, 0);
+  mixed.addCell(3, 0, 0);
+  mixed.addCell(4, 0, 10);
+  mixed.addCell(5, 0, 255);
+  mixed.addCell(6, 0, 255);
+  const std::string encoded = PatternCodec::encodeRle(mixed);
+  testTrue(g,
+           encoded.find("p{2}3op{10}2p{255}!") != std::string::npos,
+           "state delimiters separate subsequent run counts");
+  CellPattern parsed;
+  testTrue(g,
+           PatternCodec::parse(encoded, &parsed, &error) &&
+             parsed.getCells().size() == 7 &&
+             parsed.getCells()[4].state == 10 &&
+             parsed.getCells()[6].state == 255,
+           "mixed adjacent state/run tokens autodetect and round trip");
+  testTrue(g,
+           PatternCodec::parseRle("p23o!", &parsed, &error) &&
+             parsed.getCells().size() == 4 && parsed.getCells()[0].state == 2 &&
+             parsed.getCells()[3].state == 0,
+           "legacy one-digit state followed by run retains its meaning");
+  for (const std::string& invalid :
+       { "p{}!", "p{256}!", "p{-1}!", "p{10!", "p{999999999999999999}!" }) {
+    testTrue(g,
+             !PatternCodec::parseRle(invalid, &parsed, &error),
+             "malformed or out-of-range state rejected");
+  }
+}
+
+static void
+testPatternFormatRouting()
+{
+  testSection("Editor: comment-aware detection and explicit formats");
+  const std::string plaintext =
+    "! Glider comment contains $ p0!\n.O.\n..O\nOOO\n";
+  CellPattern parsed;
+  std::string error;
+  testTrue(g,
+           PatternCodec::parse(plaintext, &parsed, &error),
+           "commented plaintext autodetects");
+  testTrue(g,
+           parsed.getWidth() == 3 && parsed.getHeight() == 3 &&
+             parsed.getCells().size() == 5,
+           "comment text does not turn plaintext into empty RLE");
+  testTrue(g,
+           PatternCodec::parse(
+             "# RLE comment ! $\nx=3,y=3\nbo$2bo$3o!", &parsed, &error),
+           "RLE comments and compact header autodetect");
+  testTrue(g, parsed.getCells().size() == 5, "RLE glider retains five cells");
+  testTrue(g,
+           PatternCodec::parse("oo\no", &parsed, &error),
+           "ambiguous multiline cells use plaintext rows");
+  testTrue(g,
+           parsed.getWidth() == 2 && parsed.getHeight() == 2,
+           "plaintext line breaks retain rows");
+
+  EditorFixture fixture;
+  SparseCellGrid* grid =
+    CanvasSceneTestAccess::getCellContext(fixture.module)->getGrid();
+  grid->clear();
+  testTrue(g,
+           fixture.registry.QueueCommand("plaintext", { plaintext }),
+           "explicit plaintext command queues");
+  fixture.registry.ExecuteQueue();
+  testTrue(g,
+           grid->getCell(CellAddress{ 1, 0 }) == 0 &&
+             grid->getCell(CellAddress{ 2, 1 }) == 0 &&
+             grid->getCell(CellAddress{ 0, 2 }) == 0,
+           "explicit plaintext imports commented glider at origin");
+  grid->clear();
+  fixture.registry.QueueCommand("plaintext", { "p0!" });
+  fixture.registry.ExecuteQueue();
+  testEqUChar(g,
+              grid->getCell(CellAddress{ 0, 0 }),
+              1,
+              "explicit plaintext does not accept RLE p-token");
+  fixture.registry.QueueCommand("rle", { "o\no" });
+  fixture.registry.ExecuteQueue();
+  testTrue(g,
+           grid->getCell(CellAddress{ 1, 0 }) == 0 &&
+             grid->getCell(CellAddress{ 0, 1 }) == 1,
+           "explicit RLE ignores physical line break");
+}
+
+static void
+testClipboardRejectsStaleFallback()
+{
+  testSection("Editor: invalid clipboard cannot paste previous pattern");
+  CellClipboard clipboard;
+  CellPattern previous;
+  BuiltinPatterns::find("glider", &previous);
+  clipboard.setClipboardPattern(previous);
+  SparseCellGrid grid;
+  CanvasView view(4, 4, &grid, nullptr, nullptr, nullptr);
+  std::string error;
+  for (const std::string& invalid : { std::string(),
+                                      std::string("! comment only"),
+                                      std::string("3b!"),
+                                      std::string("o?!") }) {
+    gClipboardText = invalid;
+    const std::uint64_t revision = grid.getRevision();
+    testTrue(g,
+             !clipboard.pasteAtCursor(&grid, &view, 0, 0, &error),
+             "empty or invalid clipboard paste fails");
+    testTrue(g,
+             grid.getRevision() == revision && !error.empty(),
+             "failed paste reports error and leaves world unchanged");
+    testEqSize(g,
+               clipboard.getClipboardPattern().getCells().size(),
+               5,
+               "failed paste preserves internal pattern without reusing it");
+  }
+  gClipboardText = "! glider\n.O.\n..O\nOOO\n";
+  testTrue(g,
+           clipboard.pasteAtCursor(&grid, &view, 0, 0, &error),
+           "valid commented plaintext clipboard pastes after failures");
+  testEqUChar(g,
+              grid.getCell(CellAddress{ 2, 1 }),
+              0,
+              "clipboard paste uses new plaintext cells");
+}
+
+static void
 testStampGlider()
 {
   testSection("Editor: stamp glider occupancy");
   EditorFixture fixture;
   CellContext* cellContext =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   SparseCellGrid* grid = cellContext->getGrid();
   grid->clear();
   testTrue(g, queueAndRun(fixture, "stamp glider"), "stamp glider");
@@ -239,7 +410,7 @@ testPasteDrainsSimulation()
   testSection("Editor: paste drains outstanding simulation");
   EditorFixture fixture;
   CellContext* cellContext =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   cellContext->getGrid()->clear();
   cellContext->getGrid()->setCell(CellAddress{ 0, 0 }, 0);
   testTrue(g, queueAndRun(fixture, "select 0 0 0 0"), "select");
@@ -247,7 +418,7 @@ testPasteDrainsSimulation()
   testTrue(g, queueAndRun(fixture, "run"), "start simulation");
   testTrue(g, queueAndRun(fixture, "paste 2 2"), "paste while running");
   testTrue(g,
-           !CellGameModuleTestAccess::isSimulationBusy(fixture.module),
+           !CanvasSceneTestAccess::isSimulationBusy(fixture.module),
            "paste drained the runner");
   testEqUChar(
     g, cellContext->getGrid()->getCell(CellAddress{ 2, 2 }), 0, "pasted");
@@ -259,16 +430,28 @@ testCDoesNotClearWorld()
   testSection("Editor: C no longer clears the world");
   EditorFixture fixture;
   CellContext* cellContext =
-    CellGameModuleTestAccess::getCellContext(fixture.module);
+    CanvasSceneTestAccess::getCellContext(fixture.module);
   SparseCellGrid* grid = cellContext->getGrid();
   const unsigned char before = grid->getCell(CellAddress{ 0, 0 });
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::C, InputAction::Press);
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   testEqUChar(g,
               grid->getCell(CellAddress{ 0, 0 }),
               before,
               "C does not clear the canvas");
+}
+
+static void
+testInspectorPreference()
+{
+  EditorFixture fixture(true);
+  fixture.module.update(0.016);
+  GameVisual* inspector =
+    CanvasSceneTestAccess::getInspectorVisual(fixture.module);
+  testTrue(g,
+           inspector != nullptr && inspector->isVisible(),
+           "persisted inspector preference is honored at startup");
 }
 
 static void
@@ -277,21 +460,21 @@ testInspectorTokens()
   testSection("Editor: inspector HUD emits UI tokens");
   EditorFixture fixture;
   testTrue(g, queueAndRun(fixture, "inspect"), "inspect toggle");
-  fixture.module.Update(0.016);
+  fixture.module.update(0.016);
   GameVisual* inspector =
-    CellGameModuleTestAccess::getInspectorVisual(fixture.module);
+    CanvasSceneTestAccess::getInspectorVisual(fixture.module);
   testTrue(
     g, inspector != nullptr && inspector->isVisible(), "inspector visible");
   bool foundGeneration = false;
   for (std::size_t i = 0; i < inspector->textCount(); ++i) {
     TextPrimitive* text = inspector->getText(i);
-    if (text != nullptr && text->content.find("gen ") != std::string::npos) {
+    if (text != nullptr && text->content == "Generation") {
       foundGeneration = true;
     }
   }
   testTrue(g, foundGeneration, "inspector reports generation");
   fixture.scene.ClearDrawables();
-  fixture.module.DispatchDrawables(&fixture.scene);
+  fixture.module.dispatch(fixture.scene);
   testTrue(
     g, fixture.scene.drawableCount() >= 2u, "inspector adds a UI drawable");
   fixture.mock.resetCounters();
@@ -366,21 +549,51 @@ testCellClipboardOperations()
            "INT64_MAX selection rejected");
   testTrue(
     g, !cb.fillSelection(&grid, nullptr, 0), "fillSelection on null rejected");
+  CanvasView view(4, 4, &grid, nullptr, nullptr, nullptr);
+  for (const std::int64_t endpoint :
+       { std::numeric_limits<std::int64_t>::min(),
+         std::numeric_limits<std::int64_t>::max() }) {
+    cb.setSelection(endpoint, endpoint, endpoint, endpoint);
+    grid.setCell(CellAddress{ endpoint, endpoint }, 0);
+    testTrue(g,
+             cb.captureSelection(&grid, &captured, &error),
+             "one-cell endpoint selection captured");
+    testTrue(g,
+             captured.getWidth() == 1 && captured.getHeight() == 1 &&
+               captured.getCells().size() == 1,
+             "endpoint capture has exact local extent and occupancy");
+    testTrue(g, cb.fillSelection(&grid, &view, 3), "endpoint selection fills");
+    testEqUChar(g,
+                grid.getCell(CellAddress{ endpoint, endpoint }),
+                3,
+                "endpoint fill changes selected cell");
+    testTrue(
+      g, cb.cutSelection(&grid, &view, &error), "endpoint selection cuts");
+    testEqUChar(g,
+                grid.getCell(CellAddress{ endpoint, endpoint }),
+                1,
+                "endpoint cut clears selected cell");
+  }
 }
 
 static void
 testIllumoCodecDirect()
 {
   testSection("Persistence: IllumoCodec direct file serialization");
+  RuleCatalogLoader::loadFromDefaultLocations(RuleSetRegistry::instance());
   testTrue(g,
-           IllumoCodec::withIllumoExtension("world") == "world.illumo",
-           "adds .illumo extension");
+           IllumoCodec::withCSimExtension("world") == "world.csim",
+           "adds .csim extension");
   testTrue(g,
-           IllumoCodec::withIllumoExtension("world.illumo") == "world.illumo",
-           "preserves existing .illumo extension");
+           IllumoCodec::withCSimExtension("world.csim") == "world.csim",
+           "preserves existing .csim extension");
+  testTrue(g,
+           IllumoCodec::withCSimExtension("world.CSIM") == "world.CSIM",
+           "matches .csim extension without case sensitivity");
 
   IllumoDocument doc;
   doc.version = IllumoCodec::kVersion;
+  doc.familyString = "LIFE_LIKE_BINARY";
   doc.ruleString = "GAME_OF_LIFE";
   doc.cameraX = 15.25;
   doc.cameraY = -27.5;
@@ -391,15 +604,38 @@ testIllumoCodecDirect()
   grid.setCell(CellAddress{ 3, 4 }, 0);
   doc.sourceGrid = &grid;
 
-  const std::string testFile = "direct-codec-test.illumo";
+  const std::string testFile = "direct-codec-test.csim";
   std::string error;
-  testTrue(
-    g, IllumoCodec::writeFile(testFile, doc, &error), "direct writeFile succeeds");
+  testTrue(g,
+           IllumoCodec::writeFile(testFile, doc, &error),
+           "direct writeFile succeeds");
 
   IllumoDocument loaded;
-  testTrue(
-    g, IllumoCodec::readFile(testFile, &loaded, &error), "direct readFile succeeds");
-  testEqInt(g, loaded.version, 3, "loaded version is 3");
+  testTrue(g,
+           IllumoCodec::readFile(testFile, &loaded, &error),
+           "direct readFile succeeds");
+  testEqInt(g, loaded.version, 4, "new saves use version 4");
+  testEqStr(
+    g, loaded.familyString, "LIFE_LIKE_BINARY", "family ID is preserved");
+  doc.familyString = "ELEMENTARY_1D_BINARY";
+  testTrue(g,
+           !IllumoCodec::writeFile(testFile, doc, &error),
+           "mismatched family and ruleset cannot be saved");
+  doc.familyString = "LIFE_LIKE_BINARY";
+  {
+    std::fstream corrupt(testFile,
+                         std::ios::binary | std::ios::in | std::ios::out);
+    char familyTag[MAX_RULETAG_SIZE] = {};
+    std::memcpy(familyTag, "ELEMENTARY_1D_BINARY", 20u);
+    corrupt.seekp(12, std::ios::beg);
+    corrupt.write(familyTag, sizeof(familyTag));
+  }
+  testTrue(g,
+           !IllumoCodec::readFile(testFile, &loaded, &error),
+           "mismatched family and ruleset are rejected while loading");
+  testTrue(g,
+           IllumoCodec::writeFile(testFile, doc, &error),
+           "valid family/ruleset pair restores the save");
   testEqStr(g, loaded.ruleString, "GAME_OF_LIFE", "rule tag preserved");
   testTrue(g, loaded.cameraX == 15.25, "cameraX preserved");
   testTrue(g, loaded.cameraY == -27.5, "cameraY preserved");
@@ -407,7 +643,718 @@ testIllumoCodecDirect()
   testTrue(g, loaded.grid != nullptr, "grid allocated");
   testEqUChar(
     g, loaded.grid->getCell(CellAddress{ 3, 4 }), 0, "saved cell preserved");
+  grid.setCell(CellAddress{ 8, 9 }, 0);
+  testTrue(g,
+           IllumoCodec::writeFile(testFile, doc, &error),
+           "replaces existing sparse save after finalization");
+  testTrue(g,
+           IllumoCodec::readFile(testFile, &loaded, &error) &&
+             loaded.grid->getCell(CellAddress{ 8, 9 }) == 0,
+           "replacement remains sparse version 4 compatible");
   std::filesystem::remove(testFile);
+  const std::u8string unicodeName = u8"codec-\u4e16\u754c-\u00e9.csim";
+  const std::string unicodePath(unicodeName.begin(), unicodeName.end());
+  testTrue(g,
+           IllumoCodec::writeFile(unicodePath, doc, &error),
+           "UTF-8 sparse save filename writes");
+  testTrue(g,
+           IllumoCodec::readFile(unicodePath, &loaded, &error) && loaded.grid &&
+             loaded.grid->getCell(CellAddress{ 8, 9 }) == 0,
+           "UTF-8 sparse save filename round trips");
+  std::filesystem::remove(std::filesystem::path(unicodeName));
+#ifdef _WIN32
+  const std::string invalidPath(1, static_cast<char>(0xff));
+  testTrue(g,
+           !IllumoCodec::writeFile(invalidPath, doc, &error),
+           "invalid UTF-8 save path fails without throwing");
+  testTrue(g,
+           !IllumoCodec::readFile(invalidPath, &loaded, &error),
+           "invalid UTF-8 load path fails without throwing");
+#endif
+}
+
+static void
+testSelectionLifecycle()
+{
+  testSection("Editor: selection ends on painting and mode changes");
+  EditorFixture fixture;
+  SparseCellGrid* grid =
+    CanvasSceneTestAccess::getCellContext(fixture.module)->getGrid();
+  CellClipboard& clipboard =
+    CanvasSceneTestAccess::getClipboard(fixture.module);
+  grid->clear();
+  fixture.window.mouseX = 200.0;
+  fixture.window.mouseY = 200.0;
+  InputManagerTestAccess::setModifierFlags(fixture.input, 1); // Shift
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.update(0.0);
+  fixture.window.mouseX = 248.0;
+  fixture.module.update(0.0);
+  testTrue(g, clipboard.isSelecting(), "Shift-drag creates a selection");
+  InputManagerTestAccess::setModifierFlags(fixture.input, 0);
+  fixture.module.update(0.0);
+  testTrue(g, clipboard.isSelecting(), "releasing Shift keeps the drag");
+  testEqSize(
+    g, grid->getAllocatedChunkCount(), 0, "selection never paints cells");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.update(0.0);
+  testTrue(g,
+           clipboard.hasSelection() && !clipboard.isSelecting(),
+           "mouse release preserves the completed selection for copying");
+
+  CellPattern pattern;
+  pattern.setExtent(1, 1);
+  pattern.addCell(0, 0, 0);
+  clipboard.setClipboardPattern(pattern);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.update(0.0);
+  testTrue(g, !clipboard.hasSelection(), "plain left click clears selection");
+  testTrue(
+    g,
+    !CanvasSceneTestAccess::getSelectionVisual(fixture.module).isVisible(),
+    "outline disappears on the same frame");
+  testEqSize(g,
+             clipboard.getClipboardPattern().getCells().size(),
+             1,
+             "clearing selection preserves the copied buffer");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  clipboard.setSelection(0, 0, 1, 1);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Press);
+  fixture.module.update(0.0);
+  testTrue(g,
+           CanvasSceneTestAccess::getState(fixture.module) ==
+             CellState::NORMAL,
+           "E enters Normal mode");
+  testTrue(g, !clipboard.hasSelection(), "E clears the selection state");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Release);
+  queueAndRun(fixture, "pause");
+  clipboard.setSelection(0, 0, 1, 1);
+  queueAndRun(fixture, "run");
+  testTrue(g, !clipboard.hasSelection(), "console run also clears selection");
+  testEqSize(g,
+             clipboard.getClipboardPattern().getCells().size(),
+             1,
+             "mode changes preserve the copied buffer");
+
+  grid->clear();
+  InputManagerTestAccess::setModifierFlags(fixture.input, 2); // Control
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::V, InputAction::Press);
+  fixture.module.update(0.0);
+  testEqSize(
+    g, grid->getAllocatedChunkCount(), 0, "paste hotkey is inactive in Normal");
+}
+
+static void
+testEditHints()
+{
+  testSection("Editor: hints follow settings, mode, and overlays");
+  EditorFixture fixture;
+  fixture.module.update(0.0);
+  GameVisual& hints =
+    CanvasSceneTestAccess::getEditHintsVisual(fixture.module);
+  CanvasView* canvas =
+    CanvasSceneTestAccess::getCellContext(fixture.module)->getCanvasView();
+  const int fullHintInset = canvas->getBottomInsetPixels();
+  testTrue(g, hints.isVisible() && hints.textCount() > 0, "hints default on");
+  std::string allText;
+  for (std::size_t i = 0; i < hints.textCount(); ++i) {
+    TextPrimitive* text = hints.getText(i);
+    allText += text->content;
+    testTrue(g,
+             text->y >= 0.0f && text->y + text->sizePt <= 480.0f,
+             "hint text stays inside the window");
+  }
+  testTrue(g,
+           allText.find("Shift+Left") != std::string::npos &&
+             allText.find("Ctrl+V") != std::string::npos,
+           "hints explain selection and clipboard modifiers");
+  testTrue(g,
+           allText.find("Ctrl+C/X") == std::string::npos,
+           "selection actions stay hidden until relevant");
+  CanvasSceneTestAccess::getClipboard(fixture.module)
+    .setSelection(0, 0, 1, 1);
+  fixture.module.update(0.0);
+  allText.clear();
+  for (std::size_t i = 0; i < hints.textCount(); ++i) {
+    allText += hints.getText(i)->content;
+  }
+  testTrue(g,
+           allText.find("Ctrl+C/X") != std::string::npos &&
+             allText.find("Delete") != std::string::npos,
+           "selecting cells reveals copy, cut, and erase hints");
+  CanvasSceneTestAccess::getClipboard(fixture.module).clearSelection();
+  fixture.scene.ClearDrawables();
+  fixture.scene.AddDrawable(&hints, RenderLayerId::UI);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&fixture.scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  testTrue(g,
+           fixture.mock.countNonEmptyOfType(CommandType::DrawIndexed) > 0,
+           "hints emit render tokens");
+
+  SimulatorConfiguration configuration =
+    CanvasSceneTestAccess::currentConfiguration(fixture.module);
+  configuration.editHints = false;
+  testTrue(
+    g,
+    CanvasSceneTestAccess::applyConfiguration(fixture.module, configuration),
+    "hint setting applies");
+  fixture.module.update(0.0);
+  testTrue(g,
+           !hints.isVisible() && !fixture.env.getVar("editHints").valueAsBool,
+           "hint setting is saved to environment and hides the legend");
+  testTrue(
+    g,
+    !CanvasSceneTestAccess::currentConfiguration(fixture.module).editHints,
+    "reopening settings retains the hint preference");
+  configuration.editHints = true;
+  CanvasSceneTestAccess::applyConfiguration(fixture.module, configuration);
+  fixture.console.isOpen = true;
+  fixture.module.update(0.0);
+  testTrue(g, !hints.isVisible(), "console hides hints");
+  fixture.console.isOpen = false;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::F1, InputAction::Press);
+  fixture.module.update(0.0);
+  testTrue(g, !hints.isVisible(), "settings hide hints");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::F1, InputAction::Release);
+  CanvasSceneTestAccess::getConfigurationMenu(fixture.module)->close();
+  queueAndRun(fixture, "run");
+  fixture.module.update(0.0);
+  testTrue(g, !hints.isVisible(), "Normal mode hides hints");
+  queueAndRun(fixture, "pause");
+  fixture.module.update(0.05);
+  testTrue(g,
+           hints.isVisible() && canvas->getBottomInsetPixels() > 0 &&
+             canvas->getBottomInsetPixels() < fullHintInset,
+           "returning to Edit begins sliding the hints into view");
+  for (int frame = 0; frame < 12; ++frame) {
+    fixture.module.update(0.05);
+  }
+  testTrue(g,
+           hints.isVisible() && canvas->getBottomInsetPixels() == fullHintInset,
+           "returning to Edit restores the full hint area");
+  fixture.env.setVar("uiScale", 2);
+  queueAndRun(fixture, "ruleset WIREWORLD");
+  fixture.module.update(0.0);
+  const std::shared_ptr<Font> font = Font::getDefaultFont();
+  testTrue(g, font != nullptr, "font metrics available for layout checks");
+  allText.clear();
+  for (std::size_t i = 0; i < hints.textCount(); ++i) {
+    TextPrimitive* text = hints.getText(i);
+    allText += text->content;
+    if (font != nullptr) {
+      const TextBounds bounds = font->measureText(text->content, text->sizePt);
+      testTrue(g,
+               text->x + bounds.width <= 320.1f &&
+                 text->y + bounds.height <= 240.1f,
+               "Wireworld hints fit at double UI scale");
+    }
+  }
+  testTrue(g,
+           allText.find("4: conductor") != std::string::npos,
+           "Wireworld hints include the brush keys");
+}
+
+static void
+testFooterReservation()
+{
+  EditorFixture fixture;
+  CellContext* context =
+    CanvasSceneTestAccess::getCellContext(fixture.module);
+  CanvasView* canvas = context->getCanvasView();
+  SparseCellGrid* grid = context->getGrid();
+  grid->clear();
+  fixture.module.update(0.0);
+  const int inset = canvas->getBottomInsetPixels();
+  testTrue(
+    g, inset > 0 && inset < 100, "footer reserves a compact bottom band");
+  fixture.scene.ClearDrawables();
+  fixture.module.dispatch(fixture.scene);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&fixture.scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  bool clipped = false;
+  bool restored = false;
+  bool canvasDrawClipped = false;
+  for (std::size_t i = 0; i < fixture.mock.getLastNonEmptySubmittedCount();
+       ++i) {
+    const RenderCommand& command = fixture.mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetScissorState) {
+      if (command.scissor.enabled) {
+        clipped =
+          command.scissor.y == inset && command.scissor.height == 480 - inset;
+      } else if (clipped) {
+        restored = true;
+      }
+    }
+    if (command.commandType == CommandType::DrawIndexed && clipped &&
+        !restored) {
+      canvasDrawClipped = true;
+    }
+  }
+  testTrue(g,
+           canvasDrawClipped && restored,
+           "canvas clips above footer and restores scissor before UI drawing");
+
+  // Stay outside the centered palette tab when the footer is disabled.
+  fixture.window.mouseX = 100.0;
+  fixture.window.mouseY = 479.0;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.update(0.0);
+  testEqSize(
+    g, grid->getAllocatedChunkCount(), 0, "clicking footer does not paint");
+  InputManagerTestAccess::setModifierFlags(fixture.input, 1);
+  fixture.module.update(0.0);
+  CellClipboard& clipboard =
+    CanvasSceneTestAccess::getClipboard(fixture.module);
+  testTrue(
+    g, !clipboard.hasSelection(), "Shift-clicking footer does not select");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  CellPattern pattern;
+  pattern.setExtent(1, 1);
+  pattern.addCell(0, 0, 0);
+  clipboard.setClipboardPattern(pattern);
+  InputManagerTestAccess::setModifierFlags(fixture.input, 2);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::V, InputAction::Press);
+  const float zoom = fixture.camera.GetTargetZoom();
+  *fixture.input.getMouseScrollOffset() = 1.0;
+  fixture.module.update(0.0);
+  testEqSize(g,
+             grid->getAllocatedChunkCount(),
+             0,
+             "paste over footer leaves world alone");
+  testTrue(g,
+           fixture.camera.GetTargetZoom() == zoom &&
+             *fixture.input.getMouseScrollOffset() == 0.0,
+           "footer consumes scrolling without zooming the canvas");
+
+  InputManagerTestAccess::setModifierFlags(fixture.input, 0);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::V, InputAction::Release);
+  fixture.env.setVar("editHints", false);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.update(0.0);
+  testTrue(g,
+           canvas->getBottomInsetPixels() == 0 &&
+             grid->getAllocatedChunkCount() > 0,
+           "disabling hints restores the bottom canvas area immediately");
+}
+
+static void
+testEditChromeModeTransition()
+{
+  testSection("Editor: hint bar and palette follow mode transitions");
+  EditorFixture fixture;
+  fixture.module.update(0.0);
+  GameVisual& hints =
+    CanvasSceneTestAccess::getEditHintsVisual(fixture.module);
+  GameVisual& palette =
+    CanvasSceneTestAccess::getPaintPaletteVisual(fixture.module);
+  CanvasView* canvas =
+    CanvasSceneTestAccess::getCellContext(fixture.module)->getCanvasView();
+  const int fullInset = canvas->getBottomInsetPixels();
+  const float editTabY = palette.getShape(0)->rect.y;
+
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Press);
+  fixture.module.update(0.04);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Release);
+  testTrue(
+    g,
+    CanvasSceneTestAccess::getState(fixture.module) == CellState::NORMAL &&
+      hints.isVisible() && palette.isVisible() &&
+      canvas->getBottomInsetPixels() == fullInset &&
+      hints.getTransform().y == 0.0f && palette.getShape(0)->rect.y > editTabY,
+    "the palette starts its exit cascade before the hint bar");
+  fixture.module.update(0.10);
+  testTrue(g,
+           hints.getTransform().y > 0.0f &&
+             canvas->getBottomInsetPixels() < fullInset &&
+             palette.getShape(0)->rect.y - editTabY >
+               static_cast<float>(fullInset),
+           "the tab travels the footer and tab heights before the bar follows");
+  for (int frame = 0; frame < 12; ++frame) {
+    fixture.module.update(0.05);
+  }
+  testTrue(g,
+           !hints.isVisible() && !palette.isVisible() &&
+             canvas->getBottomInsetPixels() == 0,
+           "both controls leave the screen and release the canvas inset");
+
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Press);
+  fixture.module.update(0.04);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::E, InputAction::Release);
+  testTrue(g,
+           CanvasSceneTestAccess::getState(fixture.module) ==
+               CellState::EDIT &&
+             hints.isVisible() && !palette.isVisible() &&
+             canvas->getBottomInsetPixels() > 0 &&
+             canvas->getBottomInsetPixels() < fullInset &&
+             hints.getTransform().y > 0.0f,
+           "the hint bar starts its entry cascade before the palette");
+  fixture.module.update(0.10);
+  testTrue(
+    g, palette.isVisible(), "the palette follows the hint bar onto the screen");
+  // Both spring up past their slots and bounce back, while the canvas inset
+  // stays within the footer's reservation.
+  float highestBar = hints.getTransform().y;
+  float highestBubble = palette.getShape(0)->rect.y;
+  bool insetBounded = canvas->getBottomInsetPixels() <= fullInset;
+  for (int frame = 0; frame < 40; ++frame) {
+    fixture.module.update(0.016);
+    highestBar = std::min(highestBar, hints.getTransform().y);
+    highestBubble = std::min(highestBubble, palette.getShape(0)->rect.y);
+    insetBounded = insetBounded && canvas->getBottomInsetPixels() <= fullInset;
+  }
+  for (int frame = 0; frame < 12; ++frame) {
+    fixture.module.update(0.05);
+  }
+  testTrue(g,
+           highestBar < -1.0f &&
+             highestBubble < palette.getShape(0)->rect.y - 1.0f,
+           "the hint bar and paint bubble bounce past their slots on entry");
+  testTrue(g, insetBounded, "the canvas inset never bounces past the footer");
+  testTrue(g,
+           canvas->getBottomInsetPixels() == fullInset &&
+             hints.getTransform().y == 0.0f &&
+             palette.getShape(0)->rect.y == editTabY,
+           "the hint bar and bubble settle exactly into place");
+}
+
+static void
+setMouse(EditorFixture& fixture, double x, double y)
+{
+  fixture.window.mouseX = x;
+  fixture.window.mouseY = y;
+}
+
+static void
+setButton(EditorFixture& fixture, KeyCode button, bool down)
+{
+  InputManagerTestAccess::setAction(
+    fixture.input, button, down ? InputAction::Press : InputAction::Release);
+}
+
+// Moves to a window point, then presses and releases the left button there,
+// one frame each.
+static void
+clickAt(EditorFixture& fixture, float x, float y)
+{
+  setMouse(fixture, x, y);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseLeft, true);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseLeft, false);
+  fixture.module.update(0.0);
+}
+
+static bool
+cellAt(EditorFixture& fixture, double x, double y, CellAddress* cell)
+{
+  const glm::dvec2 world = fixture.camera.ScreenToWorldPrecise({ x, y });
+  return CanvasCoordinatePolicy::tryWorldToCell(world.x, &cell->x) &&
+         CanvasCoordinatePolicy::tryWorldToCell(world.y, &cell->y);
+}
+
+static void
+testActionBar()
+{
+  testSection("Editor: the toolbar edits the selection and clears the canvas");
+  EditorFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  // Preferences persist between runs; start from the default.
+  fixture.env.setVar("confirmClear", true);
+  CellContext* context = CanvasSceneTestAccess::getCellContext(fixture.module);
+  SparseCellGrid* grid = context->getGrid();
+  CanvasView* canvas = context->getCanvasView();
+  CellClipboard& clipboard =
+    CanvasSceneTestAccess::getClipboard(fixture.module);
+  CanvasActionBar& bar = CanvasSceneTestAccess::getActionBar(fixture.module);
+  // The starting pattern the canvas opened with, for Reset to put back.
+  const std::size_t seededCount = grid->getStoredCellCount();
+  std::vector<unsigned char> seeded;
+  for (std::int64_t cellY = -24; cellY <= 24; ++cellY) {
+    for (std::int64_t cellX = -24; cellX <= 24; ++cellX) {
+      seeded.push_back(grid->getCell({ cellX, cellY }));
+    }
+  }
+  grid->clear();
+  setMouse(fixture, 320.0, 300.0);
+  fixture.module.update(0.0);
+  float x = 0.0f;
+  float y = 0.0f;
+  testTrue(
+    g,
+    bar.isVisible() &&
+      bar.buttonCenter(CanvasEditAction::Paste, nullptr, nullptr) &&
+      bar.buttonCenter(CanvasEditAction::ResetCanvas, nullptr, nullptr) &&
+      bar.buttonCenter(CanvasEditAction::ClearCanvas, nullptr, nullptr) &&
+      bar.buttonCenter(CanvasEditAction::Save, nullptr, nullptr) &&
+      bar.buttonCenter(CanvasEditAction::Load, nullptr, nullptr),
+    "Edit mode shows the toolbar with Save, Load, Paste, Reset and Clear");
+  testTrue(g,
+           !bar.buttonCenter(CanvasEditAction::Erase, nullptr, nullptr),
+           "selection buttons wait for a selection");
+
+  canvas->setCanvasPixel(0, 0, 0);
+  canvas->setCanvasPixel(1, 1, 0);
+  clipboard.setSelection(0, 0, 1, 1);
+  fixture.module.update(0.0);
+  testTrue(g,
+           bar.buttonCenter(CanvasEditAction::Erase, &x, &y) && y < 60.0f,
+           "a selection adds its buttons to the top bar");
+  clickAt(fixture, x, y);
+  testTrue(g,
+           grid->getStoredCellCount() == 0u && clipboard.hasSelection(),
+           "Erase empties the selection, keeps it, and paints nothing");
+
+  testTrue(g,
+           bar.buttonCenter(CanvasEditAction::Fill, &x, &y),
+           "Fill is offered with a selection");
+  clickAt(fixture, x, y);
+  testTrue(g,
+           grid->getStoredCellCount() == 4u && grid->getCell({ 1, 0 }) == 0,
+           "Fill paints the selection with the brush");
+
+  testTrue(g,
+           bar.buttonCenter(CanvasEditAction::Deselect, &x, &y),
+           "Deselect is offered with a selection");
+  clickAt(fixture, x, y);
+  testTrue(g, !clipboard.hasSelection(), "Deselect drops the selection");
+  testTrue(g,
+           !bar.buttonCenter(CanvasEditAction::Copy, nullptr, nullptr),
+           "the selection buttons fold away with it");
+
+  testTrue(g,
+           bar.buttonCenter(CanvasEditAction::ClearCanvas, &x, &y),
+           "Clear stays available");
+  clickAt(fixture, x, y);
+  ExitConfirmDialog* dialog =
+    CanvasSceneTestAccess::getExitConfirmDialog(fixture.module);
+  testTrue(g,
+           dialog != nullptr && dialog->isOpen() &&
+             grid->getStoredCellCount() == 4u,
+           "Clear asks before emptying the canvas");
+  testTrue(g, !bar.isVisible(), "the confirmation hides the toolbar");
+  dialog->close();
+  fixture.module.update(0.0);
+  fixture.env.setVar("confirmClear", false);
+  fixture.module.update(0.0);
+  testTrue(g,
+           bar.buttonCenter(CanvasEditAction::ClearCanvas, &x, &y),
+           "the toolbar returns after the dialog");
+  clickAt(fixture, x, y);
+  testTrue(g,
+           grid->getStoredCellCount() == 0u,
+           "without Confirm clearing, Clear empties the canvas at once");
+
+  // Reset puts back the rule's starting pattern and asks first like Clear.
+  fixture.env.setVar("confirmClear", true);
+  fixture.module.update(0.0);
+  testTrue(g,
+           bar.buttonCenter(CanvasEditAction::ResetCanvas, &x, &y),
+           "Reset is offered without a selection");
+  clickAt(fixture, x, y);
+  testTrue(g,
+           dialog->isOpen() && grid->getStoredCellCount() == 0u,
+           "Reset asks before replacing the canvas");
+  fixture.input.getKeyQueue().push({ KeyCode::Y, InputAction::Press, 0 });
+  fixture.module.update(0.016);
+  std::vector<unsigned char> reset;
+  for (std::int64_t cellY = -24; cellY <= 24; ++cellY) {
+    for (std::int64_t cellX = -24; cellX <= 24; ++cellX) {
+      reset.push_back(grid->getCell({ cellX, cellY }));
+    }
+  }
+  testTrue(g,
+           !dialog->isOpen() && seededCount > 0u &&
+             grid->getStoredCellCount() == seededCount && reset == seeded,
+           "confirming Reset puts back the pattern the canvas opened with");
+  testTrue(g,
+           CanvasSceneTestAccess::getSimulationGeneration(fixture.module) ==
+             0u,
+           "Reset starts the generation count over");
+
+  queueAndRun(fixture, "run");
+  fixture.module.update(0.0);
+  testTrue(g, !bar.isVisible(), "Normal mode hides the toolbar");
+}
+
+static void
+testContextMenu()
+{
+  testSection("Editor: right-clicking a selection opens its context menu");
+  EditorFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  CellContext* context = CanvasSceneTestAccess::getCellContext(fixture.module);
+  SparseCellGrid* grid = context->getGrid();
+  CanvasView* canvas = context->getCanvasView();
+  CellClipboard& clipboard =
+    CanvasSceneTestAccess::getClipboard(fixture.module);
+  CanvasContextMenu& menu =
+    CanvasSceneTestAccess::getContextMenu(fixture.module);
+  grid->clear();
+  CellAddress center{};
+  testTrue(g,
+           cellAt(fixture, 320.0, 240.0, &center),
+           "the menu's cell converts to cell coordinates");
+  for (std::int64_t dx = -1; dx <= 1; ++dx) {
+    canvas->setCanvasPixel(center.x + dx, center.y, 0);
+  }
+  clipboard.setSelection(
+    center.x - 1, center.y - 1, center.x + 1, center.y + 1);
+  setMouse(fixture, 320.0, 240.0);
+  fixture.module.update(0.0);
+
+  setButton(fixture, KeyCode::MouseRight, true);
+  fixture.module.update(0.0);
+  testTrue(g, menu.isOpen(), "right-clicking the selection opens its menu");
+  testTrue(g,
+           grid->getCell(center) == 0 && grid->getStoredCellCount() == 3u,
+           "the right click that opens the menu erases nothing");
+  setButton(fixture, KeyCode::MouseRight, false);
+  fixture.module.update(0.0);
+  testTrue(g, menu.isOpen(), "a plain right click leaves the menu open");
+  fixture.input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
+  fixture.module.update(0.0);
+  testTrue(g,
+           !menu.isOpen() && clipboard.hasSelection(),
+           "Escape closes the menu and keeps the selection");
+
+  // Click a row.
+  setButton(fixture, KeyCode::MouseRight, true);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, false);
+  fixture.module.update(0.0);
+  float x = 0.0f;
+  float y = 0.0f;
+  testTrue(g,
+           menu.rowCenter(CanvasEditAction::Erase, &x, &y),
+           "the menu offers Erase");
+  clickAt(fixture, x, y);
+  testTrue(g,
+           !menu.isOpen() && grid->getStoredCellCount() == 0u &&
+             clipboard.hasSelection(),
+           "clicking Erase empties the selection and closes the menu");
+
+  // Hold the right button, move onto a row and release.
+  setMouse(fixture, 320.0, 240.0);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, true);
+  fixture.module.update(0.0);
+  testTrue(
+    g, menu.rowCenter(CanvasEditAction::Fill, &x, &y), "the menu offers Fill");
+  setMouse(fixture, x, y);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, false);
+  fixture.module.update(0.0);
+  testTrue(g,
+           !menu.isOpen() && grid->getStoredCellCount() == 9u &&
+             grid->getCell(center) == 0,
+           "press, drag and release chooses Fill");
+
+  // A press elsewhere only dismisses the menu.
+  setMouse(fixture, 320.0, 240.0);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, true);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, false);
+  fixture.module.update(0.0);
+  CellAddress outside{};
+  testTrue(g,
+           menu.isOpen() && cellAt(fixture, 100.0, 380.0, &outside),
+           "the menu is open over a free cell");
+  setMouse(fixture, 100.0, 380.0);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseLeft, true);
+  fixture.module.update(0.0);
+  testTrue(g,
+           !menu.isOpen() &&
+             grid->getCell(outside) == SparseCellGrid::BackgroundState &&
+             clipboard.hasSelection(),
+           "the press that dismisses the menu does not paint");
+  setButton(fixture, KeyCode::MouseLeft, false);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseLeft, true);
+  fixture.module.update(0.0);
+  testTrue(g, grid->getCell(outside) == 0, "the next press paints as before");
+  setButton(fixture, KeyCode::MouseLeft, false);
+  fixture.module.update(0.0);
+
+  // The keyboard walks the rows: Up wraps to Deselect.
+  clipboard.setSelection(
+    center.x - 1, center.y - 1, center.x + 1, center.y + 1);
+  setMouse(fixture, 320.0, 240.0);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, true);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseRight, false);
+  fixture.module.update(0.0);
+  fixture.input.getKeyQueue().push({ KeyCode::Up, InputAction::Press, 0 });
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  fixture.module.update(0.0);
+  testTrue(g,
+           !menu.isOpen() && !clipboard.hasSelection(),
+           "Up then Enter chooses Deselect");
+
+  // Outside a selection the right button still erases.
+  setButton(fixture, KeyCode::MouseRight, true);
+  fixture.module.update(0.0);
+  testTrue(g,
+           !menu.isOpen() &&
+             grid->getCell(center) == SparseCellGrid::BackgroundState,
+           "right-dragging without a selection erases");
+  setButton(fixture, KeyCode::MouseRight, false);
+  fixture.module.update(0.0);
+}
+
+static void
+testEditIcons()
+{
+  testSection("Editor: every toolbar and menu action has an icon");
+  const CanvasEditAction actions[] = {
+    CanvasEditAction::Copy,        CanvasEditAction::Cut,
+    CanvasEditAction::Paste,       CanvasEditAction::Fill,
+    CanvasEditAction::Erase,       CanvasEditAction::Deselect,
+    CanvasEditAction::ClearCanvas, CanvasEditAction::ResetCanvas,
+    CanvasEditAction::Save,        CanvasEditAction::Load,
+  };
+  for (const CanvasEditAction action : actions) {
+    GameVisual visual(512u);
+    CanvasEditIcons::draw(visual,
+                          action,
+                          20.0f,
+                          20.0f,
+                          12.0f,
+                          UiTheme::textPrimary(),
+                          ColorRgba{ 0, 0, 0, 255 });
+    testTrue(g, visual.shapeCount() > 0u, "the action draws an icon");
+  }
+  GameVisual hidden(64u);
+  CanvasEditIcons::draw(hidden,
+                        CanvasEditAction::Copy,
+                        20.0f,
+                        20.0f,
+                        12.0f,
+                        UiTheme::transparentOf(UiTheme::textPrimary()),
+                        ColorRgba{ 0, 0, 0, 255 });
+  testTrue(g, hidden.shapeCount() == 0u, "a transparent icon draws nothing");
 }
 
 static int
@@ -422,6 +1369,20 @@ runEditorCase(void (*testFunction)())
 void
 registerEditorTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.Editor.FooterReservation",
+               []() { return runEditorCase(testFooterReservation); });
+  registry.add("IllumoGame.Editor.SelectionLifecycle",
+               []() { return runEditorCase(testSelectionLifecycle); });
+  registry.add("IllumoGame.Editor.EditHints",
+               []() { return runEditorCase(testEditHints); });
+  registry.add("IllumoGame.Editor.ActionBar",
+               []() { return runEditorCase(testActionBar); });
+  registry.add("IllumoGame.Editor.ContextMenu",
+               []() { return runEditorCase(testContextMenu); });
+  registry.add("IllumoGame.Editor.EditIcons",
+               []() { return runEditorCase(testEditIcons); });
+  registry.add("IllumoGame.Editor.ModeChromeTransition",
+               []() { return runEditorCase(testEditChromeModeTransition); });
   registry.add("IllumoGame.Editor.CopyPasteIdentity",
                []() { return runEditorCase(testCopyPasteIdentity); });
   registry.add("IllumoGame.Editor.TorusSkip",
@@ -430,12 +1391,21 @@ registerEditorTests(IllumoTestRegistry& registry)
                []() { return runEditorCase(testOversizeReject); });
   registry.add("IllumoGame.Editor.RleGliderRoundTrip",
                []() { return runEditorCase(testRleGliderRoundTrip); });
+  registry.add("IllumoGame.Editor.RleByteStates",
+               []() { return runEditorCase(testRleByteStates); });
+  registry.add("IllumoGame.Editor.PatternFormatRouting",
+               []() { return runEditorCase(testPatternFormatRouting); });
+  registry.add("IllumoGame.Editor.ClipboardRejectsStaleFallback", []() {
+    return runEditorCase(testClipboardRejectsStaleFallback);
+  });
   registry.add("IllumoGame.Editor.StampGlider",
                []() { return runEditorCase(testStampGlider); });
   registry.add("IllumoGame.Editor.PasteDrainsSimulation",
                []() { return runEditorCase(testPasteDrainsSimulation); });
   registry.add("IllumoGame.Editor.CDoesNotClearWorld",
                []() { return runEditorCase(testCDoesNotClearWorld); });
+  registry.add("IllumoGame.Editor.InspectorPreference",
+               []() { return runEditorCase(testInspectorPreference); });
   registry.add("IllumoGame.Editor.InspectorTokens",
                []() { return runEditorCase(testInspectorTokens); });
   registry.add("IllumoGame.Editor.CellClipboardOperations",

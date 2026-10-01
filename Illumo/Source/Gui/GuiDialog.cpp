@@ -1,4 +1,6 @@
 #include <Illumo/Gui/GuiDialog.h>
+#include <Illumo/Gui/GuiMenuShell.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/InputManager.h>
@@ -22,8 +24,6 @@ GuiDialog::GuiDialog(IRenderWindow* window, Renderer* renderer)
   , m_buttonHeight(32.0f)
   , m_selectedButton(0)
   , m_hoveredButton(-1)
-  , m_selectionFromButton(0.0f)
-  , m_selectionAnimElapsed(kSelectionAnimationSeconds)
   , m_panelX(0.0f)
   , m_panelY(0.0f)
   , m_mouseX(0.0f)
@@ -35,6 +35,7 @@ GuiDialog::GuiDialog(IRenderWindow* window, Renderer* renderer)
   m_visual.setRenderer(renderer);
   m_visual.prepare(renderer);
   setVisible(false);
+  m_buttonFocus.configure(GuiMotion::kJelly);
 }
 
 void
@@ -55,7 +56,7 @@ GuiDialog::addButton(const GuiButtonDef& button)
   m_buttons.push_back(button);
   if (button.isDefault) {
     m_selectedButton = static_cast<int>(m_buttons.size()) - 1;
-    m_selectionFromButton = static_cast<float>(m_selectedButton);
+    m_selectionMotion.settleSelection();
   }
 }
 
@@ -72,10 +73,20 @@ void
 GuiDialog::open()
 {
   m_open = true;
-  m_mouseWasDown = false;
+  m_mouseWasDown = m_roundedStyle;
   m_animElapsed = 0.0f;
   m_hoveredButton = -1;
-  m_selectionAnimElapsed = kSelectionAnimationSeconds;
+  m_selectionMotion.setReducedMotion(m_reducedMotion);
+  m_selectionMotion.restart();
+  m_selectionMotion.settleSelection();
+  m_ambientElapsed = 0.0f;
+  m_tilt.level();
+  // Until the first update samples the pointer, there is nothing to aim at.
+  m_mouseX = -1.0f;
+  m_mouseY = -1.0f;
+  for (int index = 0; index < static_cast<int>(m_buttons.size()); ++index) {
+    m_buttonFocus.snap(index, index == m_selectedButton ? 1.0f : 0.0f);
+  }
   setVisible(true);
   updateLayout();
   rebuildVisual();
@@ -124,9 +135,24 @@ GuiDialog::setPanelDimensions(float width, float height)
 void
 GuiDialog::tick(float dt)
 {
-  if (m_open) {
-    m_animElapsed += dt;
-    m_selectionAnimElapsed += dt;
+  if (m_open && std::isfinite(dt) && dt > 0.0f) {
+    m_animElapsed = std::min(kOpenSettleSeconds, m_animElapsed + dt);
+    m_selectionMotion.setReducedMotion(m_reducedMotion);
+    m_selectionMotion.tick(dt);
+    m_ambientElapsed = m_reducedMotion
+                         ? 0.0f
+                         : std::fmod(m_ambientElapsed + std::min(dt, 0.1f),
+                                     GuiMenuAnimator::kAmbientPeriodSeconds);
+    for (int index = 0; index < static_cast<int>(m_buttons.size()); ++index) {
+      const float target = index == m_selectedButton  ? 1.0f
+                           : index == m_hoveredButton ? 0.55f
+                                                      : 0.0f;
+      m_buttonFocus.setTarget(index, target);
+    }
+    m_buttonFocus.tick(dt, m_reducedMotion);
+    m_tilt.aim(
+      m_mouseX, m_mouseY, m_virtualWidth, m_virtualHeight, m_roundedStyle);
+    m_tilt.tick(dt, m_reducedMotion);
   }
 }
 
@@ -136,15 +162,24 @@ GuiDialog::animationProgress() const
   if (!m_open) {
     return 0.0f;
   }
-  return std::clamp(m_animElapsed / kOpenAnimationSeconds, 0.0f, 1.0f);
+  return m_reducedMotion
+           ? 1.0f
+           : std::clamp(m_animElapsed / kOpenAnimationSeconds, 0.0f, 1.0f);
 }
 
 float
 GuiDialog::panelOffsetY() const
 {
-  const float t = animationProgress();
-  const float ease = 1.0f - std::pow(1.0f - t, 3.0f);
-  return (1.0f - ease) * 16.0f;
+  if (!m_roundedStyle) {
+    const float ease = GuiEasing::outCubic(animationProgress());
+    return (1.0f - ease) * 16.0f;
+  }
+  if (!m_open || m_reducedMotion) {
+    return 0.0f;
+  }
+  // The rounded dialog drops in like a bead of liquid: it falls a little
+  // past its resting place and bobs back up.
+  return (1.0f - GuiEasing::springStep(m_animElapsed, 2.6f, 0.5f)) * 16.0f;
 }
 
 float
@@ -153,11 +188,8 @@ GuiDialog::selectionPosition() const
   if (m_buttons.empty()) {
     return 0.0f;
   }
-  const float t =
-    std::clamp(m_selectionAnimElapsed / kSelectionAnimationSeconds, 0.0f, 1.0f);
-  const float ease = 1.0f - std::pow(1.0f - t, 3.0f);
-  return m_selectionFromButton +
-         (static_cast<float>(m_selectedButton) - m_selectionFromButton) * ease;
+  return m_selectionMotion.selectionPosition(
+    static_cast<float>(m_selectedButton));
 }
 
 void
@@ -174,9 +206,9 @@ GuiDialog::selectButton(int buttonIndex)
     next = 0;
   }
   if (next != m_selectedButton) {
-    m_selectionFromButton = selectionPosition();
+    m_selectionMotion.beginSelectionTravel(static_cast<float>(m_selectedButton),
+                                           static_cast<float>(next));
     m_selectedButton = next;
-    m_selectionAnimElapsed = 0.0f;
   }
 }
 
@@ -217,10 +249,23 @@ GuiDialog::updateLayout()
     height = std::max(1, dimensions[1]);
   }
   const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
-  const float virtualWidth =
-    static_cast<float>(width) / (scale > 0.0f ? scale : 1.0f);
-  const float virtualHeight =
-    static_cast<float>(height) / (scale > 0.0f ? scale : 1.0f);
+  m_layoutScale = scale;
+  if (m_roundedStyle) {
+    const float fontScale = m_fontSize / kDefaultFontSize;
+    m_layoutScale =
+      std::min(scale,
+               std::max(0.01f,
+                        std::min(static_cast<float>(width) /
+                                   (m_panelWidth * fontScale + 32.0f),
+                                 static_cast<float>(height) /
+                                   (m_panelHeight * fontScale + 32.0f))));
+  }
+  Transform2D fit;
+  fit.scaleX = m_layoutScale / scale;
+  fit.scaleY = fit.scaleX;
+  m_visual.setTransform(fit);
+  const float virtualWidth = static_cast<float>(width) / m_layoutScale;
+  const float virtualHeight = static_cast<float>(height) / m_layoutScale;
 
   const float fontScale = m_fontSize / kDefaultFontSize;
   const float scaledWidth = m_panelWidth * fontScale;
@@ -229,11 +274,21 @@ GuiDialog::updateLayout()
   const float effectiveWidth = std::min(scaledWidth, virtualWidth - 32.0f);
   const float effectiveHeight = std::min(scaledHeight, virtualHeight - 32.0f);
 
+  m_virtualWidth = virtualWidth;
+  m_virtualHeight = virtualHeight;
   m_panelX = std::max(0.0f, (virtualWidth - effectiveWidth) * 0.5f);
   m_panelY = std::max(0.0f, (virtualHeight - effectiveHeight) * 0.5f);
+  if (m_roundedStyle) {
+    // The layout origin swivels with the body layer, so buttons are hit
+    // where they are drawn while the dialog tilts toward the pointer.
+    m_panelX += m_tilt.bodyShiftX();
+    m_panelY += m_tilt.bodyShiftY();
+  }
 
-  m_buttonHeight = std::clamp(32.0f * fontScale, 24.0f, 44.0f);
-  m_buttonY = m_panelY + effectiveHeight - m_buttonHeight - 16.0f * fontScale;
+  m_buttonHeight = m_roundedStyle ? 62.0f * fontScale
+                                  : std::clamp(32.0f * fontScale, 24.0f, 44.0f);
+  m_buttonY = m_panelY + effectiveHeight - m_buttonHeight -
+              (m_roundedStyle ? 48.0f : 16.0f) * fontScale;
 
   const size_t btnCount = m_buttons.size();
   m_buttonX.resize(btnCount, 0.0f);
@@ -244,7 +299,7 @@ GuiDialog::updateLayout()
       std::clamp((availWidth - buttonGap * static_cast<float>(btnCount - 1)) /
                    static_cast<float>(btnCount),
                  40.0f,
-                 120.0f * fontScale);
+                 (m_roundedStyle ? 172.0f : 120.0f) * fontScale);
     const float totalButtonsW = m_buttonWidth * static_cast<float>(btnCount) +
                                 buttonGap * static_cast<float>(btnCount - 1);
     float startX = m_panelX + (effectiveWidth - totalButtonsW) * 0.5f;
@@ -268,7 +323,7 @@ GuiDialog::update(InputManager* inputManager, float dt)
   m_hoveredButton = -1;
   if (m_window != nullptr) {
     const std::array<double, 2> mouseCoords = m_window->getMouseCoords();
-    const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
+    const float scale = m_layoutScale;
     m_mouseX =
       static_cast<float>(mouseCoords[0]) / (scale > 0.0f ? scale : 1.0f);
     m_mouseY =
@@ -286,6 +341,9 @@ GuiDialog::update(InputManager* inputManager, float dt)
     }
   }
 
+  if (m_hoveredButton >= 0) {
+    GuiPointerHint::markInteractive();
+  }
   int action = 0;
   if (inputManager != nullptr) {
     std::queue<InputManager::KeyPressEvent>& keyQueue =
@@ -334,9 +392,10 @@ GuiDialog::update(InputManager* inputManager, float dt)
     const bool mouseDown =
       inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
     if (mouseDown && !m_mouseWasDown) {
-      const std::array<double, 2> mouse = inputManager->getMousePosition();
-      const float scale =
-        m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
+      const std::array<double, 2> mouse = m_window != nullptr
+                                            ? m_window->getMouseCoords()
+                                            : inputManager->getMousePosition();
+      const float scale = m_layoutScale;
       const float clickX =
         static_cast<float>(mouse[0]) / (scale > 0.0f ? scale : 1.0f);
       const float clickY =
@@ -368,7 +427,7 @@ GuiDialog::rebuildVisual()
     width = std::max(1, dimensions[0]);
     height = std::max(1, dimensions[1]);
   }
-  const float scale = m_renderer != nullptr ? m_renderer->getUiScale() : 1.0f;
+  const float scale = m_layoutScale;
   const float virtualWidth =
     static_cast<float>(width) / (scale > 0.0f ? scale : 1.0f);
   const float virtualHeight =
@@ -380,12 +439,9 @@ GuiDialog::rebuildVisual()
   const float buttonFontSize = m_fontSize;
 
   const float t = animationProgress();
-  const float ease = 1.0f - std::pow(1.0f - t, 3.0f);
-  const float slideY = (1.0f - ease) * 16.0f;
+  const float ease = GuiEasing::outCubic(t);
+  const float slideY = panelOffsetY();
   const unsigned char bgAlpha = static_cast<unsigned char>(190.0f * ease);
-
-  // Full-screen backdrop
-  GuiKit::drawBackdrop(m_visual, virtualWidth, virtualHeight, bgAlpha);
 
   const float curPanelY = m_panelY - slideY;
   const float curButtonY = m_buttonY - slideY;
@@ -393,6 +449,25 @@ GuiDialog::rebuildVisual()
     std::min(m_panelWidth * fontScale, virtualWidth - 32.0f);
   const float effectiveHeight =
     std::min(m_panelHeight * fontScale, virtualHeight - 32.0f);
+
+  if (m_roundedStyle) {
+    // Radial scrim: the world stays faintly visible at the center.
+    GuiKit::drawVignette(m_visual,
+                         virtualWidth,
+                         virtualHeight,
+                         UiTheme::fade(UiTheme::scrimCenter(), ease),
+                         UiTheme::fade(UiTheme::scrimEdge(), ease),
+                         0.3f);
+    drawRoundedContents(curPanelY,
+                        effectiveWidth,
+                        effectiveHeight,
+                        fontScale,
+                        static_cast<unsigned char>(255.0f * ease));
+    return;
+  }
+
+  // Full-screen backdrop
+  GuiKit::drawBackdrop(m_visual, virtualWidth, virtualHeight, bgAlpha);
 
   // Panel card
   GuiPanelChrome chrome;
@@ -463,11 +538,209 @@ GuiDialog::rebuildVisual()
   }
 }
 
+void
+GuiDialog::drawRoundedContents(float panelY,
+                               float width,
+                               float height,
+                               float fontScale,
+                               unsigned char opacity)
+{
+  const float ambient = m_ambientElapsed;
+  const float breathe = 0.5f + 0.5f * std::sin(ambient * 1.04719755f);
+  GuiGlassStyle glass;
+  glass.opacity = opacity;
+  glass.ambientPhase = ambient;
+  glass.glow = 0.4f + 0.3f * breathe;
+  glass.accentReveal = static_cast<float>(opacity) / 255.0f;
+  m_tilt.applyTo(glass);
+  GuiKit::drawGlassPanel(m_visual,
+                         m_panelX + m_tilt.layerX(GuiPanelTilt::kGlassDepth),
+                         panelY + m_tilt.layerY(GuiPanelTilt::kGlassDepth),
+                         width,
+                         height,
+                         glass);
+  const float centerX = m_panelX + width * 0.5f;
+  // The title, message and breathing cells float nearer than the buttons.
+  const float headerX = centerX + m_tilt.layerX(GuiPanelTilt::kHeaderDepth);
+  const float headerY = panelY + m_tilt.layerY(GuiPanelTilt::kHeaderDepth);
+  GuiKit::drawTextCentered(
+    m_visual,
+    m_title,
+    headerX,
+    headerY + 46.0f * fontScale,
+    25.0f * fontScale,
+    UiTheme::applyOpacity(UiTheme::textPrimary(), opacity));
+  GuiKit::drawTextCentered(
+    m_visual,
+    m_message,
+    headerX,
+    headerY + 86.0f * fontScale,
+    m_fontSize,
+    UiTheme::applyOpacity(UiTheme::textSecondary(), opacity));
+  // Seven cells breathe in a wave, cyan into violet.
+  for (int cell = 0; cell < 7; ++cell) {
+    const float wave =
+      m_reducedMotion ? 0.5f
+                      : 0.5f + 0.5f * std::sin(ambient * 3.14159265f -
+                                               static_cast<float>(cell) * 0.7f);
+    const float size = (4.0f + 2.0f * wave) * fontScale;
+    const float cellCenterX =
+      headerX + (static_cast<float>(cell) - 3.0f) * 11.0f * fontScale + 2.5f;
+    const float cellCenterY = headerY + 119.5f * fontScale;
+    const ColorRgba tint = UiTheme::mix(UiTheme::accentCool(),
+                                        UiTheme::accentViolet(),
+                                        static_cast<float>(cell) / 6.0f);
+    GuiKit::drawRoundedRect(
+      m_visual,
+      cellCenterX - size * 0.5f,
+      cellCenterY - size * 0.5f,
+      size,
+      size,
+      2.0f,
+      UiTheme::applyOpacity(UiTheme::fade(tint, 0.55f + 0.45f * wave),
+                            opacity));
+  }
+
+  const float y = m_buttonY - panelOffsetY();
+  const float radius = 12.0f;
+  // Buttons: soft shadow, a rim and face that warm with focus, and a small
+  // lift (kept within the button so the label still hits it).
+  for (size_t index = 0; index < m_buttons.size(); ++index) {
+    const GuiButtonDef& button = m_buttons[index];
+    const ColorRgba accent =
+      button.isDestructive ? UiTheme::error() : UiTheme::accentCool();
+    const float e =
+      std::clamp(m_buttonFocus.value(static_cast<int>(index)), 0.0f, 1.0f);
+    const float lift = 2.0f * e;
+    const float x = m_buttonX[index];
+    GuiKit::drawSoftShadow(
+      m_visual,
+      x,
+      y - lift,
+      m_buttonWidth,
+      m_buttonHeight,
+      radius,
+      10.0f + 4.0f * e,
+      4.0f + 2.0f * e,
+      UiTheme::applyOpacity(UiTheme::glowShadow(), opacity));
+    GuiKit::drawRoundedGradientRect(
+      m_visual,
+      x,
+      y - lift,
+      m_buttonWidth,
+      m_buttonHeight,
+      radius,
+      UiTheme::applyOpacity(UiTheme::mix(UiTheme::cardRim(), accent, 0.6f * e),
+                            opacity),
+      UiTheme::applyOpacity(
+        UiTheme::mix(
+          UiTheme::cardRim(),
+          UiTheme::accentBlendOf(
+            accent, button.isDestructive ? 0.35f : UiTheme::kAccentBlend),
+          0.6f * e),
+        opacity));
+    GuiKit::drawRoundedGradientRect(
+      m_visual,
+      x + 1.0f,
+      y - lift + 1.0f,
+      m_buttonWidth - 2.0f,
+      m_buttonHeight - 2.0f,
+      radius - 1.0f,
+      UiTheme::applyOpacity(UiTheme::mix(UiTheme::cardTop(), accent, 0.12f * e),
+                            opacity),
+      UiTheme::applyOpacity(UiTheme::cardBottom(), opacity));
+  }
+  if (!m_buttons.empty() && m_selectedButton >= 0 &&
+      m_selectedButton < static_cast<int>(m_buttons.size())) {
+    // The highlight pours from the button it leaves to the one it lands on
+    // like a drop of liquid, then a sheen sweeps across it.
+    const ColorRgba accent = m_buttons[m_selectedButton].isDestructive
+                               ? UiTheme::error()
+                               : UiTheme::accentCool();
+    const float gap = m_buttonX.size() > 1 ? m_buttonX[1] - m_buttonX[0] : 0.0f;
+    const GuiSelectionSpan span =
+      m_selectionMotion.selectionSpan(static_cast<float>(m_selectedButton));
+    const float lift =
+      2.0f * std::clamp(m_buttonFocus.value(m_selectedButton), 0.0f, 1.0f);
+    GuiLiquidSelection drop;
+    drop.horizontal = true;
+    drop.crossStart = y - lift;
+    drop.crossSize = m_buttonHeight;
+    drop.headStart = m_buttonX[0] + span.leading * gap;
+    drop.tailStart = m_buttonX[0] + span.trailing * gap;
+    drop.cellLength = m_buttonWidth;
+    drop.radius = radius;
+    drop.squash = span.squash;
+    drop.glowSpread = 12.0f + 4.0f * breathe;
+    drop.glow = UiTheme::applyOpacity(
+      UiTheme::fade(accent, 0.22f + 0.12f * breathe), opacity);
+    drop.rim = UiTheme::applyOpacity(accent, opacity);
+    // Rim, glow and face lean toward violet at the bottom, like every lit
+    // accent; a destructive red only takes a hint of it.
+    const float blend =
+      m_buttons[m_selectedButton].isDestructive ? 0.35f : UiTheme::kAccentBlend;
+    drop.rimBottom = UiTheme::accentBlendOf(drop.rim, blend);
+    drop.glowBottom = UiTheme::accentBlendOf(drop.glow, blend);
+    drop.faceTop = UiTheme::applyOpacity(
+      UiTheme::mix(UiTheme::cardTop(), accent, 0.38f), opacity);
+    drop.faceBottom = UiTheme::applyOpacity(
+      UiTheme::mix(
+        UiTheme::cardBottom(), UiTheme::accentBlendOf(accent, blend), 0.24f),
+      opacity);
+    drop.sheen = m_selectionMotion.selectionSheen();
+    drop.sheenColor =
+      UiTheme::applyOpacity(ColorRgba{ 220, 250, 255, 44 }, opacity);
+    GuiKit::drawLiquidSelection(m_visual, drop);
+  }
+  for (size_t index = 0; index < m_buttons.size(); ++index) {
+    const GuiButtonDef& button = m_buttons[index];
+    const ColorRgba accent =
+      button.isDestructive ? UiTheme::error() : UiTheme::accentCool();
+    const float e =
+      std::clamp(m_buttonFocus.value(static_cast<int>(index)), 0.0f, 1.0f);
+    const float lift = 2.0f * e;
+    const ColorRgba text =
+      static_cast<int>(index) == m_selectedButton
+        ? UiTheme::mix(accent, UiTheme::textPrimary(), 0.2f)
+        : UiTheme::mix(UiTheme::textPrimary(), accent, e);
+    // The label thickens with focus and swells past it on the spring.
+    GuiKit::drawEmphasizedTextCentered(
+      m_visual,
+      button.label,
+      m_buttonX[index] + m_buttonWidth * 0.5f,
+      y + m_buttonHeight * 0.36f - lift,
+      17.0f * fontScale,
+      UiTheme::applyOpacity(text, opacity),
+      std::clamp(m_buttonFocus.value(static_cast<int>(index)), 0.0f, 1.3f));
+    GuiKit::drawTextCentered(
+      m_visual,
+      button.shortcut,
+      m_buttonX[index] + m_buttonWidth * 0.5f,
+      y + m_buttonHeight * 0.73f - lift,
+      10.0f * fontScale,
+      UiTheme::applyOpacity(
+        UiTheme::mix(UiTheme::textMuted(), UiTheme::textSecondary(), e),
+        opacity));
+  }
+  // Footer key hints, centered.
+  const float hintSize = 9.0f * fontScale;
+  const float hintWidth =
+    GuiKit::measureKeyHint("LEFTRIGHT", "Select", hintSize) +
+    GuiKit::measureKeyHint("ENTER", "Open", hintSize) - hintSize * 1.6f;
+  float hintX = centerX - hintWidth * 0.5f;
+  const float hintY = panelY + height - 30.0f * fontScale;
+  hintX += GuiKit::drawKeyHint(
+    m_visual, hintX, hintY, "LEFTRIGHT", "Select", hintSize, opacity);
+  GuiKit::drawKeyHint(
+    m_visual, hintX, hintY, "ENTER", "Open", hintSize, opacity);
+}
+
 bool
 GuiDialog::AppendCommands(Renderer* renderer)
 {
   if (!m_open) {
     return true;
   }
+  rebuildVisual();
   return m_visual.AppendCommands(renderer);
 }

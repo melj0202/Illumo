@@ -1,11 +1,8 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
-
-#ifdef TRACY_ENABLE
-#include "tracy/Tracy.hpp"
-#else
-#define ZoneNamed(varname, name)
-#endif
+#include <limits>
+#include <utility>
 
 #ifndef GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_NONE
@@ -335,10 +332,10 @@ InputManager::TranslateInputActionGLFW(int glfwAction)
 
 InputManager::InputManager(GLFWwindow* window)
   : window(window)
-  , activeInputContext(&inputContexts[0])
-  , numInputContexts(0)
+  , activeInputContext(&neutralContext)
   , m_modifierFlags(0)
 {
+  contextIds.fill(-1);
   s_Instance = this;
   if (window != nullptr) {
     glfwSetKeyCallback(window, normalKeyCallback);
@@ -366,27 +363,16 @@ InputManager::~InputManager()
 }
 
 void
-InputManager::clearCharQueue()
-{
-  std::queue<unsigned int> empty;
-  std::swap(charQueue, empty);
-}
-
-void
-InputManager::clearKeyQueue()
-{
-  std::queue<KeyPressEvent> empty;
-  std::swap(keyQueue, empty);
-}
-
-void
 InputManager::update()
 {
-  ZoneNamed(InputManagerUpdateZone, "InputManager Update");
+  ILLUMO_PROFILE_ZONE("InputManager.update");
+  m_suppressedKeys.fill(false);
   *scrollOffset = 0.0;
   if (window != nullptr) {
+    ILLUMO_PROFILE_ZONE("InputManager.pollEvents");
     glfwPollEvents();
   }
+  ILLUMO_PROFILE_ZONE("InputManager.pollKeys");
   for (KeyCode keyCode : AllKeyCodes) {
     inputStatesCurrent[keyCode] = GetInputAction(keyCode);
 
@@ -401,7 +387,8 @@ InputManager::update()
     }
 
     else if (inputStatesCurrent[keyCode] == InputAction::Release &&
-             inputStatesPrevious[keyCode] == InputAction::Release) {
+             inputStatesPrevious[keyCode] != InputAction::Press &&
+             inputStatesPrevious[keyCode] != InputAction::Hold) {
       inputStatesCurrent[keyCode] = InputAction::None;
     }
 
@@ -412,6 +399,9 @@ InputManager::update()
 InputAction
 InputManager::GetInputAction(KeyCode keyCode)
 {
+  if (isKeySuppressed(keyCode)) {
+    return InputAction::None;
+  }
   if (keyCode == KeyCode::None || window == nullptr) {
     return InputAction::None;
   }
@@ -428,6 +418,9 @@ InputManager::GetInputAction(KeyCode keyCode)
 bool
 InputManager::isKeyPressed(KeyCode key)
 {
+  if (isKeySuppressed(key)) {
+    return false;
+  }
   if (window == nullptr) {
     std::unordered_map<KeyCode, InputAction>::const_iterator it =
       inputStatesCurrent.find(key);
@@ -439,17 +432,6 @@ InputManager::isKeyPressed(KeyCode key)
   int glfwInputAction = glfwGetKey(window, TranslateKeyCodeFromGLFW(key));
 
   return TranslateInputActionGLFW(glfwInputAction) == InputAction::Press;
-}
-
-bool
-InputManager::isKeyReleased(KeyCode key)
-{
-  if (window == nullptr) {
-    return false;
-  }
-  int glfwInputAction = glfwGetKey(window, TranslateKeyCodeFromGLFW(key));
-
-  return TranslateInputActionGLFW(glfwInputAction) == InputAction::Release;
 }
 
 bool
@@ -499,43 +481,6 @@ InputManager::isAltPressed() const
   return (m_modifierFlags & GLFW_MOD_ALT) != 0;
 }
 
-bool
-InputManager::isMouseButtonReleased(KeyCode mouseButton)
-{
-  if (window == nullptr) {
-    return false;
-  }
-  int glfwInputAction =
-    glfwGetMouseButton(window, TranslateKeyCodeFromGLFW(mouseButton));
-
-  return TranslateInputActionGLFW(glfwInputAction) == InputAction::Release;
-}
-
-void
-InputManager::setActiveInputContext(long inputContext)
-{
-  activeInputContext = &inputContexts[inputContext];
-}
-
-[[nodiscard]] bool
-InputManager::isActionActive(std::string actionTag)
-{
-  InputEvent ie = activeInputContext->getActionTag(actionTag);
-  return inputStatesCurrent[ie.keyCode] == ie.inputAction;
-}
-
-[[nodiscard]] long
-InputManager::registerInputContext(InputContext inputContext)
-{
-  if (numInputContexts >= NUM_INPUT_CONTEXTS) {
-    Logger::LogError("Too many input contexts registered");
-    return -1;
-  }
-  inputContexts[numInputContexts] = inputContext;
-  numInputContexts++;
-  return numInputContexts - 1;
-}
-
 std::array<double, 2>
 InputManager::getMousePosition()
 {
@@ -551,6 +496,10 @@ void
 InputManager::characterCallback(GLFWwindow* /*window*/, unsigned int codepoint)
 {
   if (s_Instance) {
+    if (s_Instance->charQueue.size() >= MAX_INPUT_EVENTS) {
+      ++s_Instance->m_droppedCharEvents;
+      return;
+    }
     s_Instance->charQueue.push(codepoint);
   }
 }
@@ -576,6 +525,10 @@ InputManager::normalKeyCallback(GLFWwindow* /*window*/,
     KeyCode localKey = s_Instance->TranslateKeyCodeToGLFW(key);
     InputAction localAction = s_Instance->TranslateInputActionGLFW(action);
     s_Instance->m_modifierFlags = mods;
+    if (s_Instance->keyQueue.size() >= MAX_INPUT_EVENTS) {
+      ++s_Instance->m_droppedKeyEvents;
+      return;
+    }
     s_Instance->keyQueue.push({ localKey, localAction, mods });
   }
 }

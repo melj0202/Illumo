@@ -1,13 +1,17 @@
 #include <Illumo/Rendering/MeshLoader.h>
 
+#include <Illumo/Foundation/Profile.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#if !defined(ILLUMO_SERIAL_GUEST)
 #include <filesystem>
 #include <fstream>
-#include <limits>
 #include <mutex>
+#endif
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -208,6 +212,13 @@ public:
     outResult->warning.clear();
     outResult->mesh.clear();
 
+#if defined(ILLUMO_SERIAL_GUEST)
+    // Guests have no file system; they read bytes and use loadFromMemory.
+    (void)options;
+    outResult->error =
+      "Mesh files cannot be opened by path in a guest: " + filePath;
+    return false;
+#else
     tinyobj::ObjReaderConfig readerConfig;
     readerConfig.triangulate = options.triangulate;
     if (!options.materialSearchPath.empty()) {
@@ -226,6 +237,7 @@ public:
 
     outResult->warning = reader.Warning();
     return convertToMeshData(reader, options, outResult);
+#endif
   }
 
   bool loadFromMemory(const std::string& fileContent,
@@ -251,7 +263,8 @@ public:
     }
 
     tinyobj::ObjReader reader;
-    if (!reader.ParseFromString(fileContent, "", readerConfig)) {
+    if (!reader.ParseFromString(
+          fileContent, options.materialText, readerConfig)) {
       outResult->error = reader.Error();
       outResult->warning = reader.Warning();
       return false;
@@ -269,6 +282,29 @@ private:
     const tinyobj::attrib_t& attrib = reader.GetAttrib();
     const std::vector<tinyobj::shape_t>& shapes = reader.GetShapes();
     const std::vector<tinyobj::material_t>& materials = reader.GetMaterials();
+
+    // tinyobj may succeed with warnings for invalid positive references.
+    // Validate the complete input before publishing any converted data.
+    for (const tinyobj::shape_t& shape : shapes) {
+      for (const tinyobj::index_t& index : shape.mesh.indices) {
+        if (index.vertex_index < 0 ||
+            static_cast<size_t>(index.vertex_index) >=
+              attrib.vertices.size() / 3u ||
+            index.normal_index < -1 || index.texcoord_index < -1 ||
+            (index.normal_index >= 0 &&
+             static_cast<size_t>(index.normal_index) >=
+               attrib.normals.size() / 3u) ||
+            (index.texcoord_index >= 0 &&
+             static_cast<size_t>(index.texcoord_index) >=
+               attrib.texcoords.size() / 2u) ||
+            (!attrib.colors.empty() &&
+             static_cast<size_t>(index.vertex_index) >=
+               attrib.colors.size() / 3u)) {
+          outResult->error = "OBJ attribute index is out of range";
+          return false;
+        }
+      }
+    }
 
     MeshData& mesh = outResult->mesh;
 
@@ -317,27 +353,35 @@ private:
           if (it == uniqueVertices.end()) {
             MeshVertex vertex;
             if (idx.vertex_index >= 0) {
-              vertex.position.x = attrib.vertices[3 * idx.vertex_index + 0];
-              vertex.position.y = attrib.vertices[3 * idx.vertex_index + 1];
-              vertex.position.z = attrib.vertices[3 * idx.vertex_index + 2];
+              const size_t offset = 3u * static_cast<size_t>(idx.vertex_index);
+              vertex.position.x = attrib.vertices[offset + 0u];
+              vertex.position.y = attrib.vertices[offset + 1u];
+              vertex.position.z = attrib.vertices[offset + 2u];
 
               if (!attrib.colors.empty()) {
-                vertex.color.r = attrib.colors[3 * idx.vertex_index + 0];
-                vertex.color.g = attrib.colors[3 * idx.vertex_index + 1];
-                vertex.color.b = attrib.colors[3 * idx.vertex_index + 2];
+                vertex.color.r = attrib.colors[offset + 0u];
+                vertex.color.g = attrib.colors[offset + 1u];
+                vertex.color.b = attrib.colors[offset + 2u];
                 vertex.color.a = 1.0f;
               }
             }
 
             if (idx.normal_index >= 0 && !attrib.normals.empty()) {
-              vertex.normal.x = attrib.normals[3 * idx.normal_index + 0];
-              vertex.normal.y = attrib.normals[3 * idx.normal_index + 1];
-              vertex.normal.z = attrib.normals[3 * idx.normal_index + 2];
+              const size_t offset = 3u * static_cast<size_t>(idx.normal_index);
+              vertex.normal.x = attrib.normals[offset + 0u];
+              vertex.normal.y = attrib.normals[offset + 1u];
+              vertex.normal.z = attrib.normals[offset + 2u];
+            } else {
+              // No source normal: leave it zero so generateNormalsIfMissing
+              // recognizes it, instead of MeshVertex's +Z default.
+              vertex.normal = glm::vec3(0.0f);
             }
 
             if (idx.texcoord_index >= 0 && !attrib.texcoords.empty()) {
-              vertex.texCoords.x = attrib.texcoords[2 * idx.texcoord_index + 0];
-              float texV = attrib.texcoords[2 * idx.texcoord_index + 1];
+              const size_t offset =
+                2u * static_cast<size_t>(idx.texcoord_index);
+              vertex.texCoords.x = attrib.texcoords[offset + 0u];
+              float texV = attrib.texcoords[offset + 1u];
               vertex.texCoords.y =
                 options.flipTexCoordsV ? (1.0f - texV) : texV;
             }
@@ -362,6 +406,12 @@ private:
 
     if (options.generateNormalsIfMissing) {
       mesh.computeNormalsIfMissing();
+    } else {
+      for (MeshVertex& vertex : mesh.vertices) {
+        if (glm::dot(vertex.normal, vertex.normal) < 0.0001f) {
+          vertex.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+        }
+      }
     }
 
     if (options.centerAndNormalize) {
@@ -373,7 +423,36 @@ private:
   }
 };
 
-static std::mutex g_backendMutex;
+#if defined(ILLUMO_SERIAL_GUEST)
+// Serial guests have one thread; the backend slot needs no lock.
+struct BackendMutex
+{
+  void lock() {}
+  void unlock() {}
+};
+#else
+using BackendMutex = std::mutex;
+#endif
+
+class BackendLock
+{
+public:
+  explicit BackendLock(BackendMutex& mutex)
+    : m_mutex(mutex)
+  {
+    m_mutex.lock();
+  }
+  ~BackendLock() { m_mutex.unlock(); }
+  BackendLock(const BackendLock&) = delete;
+  BackendLock& operator=(const BackendLock&) = delete;
+  BackendLock(BackendLock&&) = delete;
+  BackendLock& operator=(BackendLock&&) = delete;
+
+private:
+  BackendMutex& m_mutex;
+};
+
+static BackendMutex g_backendMutex;
 static std::shared_ptr<IMeshLoaderBackend> g_customBackend;
 
 } // namespace
@@ -381,7 +460,7 @@ static std::shared_ptr<IMeshLoaderBackend> g_customBackend;
 std::shared_ptr<IMeshLoaderBackend>
 MeshLoader::getActiveBackend()
 {
-  std::lock_guard<std::mutex> lock(g_backendMutex);
+  BackendLock lock(g_backendMutex);
   if (g_customBackend != nullptr) {
     return g_customBackend;
   }
@@ -394,6 +473,7 @@ MeshLoadResult
 MeshLoader::loadFromFile(const std::string& filePath,
                          const MeshLoadOptions& options)
 {
+  ILLUMO_PROFILE_ZONE("MeshLoader.loadFromFile");
   MeshLoadResult result;
   std::shared_ptr<IMeshLoaderBackend> backend = getActiveBackend();
   if (backend != nullptr) {
@@ -409,6 +489,7 @@ MeshLoader::loadFromMemory(const std::string& fileContent,
                            const MeshLoadOptions& options,
                            const std::string& baseDir)
 {
+  ILLUMO_PROFILE_ZONE("MeshLoader.loadFromMemory");
   MeshLoadResult result;
   std::shared_ptr<IMeshLoaderBackend> backend = getActiveBackend();
   if (backend != nullptr) {
@@ -419,16 +500,56 @@ MeshLoader::loadFromMemory(const std::string& fileContent,
   return result;
 }
 
+std::vector<std::string>
+MeshLoader::materialLibraryNames(const std::string& objText)
+{
+  std::vector<std::string> names;
+  std::size_t start = 0;
+  while (start < objText.size()) {
+    std::size_t end = objText.find('\n', start);
+    if (end == std::string::npos) {
+      end = objText.size();
+    }
+    std::size_t first = start;
+    std::size_t last = end;
+    start = end + 1;
+    while (first < last && (objText[first] == ' ' || objText[first] == '\t')) {
+      ++first;
+    }
+    while (last > first &&
+           (objText[last - 1] == '\r' || objText[last - 1] == ' ' ||
+            objText[last - 1] == '\t')) {
+      --last;
+    }
+    if (last - first < 8 || objText.compare(first, 6, "mtllib") != 0 ||
+        (objText[first + 6] != ' ' && objText[first + 6] != '\t')) {
+      continue;
+    }
+    first += 7;
+    while (first < last && (objText[first] == ' ' || objText[first] == '\t')) {
+      ++first;
+    }
+    // OBJ files written on Windows commonly use '\'.
+    std::string name = objText.substr(first, last - first);
+    std::replace(name.begin(), name.end(), '\\', '/');
+    if (!name.empty() &&
+        std::find(names.begin(), names.end(), name) == names.end()) {
+      names.push_back(std::move(name));
+    }
+  }
+  return names;
+}
+
 void
 MeshLoader::setCustomBackend(std::shared_ptr<IMeshLoaderBackend> backend)
 {
-  std::lock_guard<std::mutex> lock(g_backendMutex);
+  BackendLock lock(g_backendMutex);
   g_customBackend = backend;
 }
 
 void
 MeshLoader::resetBackend()
 {
-  std::lock_guard<std::mutex> lock(g_backendMutex);
+  BackendLock lock(g_backendMutex);
   g_customBackend.reset();
 }

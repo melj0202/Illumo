@@ -58,6 +58,20 @@ public:
   int getRefreshRate() const override { return 60; }
   void swapBuffers() override {}
   void requestClose() override { closeRequested = true; }
+  void cancelCloseRequest() override { closeRequested = false; }
+  // Records the last system-cursor request, for host display tests.
+  void setSystemCursorHidden(bool hidden) override
+  {
+    systemCursorHidden = hidden;
+  }
+  bool systemCursorHidden = false;
+  // The framebuffer's multisample count; -1 (unknown) by default.
+  int getMsaaSamples() const override { return msaaSamples; }
+  int msaaSamples = -1;
+  // The rendering backend, as GraphicsAPI spells it; empty (unknown) by
+  // default.
+  std::string graphicsApi() const override { return graphicsApiName; }
+  std::string graphicsApiName;
 };
 
 struct HeadlessRenderFixture

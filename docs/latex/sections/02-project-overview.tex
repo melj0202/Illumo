@@ -12,14 +12,41 @@ Illumo through supported \texttt{<Illumo/...>} headers. It owns the canvas,
 rulesets, simulation and persistence policy, product commands, CA defaults, and
 a declarative application definition. \textbf{IllEd} is the SceneGraph world
 editor that writes \texttt{.ilsc} documents so later Illumo applications can
-be authored rather than only coded. Neither product contains process entry,
+be authored rather than only coded. \textbf{IllMeshViewer} provides interactive
+mesh and scene inspection. These products do not contain process entry,
 native dialog implementation, logging lifetime, system parser, or frame loop.
+
+\textbf{Illumo::Content} (D-E18) is an optional library above the engine that
+every product links. It owns the one scene format, \texttt{.ilsc} format 2
+(D-E19), and \symbolref{SceneInstance}, the live loader that builds a
+SceneGraph and its attachments from a document. IllEd edits scenes through it,
+IllMeshViewer opens them, and IllumoGame's \texttt{render3dTest} diagnostic is
+one. Every program is a package described by \texttt{illumo.json} (D-E22),
+either a loose directory or an \texttt{.ilpk} archive (D-E20). The runtime
+mounts packages on one virtual file tree (D-E21): the launched application at
+\texttt{/app}, engine assets at \texttt{/engine}, every other installed or
+\texttt{--mount}ed package at \texttt{/packages/<id>}, and an optional writable
+\texttt{/project}. Mods and expansions are additive: a content package adds
+files under its own mount and may overlay files onto \texttt{/app}, but cannot
+delete a base file. Guests reach the tree through file protocol v2 (D-E23) and
+a fetch-on-demand asset cache (D-E24).
+
+IllEd (D-E25) has patch undo/redo, a multi-node selection with box select,
+translate/rotate/scale gizmos in local or world space with snapping, a typed
+inspector with text entry, clipboard copy/paste of subtrees, a hierarchy with
+reordering and folding, mesh/sprite/light/camera nodes, an environment editor,
+and an asset browser over the file tree. With \texttt{--project <dir>} it
+imports files into the project, saves scenes there, and packs the project into
+an \texttt{.ilpk}. Its Hierarchy, Assets, Tools and Inspector panels, like
+IllMeshViewer's Info and Display panels, dock in columns or pop out into
+their own windows, in a plain tool look (D-UI7).
 
 IllumoGame supports multiple rule sets (Game of Life, Brian's Brain,
 Wireworld, \ldots), camera navigation, edit/run modes, save/load, and a compact
 in-app command/debug surface. Rendering is OpenGL via GLFW/GLEW on the supported
-Windows path. Linux and macOS retain unsupported scaffolding and are not
-promoted by the project split.
+Windows path. Linux sources are repaired for Ubuntu 24.04 x86\_64
+X11/XWayland; they are not promoted to supported until native smoke exists.
+macOS is not targeted; no platform scaffold is retained.
 
 \begin{inferencebox}
 Illumo is intended to be a reusable runtime and rendering foundation for
@@ -37,10 +64,10 @@ ABI, or speculative multi-backend framework.
   box/.style={draw, rounded corners, align=center, inner sep=6pt, minimum height=1.1cm},
   arr/.style={-{Latex}, thick}
 ]
-  \node[box, fill=orange!10] (game) {IllumoGame\\Game + Rulesets\\application definition};
-  \node[box, fill=green!10, right=2.0cm of game] (lib) {Illumo static library\\Application + Platform + Engine\\Scene + Foundation + Services + Rendering};
+  \node[box, fill=orange!10] (game) {IllumoGame / IllEd\\IllMeshViewer\\application definitions};
+  \node[box, fill=green!10, right=2.0cm of game] (lib) {Illumo static library\\Application + Platform + Engine\\Scene + Foundation + Services + Rendering\\(+ Illumo::Content)};
   \node[box, fill=purple!8, below=1.0cm of lib] (gl) {private OpenGL backend\\Illumo assets + licenses};
-  \node[box, fill=gray!10, below=1.0cm of game] (tests) {IllumoGameTests\\IllumoTests + TestSupport};
+  \node[box, fill=gray!10, below=1.0cm of game] (tests) {Four test runners\\Illumo::TestSupport};
 
   \draw[arr] (game) -- node[above]{\scriptsize \texttt{Illumo::Illumo}} (lib);
   \draw[arr] (lib) -- (gl);
@@ -52,8 +79,8 @@ ABI, or speculative multi-backend framework.
 \subsection{Runtime one-liner}
 Illumo platform entry $\rightarrow$ \symbolref{CreateIllumoApplication}
 $\rightarrow$ engine-owned \symbolref{RunIllumoApplication} applies supplied
-game defaults and metadata-driven CLI $\rightarrow$ construct and fallibly
-initialize \symbolref{Illumo} $\rightarrow$ register the supplied required game
+product defaults and metadata-driven CLI $\rightarrow$ construct and fallibly
+initialize \symbolref{Illumo} $\rightarrow$ register the supplied required product
 module and engine-owned optional Debug module $\rightarrow$ \texttt{std::chrono} loop
 \{\,\symbolref{update}, \symbolref{render}\,\} until window close.
 
@@ -61,8 +88,12 @@ module and engine-owned optional Debug module $\rightarrow$ \texttt{std::chrono}
 \begin{itemize}
   \item No install/export package, shared DLL, or stable binary ABI.
   \item No general-purpose AAA renderer, full ECS, or speculative framework.
-  \item No SceneGraph serialization, retained UI, culling hierarchy, or update
-        framework until a concrete consumer defines those contracts.
+  \item No SceneGraph self-serialization (scenes are written by
+        Illumo::Content's codec through the public graph API), retained UI,
+        culling hierarchy, or update framework until a concrete consumer
+        defines those contracts.
+  \item No material system, animation, scripting, physics, prefabs, or nested
+        scene instances in the scene format yet.
   \item No multiplayer or networking.
-  \item No claim that Linux or macOS is supported until native validation exists.
+  \item No Linux support claim until native validation exists; macOS is not targeted.
 \end{itemize}

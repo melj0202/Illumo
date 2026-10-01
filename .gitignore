@@ -1,6 +1,10 @@
 # Project runtime data
 *.illumo
 *.ilsc
+# Shipped product scenes are source, not runtime data.
+!IllumoGame/Scenes/*.ilsc
+# So is the scene packed into the CMake zip test fixture.
+!Illumo/Tests/Content/Fixtures/archive/scenes/*.ilsc
 
 
 # Compiler outputs
@@ -96,6 +100,7 @@ __pycache__/
 
 # Local/private configuration and credentials
 /envvars.json
+/build-profiles.local.json
 .priv/
 .agents/*
 !.agents/skills/

@@ -32,6 +32,7 @@ EditorUiAtlas::cellFor(EditorCommand command,
       cellRow = 1;
       break;
     case EditorCommand::CreateCube:
+    case EditorCommand::CreateWireCube:
       cellColumn = 0;
       cellRow = 1;
       break;
@@ -40,6 +41,7 @@ EditorUiAtlas::cellFor(EditorCommand command,
       cellRow = 1;
       break;
     case EditorCommand::CreateSphere:
+    case EditorCommand::CreateWireSphere:
       cellColumn = 2;
       cellRow = 1;
       break;

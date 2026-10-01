@@ -14,13 +14,16 @@ decision log when resolved.
         \textbf{Resolved D-R2:} each drawable emits via \texttt{AppendCommands}.
   \item \sout{\textbf{Resource ownership:} refcounts, generational handles, or
         ``destroy only at shutdown''?}
-        \textbf{Resolved D-R16/D-R17:} generational backend resources plus
-        reference-counted managed texture/shader assets.
+        \textbf{Resolved D-R16/D-R17/D-R24:} generational backend resources plus
+        reference-counted managed texture/shader/static-mesh assets.
   \item \sout{\textbf{Scene graph leftovers?}}
         \textbf{Resolved D-E4:} drawable list only; SceneObject archived.
+        D-E31 renamed the list \texttt{DrawList}, so ``scene'' now means a
+        program's \texttt{ProgramScene}.
   \item \sout{\textbf{IllumoContext growth?}}
-        \textbf{Resolved D-E5:} freeze bag; validate at Start; third module =
-        explicit deps.
+        \textbf{Resolved D-E5, refined by D-E31:} freeze bag, minus
+        \texttt{moduleHost} and plus \texttt{scenes}; the program, each scene's
+        \texttt{start} and \texttt{DebugOverlay::start} check what they need.
   \item \sout{\textbf{Canvas domain vs view?}}
         \textbf{Resolved D-C3:} SparseCellGrid is the production domain;
         CanvasView is the bounded presentation adapter. Dense Canvas remains
@@ -31,22 +34,22 @@ decision log when resolved.
         \textbf{Resolved D-P1/D-P4:} dirty rects + PBO. Presentation is RGB
         fade display (R8+palette experiment partially rolled back; fade restored).
   \item \sout{\textbf{Illumo $\leftrightarrow$ Game dependency:} module registration?}
-        \textbf{Resolved D-E1/D-E7:} the Illumo application runner registers a
-        required module returned by the game's declarative factory; Engine
-        knows only \texttt{IModule}.
+        \textbf{Resolved D-E1/D-E7, superseded by D-E31:} there is no module
+        registration. The engine still never includes product code;
+        IllumoRuntime runs one WASM program, which manages its own scenes.
   \item \sout{\textbf{InputManager $\rightarrow$ CellContext include?}}
         \textbf{Resolved D-E2:} InputManager is Game-free.
   \item \sout{\textbf{RenderQueue class:} delete, rename, or repurpose?}
-        \textbf{Resolved D-R6:} archived; Scene + Renderer is the path.
+        \textbf{Resolved D-R6:} archived; DrawList + Renderer is the path.
   \item \sout{\textbf{EntityTable:} first-class for cells, or experimental?}
         \textbf{Resolved D-E3:} experimental/unused; archived under
         \pathref{archive/dead-engine/}. Cells are drawables, not entities.
 
-  \item \textbf{Linux/macOS:} invest now or freeze until token GL path is solid
+  \item \textbf{Linux:} invest now or freeze until token GL path is solid
         on Windows?
-        \emph{Current status: unsupported. Illumo owns both scaffold entry
-        points, but native build and smoke validation is required before support
-        can be claimed.}
+        \emph{Current status: Linux sources repaired for Ubuntu 24.04 x86\_64
+        X11/XWayland; still unsupported until native GUI smoke. macOS is not
+        targeted and its scaffold has been removed. See \pathref{docs/packages/platform-linux.md}.}
   \item \textbf{Tracy:} always-on in Debug only --- any CI policy?
   \item \sout{\textbf{Tests:} first meaningful automated test?}
         \textbf{Resolved D-R7/D-R8/D-T1:} \texttt{MockBackend} plus split
@@ -65,5 +68,45 @@ decision log when resolved.
         also complete (D-WW1). Rule 90 / 184 remain identity stubs.
   \item \sout{\textbf{MacroDefs / Windows.h include toxicity?}}
         \textbf{Deferred D-F1:} fix only when it starts to cause problems.
+\end{enumerate}
+\end{openbox}
+
+Follow-ups recorded by the content packages and scenes effort (D-E18 to
+D-E26, D-UI6; \pathref{docs/content-packages-and-scenes-design.md} \S15 and
+the plan's validation log):
+
+\begin{openbox}
+\begin{enumerate}
+  \item \textbf{Whiteouts:} a mod cannot hide or delete a base file; overlays
+        only add or replace. Overlays onto mounts other than \texttt{/app} are
+        also not supported.
+  \item \textbf{Chunked textures:} a guest texture upload stays below the
+        16\,MiB payload cap (cubemap faces about 836\,px); IllEd imports are
+        checked against it. Larger images need chunked texture creation.
+  \item \textbf{Material system:} MTL files beside an OBJ are found and parsed,
+        but materials are not bound; glTF is not read.
+  \item \textbf{Folder dialog:} \texttt{--project <dir>} is the only way to
+        open a writable project; there is no folder chooser, recent-project
+        list, or persisted mount.
+  \item \textbf{Ids inside opaque data:} duplicate and paste remap node ids in
+        core records only; ids inside namespaced components and
+        \texttt{extensions} are copied verbatim. Asset paths pasted between
+        packages are not rewritten either.
+  \item \textbf{\texttt{vfs mount} / \texttt{vfs unmount}:} the debug-tools
+        mount commands were not added; the mount table is fixed per launch.
+  \item \textbf{Drag preview in IllEd:} a file dragged from the asset browser
+        is placed at the release point on the edit plane with no preview in
+        the viewport.
+  \item \textbf{Mounted-read block speed:} 1\,MiB mounted blocks do not beat
+        64\,KiB storage reads yet (about 434 versus 440\,MB/s) because the
+        directory backend resolves and reopens the file for every block;
+        caching the open stream per \texttt{VfsFile} is the follow-up.
+  \item \textbf{Hot reload after a mount change:} guest assets are not
+        reloaded when mounts change; the scene must be reloaded.
+  \item \textbf{Prefabs and nested scene instances:} not part of format 2.0.
+  \item \textbf{IllMeshViewer packages:} there is no \texttt{--open x.ilpk};
+        a packaged scene is viewed by mounting it and running
+        \texttt{viewer\_open}. A dialog-picked scene resolves relative
+        references under \texttt{/local}, so they draw as placeholders.
 \end{enumerate}
 \end{openbox}

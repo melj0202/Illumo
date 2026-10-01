@@ -3,15 +3,15 @@
 
 class Renderer;
 
-// Scene list entry: token emitter (preferred) and/or legacy immediate Draw.
+// DrawList entry: token emitter (preferred) and/or legacy immediate Draw.
 // GL object ownership lives in the backend registries (not here).
 // Built-in shader + pipeline defaults live on Renderer styles (D-R14);
 // drawables hold content handles and call bindStyle, then emit content tokens.
-// Modules place drawables into Scene layers (World / UI / Debug).
+// Programs place drawables into DrawList layers (World / UI / Debug).
 // Composed shapes/sprites use GameVisual (D-R15) rather than one Drawable each.
 //
 // Production pure-token drawables (always AppendCommands → true when visible):
-//   Canvas, CommandLine, GLString, SplashText
+//   CanvasView, GameVisual, CommandLine, GLString, SplashText
 // Hybrid immediate fallback exists for tests / future stubs only (D-R10).
 // CRTP Draw→DrawImpl is leftover for the immediate path; not on the hot token
 // path.
@@ -30,6 +30,12 @@ public:
     (void)renderer;
     return false;
   }
+
+  // Optional scene-level directional-shadow extraction. Renderer invokes the
+  // collection phase for visible World drawables, prepares one shared depth
+  // target, then invokes the command phase before ordinary color rendering.
+  virtual void CollectShadowCasters(Renderer* renderer) { (void)renderer; }
+  virtual void AppendShadowCommands(Renderer* renderer) { (void)renderer; }
 
   bool isVisible() const { return visible; }
   void setVisible(bool v) { visible = v; }

@@ -26,6 +26,9 @@ struct SysCmdLineResult
 struct SysCmdLineOption
 {
   std::string option;
+  // "path", "file", "name" and "string" take one string value; "paths"
+  // may repeat, joining its values with newlines; anything else is a positive
+  // integer.
   std::string valueName;
   std::string environmentVariable;
   std::string description;

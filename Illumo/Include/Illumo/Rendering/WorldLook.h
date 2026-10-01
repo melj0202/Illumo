@@ -15,6 +15,7 @@ struct WorldLook
   static constexpr const char* kMotionBlurEnabledUniform = "uMotionBlurEnabled";
   static constexpr const char* kMotionBlurAmountUniform = "uMotionBlurAmount";
   static constexpr const char* kMotionBlurMaxUniform = "uMotionBlurMax";
+  static constexpr const char* kTintUniform = "uTint";
   static constexpr const char* kLightSpaceMatrixUniform = "uLightSpaceMatrix";
   static constexpr const char* kLightDirUniform = "uLightDir";
   static constexpr const char* kLightColorUniform = "uLightColor";
@@ -27,6 +28,9 @@ struct WorldLook
     "uShadowNormalOffset";
   static constexpr const char* kShadowPcfUniform = "uShadowPcf";
   static constexpr const char* kTextureUniform = "uTexture";
+  // Canvas style: (fade clock seconds, fade speed, texture layout); see
+  // canvas_frag.glsl and IllumoGame's CanvasView.
+  static constexpr const char* kCanvasFadeUniform = "uCanvasFade";
   static constexpr const char* kResolutionUniform = "u_resolution";
   static constexpr int kTextureUnit = 0;
   static constexpr int kShadowTextureUnit = 1;

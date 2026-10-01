@@ -44,7 +44,10 @@ fallback.
 \symbolref{DispatchDrawables}/\symbolref{Exit}.\\
 \textbf{Why:} Separate simulation tick from draw contribution.\\
 \textbf{Consequences:} Draw list is rebuilt or contributed each frame through
-dispatch. Module ownership/composition was later closed by D-E1.
+dispatch. Module ownership/composition was later closed by D-E1.\\
+\textbf{Status:} Superseded by D-E31. Program scenes keep the split
+(\texttt{update} and \texttt{dispatch}) inside a program; the engine has no
+modules.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -308,7 +311,9 @@ the optional Debug module before \texttt{startModules}.\\
 \textbf{Why:} Engine must not depend on Game headers; product composition
 belongs at the application boundary.\\
 \textbf{Consequences:} New products/tests can register different module sets;
-Engine only knows \symbolref{IModule}.
+Engine only knows \symbolref{IModule}.\\
+\textbf{Status:} Superseded by D-E31. The engine still never includes product
+code, but there is nothing to register: IllumoRuntime runs one WASM program.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -344,7 +349,9 @@ feature needs it; document that cells are not entities.
 and \symbolref{CommandLine} no longer inherit a node graph.\\
 \textbf{Why:} Architecture review (dead graph scaffolding); production never
 used parent/child transforms for cells or UI.\\
-\textbf{Consequences:} Frame contribution model is explicit and small.
+\textbf{Consequences:} Frame contribution model is explicit and small.\\
+\textbf{Status:} Refined by D-E31: the type is now \texttt{DrawList}
+(\pathref{Illumo/Include/Illumo/Rendering/DrawList.h}).
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -358,7 +365,10 @@ constructor dependencies if its subset differs.\\
 \textbf{Why:} Architecture review --- bag cost is zero at $N=2$ but becomes a
 de-facto global API as $N$ grows.\\
 \textbf{Consequences:} \texttt{IllumoContextHasGameCore} /
-\texttt{IllumoContextHasDebugCore} helpers; freeze note on the struct.
+\texttt{IllumoContextHasDebugCore} helpers; freeze note on the struct.\\
+\textbf{Status:} Refined by D-E31. The bag stays frozen, minus
+\texttt{moduleHost} and plus \texttt{scenes}; the program, each scene's
+\texttt{start} and \texttt{DebugOverlay::start} check what they need.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -562,9 +572,9 @@ intentional. Canonical tests are \texttt{IllumoTests}, and new saves use the
 \textbf{Consequences:} Live first-party source and documentation use Illumo;
 generated build trees, vendored material, and archived historical artifacts are
 not implementation sources and are not rewritten by this decision.\\
-\textbf{Status:} Superseded by D-N2 for executable, product-visible, and test
-identity. The Illumo repository/library/host name and the \texttt{.illumo}
-format identity remain valid.
+\textbf{Status:} Superseded by D-N2 and D-N4 for executable, product-visible,
+test, and new-save filename identity. The Illumo repository/library/host name
+and legacy \texttt{.illumo} loading remain valid.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -578,7 +588,10 @@ Debug configuration.\\
 and instrumentation are development tools, not Release product behavior.\\
 \textbf{Consequences:} Shared command/logging service code may remain available
 to tests or non-UI systems, but Release must contain no DebugModule object or
-module registration. Audit this boundary after CMake/composition changes.
+module registration. Audit this boundary after CMake/composition changes.\\
+\textbf{Status:} Still in force. Since D-E31 the overlay is
+\texttt{DebugOverlay}, which \texttt{RuntimeShell} creates only in debug-tool
+builds.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -676,6 +689,64 @@ without changing the MockBackend decision.
 \textbf{Decision:} Extend \symbolref{CommandLine} to support dynamic window modes and resizable floating window geometry. Mode switching is driven by double-clicking the console title bar or executing \texttt{console\_mode [floating|mounted|toggle]}. In floating mode, left-clicking and dragging the title bar repositions the window across the screen, and dragging the bottom-right corner grip handle (or running \texttt{console\_size <W> <H> | reset}) resizes the console window dynamically with real-time viewport clipping and single-batch quad rendering.\\
 \textbf{Why:} Enhances Developer Console usability, allows moving and scaling the console UI away from active grid regions, and provides modular window layout flexibility.\\
 \textbf{Consequences:} \symbolref{CommandLine} geometry (chrome, history text, input trough, scrollbar, ghost text, selection highlight) is computed relative to dynamic floating bounds \texttt{panelX0}, \texttt{panelX1}, \texttt{panelY0}, \texttt{panelY1}; mouse press/drag event dispatch accounts for floating position offset and corner resize bounds.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-UI4 --- Plain developer console with levelled, filterable output}
+\begin{decisionbox}[title={D-UI4 \quad 2026-09-23}]
+\textbf{Decision:} The developer console stops using the product
+\texttt{UiTheme} and draws with its own flat terminal palette: an opaque dark
+panel, one-pixel border and rules, a header, an output band anchored at the
+input, an input line, and a status bar (FPS/frame time, line counts, active
+filters, scroll position, contextual hint). No full-screen shade, drop shadow,
+pulsing accent, or panel easing remain; only the open/close slide animates.
+Output entries record a \texttt{ConsoleLevel}, a timestamp, and a repeat count
+(identical consecutive lines collapse). The buffer holds 2,048 entries;
+command recall keeps 256. New built-ins: \texttt{filter}, \texttt{loglevel},
+\texttt{timestamps}, \texttt{copy}, \texttt{savelog}, \texttt{exec},
+\texttt{bind}/\texttt{unbind} (F1--F12 except host-reserved F3, F5, F6, F11),
+\texttt{!!}/\texttt{!n}/\texttt{!prefix} recall, and \texttt{help <word>}
+search; a follow-up added Ctrl+R reverse search, \texttt{add},
+\texttt{cycle}, \texttt{watch}/\texttt{unwatch} (a live strip of up to eight
+variables), \texttt{writeconfig}, click-to-recall on echoed commands,
+severity marks, filter-match highlights, and a closed-console error/warning
+badge (\texttt{alerts}). Clipboard and file access go through
+\symbolref{CommandLineCore} virtual hooks and are compiled out of WASM
+guests.\\
+\textbf{Why:} The console is a debugging tool; styling it like the product
+menus blurred that line, and a debugging session needs severity filtering,
+repeat collapsing, scripts, and log export more than decoration.\\
+\textbf{Consequences:} Hidden entries wrap to zero lines, so D-UI2 scroll
+metrics and D-P2 settled replay are unchanged; a scrolled-back view stays
+anchored while output arrives. Log prefixes (\texttt{ERROR:} and so on) stay
+in entry text for compatibility. Guest console bridges forward collapsed
+repeats and restore the success level on the host.\\
+\textbf{Supersedes:} the console part of D-R20 (UiTheme styling)
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-UI5 --- Detached console window without a second GL context}
+\begin{decisionbox}[title={D-UI5 \quad 2026-09-23}]
+\textbf{Decision:} The developer console can pop out into its own OS window
+(header \texttt{pop out} button, \texttt{console\_mode detached}, or dragging
+the floating title bar past the game window's edge) and return (\texttt{dock}
+button, closing the window, or the console key from either window). The
+window is
+a GLFW \texttt{GLFW\_NO\_API} window owned by \symbolref{DebugModule}
+(\texttt{Platform/PixelWindow}); \texttt{SoftwareCanvas} rasterizes the same
+\symbolref{GameVisual} primitives the in-game console submits, and the
+platform presents the CPU image (Windows GDI; unsupported elsewhere).
+\symbolref{CommandLine} only raises detach/dock/close requests and composes
+at the detached window's size; while detached \texttt{isOpen} is false so the
+game keeps its input.\\
+\textbf{Why:} A second OpenGL context would break the single-context backend
+contract (unshared VAOs, cached device state); a CPU presenter keeps the
+renderer untouched and the console's look identical.\\
+\textbf{Consequences:} Console composition is split from token submission.
+Detached drawing costs a CPU raster only when composition is dirty (typing,
+caret blink, output). Linux reports detaching as unavailable. Headless tests
+cover the canvas and request logic; the OS window itself needs a manual
+Windows smoke.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -1475,6 +1546,36 @@ direct sparse output, and D-P32 paced presentation.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-P34 --- High-resolution timer frame pacing}
+\begin{decisionbox}[title={D-P34 \quad 2026-09-28}]
+\textbf{Decision:} \texttt{FramePacer} sleeps on a platform
+\texttt{PlatformWaitTimer} until the timer's wake latency before its deadline,
+then spins. On Windows the timer is a high-resolution waitable timer
+(\texttt{CREATE\_WAITABLE\_TIMER\_HIGH\_RESOLUTION}, Windows 10 1803 and
+later) held behind an opaque handle with a 1\,ms latency; elsewhere, or when
+it is unavailable, \texttt{sleep\_for} with a 3\,ms latency. The run-scoped
+\texttt{timeBeginPeriod(1)} and the hitch reset remain.\\
+\textbf{Why:} The pacer slept in 1\,ms \texttt{sleep\_for} steps while more
+than 3\,ms remained, which relies on the process timer resolution. Windows 11
+ignores a process's resolution request while its windows are occluded or
+minimized, and a 1\,ms sleep then lasts up to a 15.6\,ms tick. A Tracy capture
+at \texttt{fps 60} on a 144\,Hz display showed \texttt{Frame.Pacing} zones of
+21--33\,ms in about 8\% of frames. Forcing that policy on the runtime
+(\texttt{PROCESS\_POWER\_THROTTLING\_IGNORE\_TIMER\_RESOLUTION}) reproduced it
+in the menu benchmark: \texttt{Frame.Pacing} p95 26.4\,ms, 13\% of zones above
+20\,ms, benchmark frame interval p95 28.4\,ms.\\
+\textbf{Consequences:} The same forced run measured \texttt{Frame.Pacing} p95
+16.0 and maximum 16.1\,ms, no zone above 20\,ms and a frame interval p95 of
+16.7\,ms; foreground, occluded and canvas runs keep a 16.67\,ms p95 cadence.
+The final spin shrinks from 2--3\,ms to about 0.5\,ms a frame, since the timer
+wakes about 0.5\,ms late. \texttt{Illumo.Presentation.PacingSleepPrecision}
+checks timer precision and 100\,FPS cadence without a raised timer resolution.
+Occasional 50--160\,ms stalls of the whole main thread, seen before and after
+the change, are outside the pacer.\\
+\textbf{Refines:} D-P32 paced presentation.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
 \subsection*{D-C6 --- Configurable infinite or finite toroidal world}
 \begin{decisionbox}[title={D-C6 \quad 2026-08-17}]
 \textbf{Decision:} Keep \texttt{0 x 0} as the existing infinite,
@@ -1635,6 +1736,24 @@ existing file contract.\\
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-N4 --- CSim is the simulator product identity}
+\begin{decisionbox}[title={D-N4 \quad 2026-09-16}]
+\textbf{Decision:} Present the cellular simulator as \textbf{CSim} in its
+window, menus, console, CLI help, native dialogs, and user-facing messages.
+Use \texttt{.csim} for newly named save files. Retain \texttt{IllumoGame} for
+technical executable, CMake target, source-tree, and test identifiers, and
+continue loading existing \texttt{.illumo} files.\\
+\textbf{Why:} CSim is the client application's product name, while Illumo is
+the reusable engine/library and IllumoGame is an implementation identifier.\\
+\textbf{Consequences:} Save commands and dialogs default to \texttt{.csim};
+extensionless loads try \texttt{.csim} before legacy \texttt{.illumo}. Save
+magic, version 4 structure, and version 3/2/dense compatibility remain
+unchanged. Existing files require no migration.\\
+\textbf{Supersedes:} D-N2 for product-visible simulator identity and D-N1/D-N2
+for the canonical new-save extension.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
 \subsection*{D-N3 --- IllEd is the world-editor identity}
 \begin{decisionbox}[title={D-N3 \quad 2026-08-29}]
 \textbf{Decision:} Add \textbf{IllEd} as a second in-tree Illumo application.
@@ -1668,10 +1787,63 @@ document and owns \texttt{MeshVisual} attachments. Extra JSON keys may be
 ignored; unknown kinds and cycles fail closed. Promote the codec into Illumo
 when a second loader exists. This does not change \texttt{.illumo} or CA
 persistence.\\
-\textbf{Refines:} D-E8.
+\textbf{Refines:} D-E8.\\
+\textbf{Superseded by:} D-E18 and D-E19 (2026-09-23). The codec moved into
+\texttt{Illumo::Content} once every program needed it, and version 1 is no
+longer read.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
+\subsection*{D-E11 --- Attachment bounds and camera-relevant shadows}
+\begin{decisionbox}[title={D-E11 \quad 2026-09-16}]
+\textbf{Decision:} Add finite ordered \symbolref{AxisAlignedBounds3} and an
+optional local-bounds query to \symbolref{ISceneRenderAttachment}.
+\symbolref{SceneGraph} transforms those bounds on demand, exposes world bounds,
+and rejects only attachments wholly outside the active camera frustum during
+its existing iterative O(n) traversal. Unknown or invalid bounds and matrices
+fail open, survivor order is stable, and a culled parent attachment does not
+prune children.\
+\textbf{Decision:} \symbolref{Renderer} retains directional-shadow caster
+descriptors for the frame. The first camera-visible caster selects the light;
+the reconstructed camera frustum is conservatively extruded toward it by the
+caster's configured horizon (100 world units by default). Only intersecting
+bounds contribute to the fitted shared light projection or emit depth tokens.
+Invalid camera reconstruction preserves the former all-caster behavior.
+\symbolref{MeshVisual} reports immediate conservative bounds for procedural,
+managed-mesh, and sprite geometry; billboard sprites use a view-independent
+enclosure. A frame serial resets previous-MVP history after a culling gap.\
+\textbf{Why:} The graph could express hierarchy but not visibility, while the
+shared shadow fit paid for and expanded around casters that could not affect
+the camera-visible region. Attachment-authoritative bounds reduce token and
+shadow work without changing node storage or ownership.\
+\textbf{Consequences:} Direct \symbolref{MeshVisual} drawables and graph
+attachments share the same Renderer-owned camera and shadow tests. Skyboxes and
+attachments without reliable bounds continue rendering. No BVH, octree,
+subtree-bound cache, persistence change, picking migration, or second shadow
+map is introduced.\
+\textbf{Refines:} D-E8, D-R21, and D-R22.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-E12 --- Compiled SceneGraph v2}
+\begin{decisionbox}[title={D-E12 \quad 2026-09-17}]
+\textbf{Decision:} Replace v1 node storage with authoritative SoA/TRS state,
+intrusive ordered links, lazy compiled preorder, dirty watermark propagation,
+revision-cached attachment and subtree bounds, and a derived binned-SAH query
+index. Expose interned names, opaque payloads, ordered borrowed attachments,
+handle queries, and an overflow-signaled 4,096-entry change journal. IllEd edits
+this graph incrementally while retaining its file recipes and exact picking.\\
+\textbf{Rationale:} Constant-time transform invalidation, stable identity,
+allocation-free warmed frames, and bounded consumer updates resolve measured
+v1 costs without introducing components, scene serialization, or backend policy.\\
+\textbf{Consequences:} World getters remain ancestor walks; cache allocation
+failure uses authoritative/linear fallbacks. Matrix setters now explicitly
+lose shear through TRS decomposition. Warm indexed queries still poll bounds
+revisions linearly. Generic WorkerPool remains separate from CA worker policy;
+parallel scene stages remain measurement-gated. Supersedes the internal storage
+and linear-only restrictions of D-E8/D-E11. See the v2 plan for validation.
+\end{decisionbox}
+
 \subsection*{D-G1 --- Pattern I/O is a side path, not save v4}
 \begin{decisionbox}[title={D-G1 \quad 2026-08-21}]
 \textbf{Decision:} Editor selection, in-app \texttt{CellPattern} buffers, Golly-style
@@ -1720,7 +1892,11 @@ canvas.\\
 \textbf{Consequences:} Console, FPS, and renderer-demo remain available across
 module transitions. Release still neither compiles nor registers
 \symbolref{DebugModule}. The former Debug-only leftover Escape-to-close-window
-path is removed; confirmed shutdown stays on the product Q/Exit surfaces.
+path is removed; confirmed shutdown stays on the product Q/Exit surfaces.\\
+\textbf{Status:} Refined by D-E31. The order stands with
+\texttt{DebugOverlay}: \texttt{RuntimeShell} updates it before the program and
+dispatches it after, and \texttt{Illumo::endUpdate} discards unconsumed
+events.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -1749,6 +1925,32 @@ path.\\
 camera. No render graph, materials, or model loader.\\
 \textbf{Refines:} D-R14, D-R15. Overlay vs world remains a camera/layer split,
 not a 2D engine vs 3D engine.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-R22 --- One scene-level directional shadow pass}
+\begin{decisionbox}[title={D-R22 \quad 2026-09-16}]
+\textbf{Decision:} Directional shadows are extracted once per rendered scene,
+before color passes. Visible World drawables and
+\symbolref{ISceneRenderAttachment} values contribute transformed triangle
+bounds and depth tokens. \symbolref{Renderer} fits one orthographic light-space
+matrix to the combined caster bounds, reuses one depth framebuffer, clears it
+once, renders every caster, and exposes the same matrix and texture to all
+receivers. \symbolref{SceneGraph} forwards collection, depth, and color phases
+through its existing iterative enabled/visible transform traversal.
+\symbolref{MeshVisual} retains geometry and per-receiver bias/filter values but
+owns no shadow framebuffer.\
+\textbf{Why:} A private map in each MeshVisual repeated the pass for every
+object and could contain only that object's geometry, so separate objects could
+not shadow one another. Fitting every private map around the origin also clipped
+translated casters.\
+\textbf{Consequences:} Direct World meshes and graph attachments shadow each
+other in one pass. Frame-list order deterministically selects the first visible
+caster's directional light; maximum requested map size, minimum radius, and
+light distance cover the participating set. Existing MeshVisual tuning setters
+remain source-compatible. The change adds no render graph, retained culling
+structure, backend API, or persistence format.\
+\textbf{Refines:} D-R14 and D-R21.
 \end{decisionbox}
 
 %----------------------------------------------------------------------------
@@ -1791,7 +1993,460 @@ the same way; it still rejects combined coverage.\\
 details.
 \end{decisionbox}
 
+\subsection*{D-R22 --- Cubemap and SkyboxVisual rendering}
+\begin{decisionbox}[title={D-R22 \quad 2026-09-04}]
+\textbf{Decision:} The rendering subsystem supports 3D environment skyboxes via
+cubemaps:
+\begin{itemize}
+  \item \symbolref{IBackend} gains \texttt{CreateCubemap} allocating a
+        generational \symbolref{TextureHandle} bound to
+        \texttt{GL\_TEXTURE\_CUBE\_MAP} with 6 face uploads, seamless filtering,
+        and \texttt{GL\_CLAMP\_TO\_EDGE} wrap.
+  \item \symbolref{AssetManager} loads individual face files via
+        \texttt{acquireCubemap} and automatically extracts 6 faces from horizontal
+        crosses (4:3), vertical crosses (3:4), and strips (6:1) via
+        \texttt{acquireCubemapFromCross}.
+  \item Built-in style \texttt{RenderStyleId::Skybox} renders a unit cube
+        at the far depth plane using \texttt{pos.xyww} projection,
+        \texttt{GL\_LEQUAL} depth testing, and no backface culling.
+  \item \symbolref{SkyboxVisual} is the world cubemap host and
+        \symbolref{ISceneRenderAttachment}, emitting tokens with a
+        translation-stripped camera view-projection matrix. Consuming
+        viewers (e.g. \texttt{IllMeshViewer}) expose live toggles and runtime
+        configuration.
+\end{itemize}
+\textbf{Why:} 3D scene visualization and model viewing require environment
+context without polluting the backend-neutral token queue or breaking the
+single-pipeline render model.\\
+\textbf{Consequences:} \pathref{SkyboxVisual.h}, \pathref{GLTexture.h},
+\pathref{IBackend.h}, \pathref{AssetManager.h}; tested via headless mock tokens
+and E2E suite; integrated into \texttt{IllMeshViewer}.
+\end{decisionbox}
+
 %----------------------------------------------------------------------------
+\subsection*{D-R23 --- Pixel clipping and conservative quad culling}
+\begin{decisionbox}[title={D-R23 \quad 2026-09-15}]
+\textbf{Decision:} During pixel-space rebuilds, \symbolref{GameVisual} tests
+each final quad against the logical viewport and omits wholly excluded geometry
+before buffer upload. An optional top-left logical-pixel clip further narrows
+that rectangle. Partial overlap emits ordinary geometry bracketed by
+\texttt{Renderer::pushClipRect}/\texttt{popClipRect}; the renderer intersects
+nested physical-pixel scissors and restores the prior state.\\
+\textbf{Why:} Offscreen UI, sprites, and glyphs previously consumed dynamic
+quad capacity, CPU vertex writes, upload bytes, and vertex work even though the
+viewport or a product clip discarded every fragment. Existing low-level
+scissor tokens could clip pixels but did not remove that work or safely nest.\\
+\textbf{Consequences:} Painter order, adjacent-only batching, partial-primitive
+rasterization, and explicit low-level scissor emission are preserved. Window
+or UI-scale changes invalidate the cached pixel cull rectangle and rebuild
+visibility. World-space \symbolref{GameVisual}, \symbolref{MeshVisual}, and
+SceneGraph extraction are unchanged; no frustum hierarchy or spatial index is
+introduced.
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-R24 --- Shared immutable mesh assets}
+\begin{decisionbox}[title={D-R24 \quad 2026-09-16}]
+\textbf{Decision:} Extend \symbolref{AssetManager} with reference-counted
+immutable static meshes. Canonical file paths plus geometry-affecting
+\texttt{MeshLoadOptions} identify cached uploads; in-memory \texttt{MeshData}
+can be enrolled once and explicitly retained. \symbolref{MeshVisual} borrows the
+managed \texttt{MeshHandle} and immutable draw count while keeping only
+per-instance transform, tint, lighting, shadow, and motion state. Procedural
+lines, shapes, and sprites retain their visual-owned dynamic buffers.\\
+\textbf{Why:} Copying imported vertices into every \symbolref{MeshVisual}
+duplicated CPU storage and GPU uploads for nodes that displayed the same model.
+Backend generational mesh handles already supplied the stable binding needed to
+separate resource lifetime from instance state.\\
+\textbf{Consequences:} Two nodes can draw one uploaded mesh with independent
+world transforms and tint. Final manager release destroys the backend resource;
+visual destruction does not. Mesh loading and enrollment are synchronous and
+main-thread affine in this milestone. Materials, mesh hot reload, and automatic
+instance aggregation remain deferred until a measured workload justifies their
+additional contracts.\\
+\textbf{Refines:} D-R17's earlier texture/shader-only managed scope and D-R21's
+world-mesh host.\\
+\textbf{Superseded in part by:} D-R28 (instance aggregation)
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-R25 --- Immutable scene snapshot boundary}
+\begin{decisionbox}[title={D-R25 \quad 2026-09-17}]
+\textbf{Decision:} SceneGraphDrawable consumes one graph-owned immutable view
+per renderer frame for collection, depth, and color. Two retained buffers carry
+ordered matrices, bounds, node handles, and borrowed attachment pointers.
+Validate view lifetime before every callback; stale views report frame errors.
+Renderer/token/backend contracts and main-thread execution remain unchanged.\\
+\textbf{Rationale:} Rendering no longer traverses mutable hierarchy three times.
+Explicit invalidation separates graph mutation from borrowed-content lifetime.\\
+\textbf{Consequences:} Ordinary edits affect the next snapshot; attachment
+changes, destruction, ring reuse, and teardown retire views. Already emitted
+payloads still outlive submission. Shared light fitting follows collection,
+so shadow relevance uses snapshot bounds in the depth pass; off-camera casters
+remain present. A one-release sceneSnapshotExtraction switch retains direct
+traversal. Recorded payloads and GL-context migration require a separate decision.\\
+\textbf{Refined by:} D-R28 (host-owned recorded lists; the GL context stays)
+\end{decisionbox}
+
+\subsection*{D-CAP1 --- Bounded standalone rendering and charter baseline}
+\begin{decisionbox}[title={D-CAP1 \quad 2026-09-11}]
+\textbf{Decision:} Reuse the token renderer for direct and SceneGraph frame capture
+in a hidden OpenGL context. Capture owns a bounded service lifetime, not an
+application loop. Readback and strict diagnostics are public contracts; PNG
+publication does not replace existing artifacts.
+\textbf{Why:} The owner authorized the first two charter milestones: reliable
+baseline behavior and independently usable rendering tools.
+\textbf{Consequences:} Input IDs are validated, retired and never reused within
+a manager; generated copies record commit/dirty/unknown provenance. Broader 3D
+framework direction is separate from current code. Physics, object destruction,
+shared ticks, additional backends and Linux support remain later work. Existing
+application and persistence contracts remain. See the milestone execution plan.
+\end{decisionbox}
+
+\subsection*{D-L1 --- Product close negotiation}
+\begin{decisionbox}[title={D-L1 \quad 2026-09-13}]
+\textbf{Decision:} The runner explicitly negotiates a pending native close with
+started modules through optional \texttt{OnCloseRequested}. Default acceptance
+preserves existing consumers; deferral clears the window flag and keeps frames
+running. Required startup/transition failure remains terminal.
+\textbf{Why:} Native close previously bypassed IllEd's unsaved-document guard.
+\textbf{Consequences:} IllEd routes native and toolbar exit through its existing
+Save/Discard/Cancel confirmation. Approved discard may close a dirty document.
+Custom windows used with deferring modules implement close cancellation. No
+editor policy moves into Illumo.
+\end{decisionbox}
+
+\subsection*{D-IO1 --- Finalized save publication}
+\begin{decisionbox}[title={D-IO1 \quad 2026-09-13}]
+\textbf{Decision:} Product saves use the shared platform atomic-file operation:
+exclusive sibling staging, writer/flush/close checks, then replacement.
+\textbf{Why:} Direct truncation destroyed prior valid saves before late I/O
+errors could be reported.
+\textbf{Consequences:} Product formats and encoders remain product-owned.
+Failure leaves prior destination bytes intact. This is not a power-loss
+durability or security-metadata preservation guarantee. Windows is verified;
+POSIX rename remains unverified scaffolding.
+\end{decisionbox}
+
+\subsection*{D-RP1 --- Host defaults and application pass precedence}
+\begin{decisionbox}[title={D-RP1 \quad 2026-09-13}]
+\textbf{Decision:} Scene retains host default pass lists separately from
+application overrides. Nonempty overrides take precedence; clearing them
+restores the current fallback. Host motion blur writes only defaults.
+\textbf{Why:} Per-frame host configuration previously erased passes installed
+in module Start or Update.
+\textbf{Consequences:} Existing application setters remain available. Empty
+lists and reset restore defaults. Effective pass queries include fallbacks.
+Resource ownership and synchronous token submission remain unchanged.
+\end{decisionbox}
+
+\subsection*{D-GC1 --- Product-owned rules catalog discovery}
+\begin{decisionbox}[title={D-GC1 \quad 2026-09-14}]
+\textbf{Decision:} Game's RuleCatalogLoader owns catalog file reads and ordered
+discovery. The required-module factory loads the singleton once before either
+menu or direct-game construction. RuleSetRegistry constructs built-ins and
+accepts catalog text with transactional validation.\\
+\textbf{Why:} Domain registry construction previously called Win32 and read
+ambient files, contradicting the Rulesets dependency boundary.\\
+\textbf{Consequences:} Executable/current/product-directory precedence and
+first-valid fallback remain. Product C++ file-loading calls migrate to the
+loader; independent registries require explicit catalog loading. No engine
+API or catalog format changes. Native path discovery stays engine-owned.
+\end{decisionbox}
+
+\subsection*{D-GC2 --- Data-driven rules and runtime workshop}
+\begin{decisionbox}[title={D-GC2 \quad 2026-09-15}]
+\textbf{Decision:} Shipped and custom rules use versioned JSON definitions
+compiled into data-backed rules. Keep the schema-v1 reader and stable rule IDs;
+layer the working-directory \pathref{rulesets.user.json} after the selected
+base catalog. F2 edits a staged custom rule and Save \& Apply drains the
+simulation, validates live states, atomically persists the draft, then
+activates it.\\
+\textbf{Supersedes:} D-GC1's built-in-construction clause; its file-discovery
+and Rulesets dependency-boundary clauses remain in force.\\
+\textbf{Why:} Ruleset behavior and palettes should have one data source, and
+specific rule experiments should not require recompiling or silently changing
+IDs already stored in worlds.\\
+\textbf{Consequences:} Life-like, Generations, Moore-table, and elementary 1D
+families compile through the existing simulator contracts. The sparse-domain
+background/counting invariants and \texttt{.illumo} v3 format stay unchanged.
+Moore tables remain JSON-edited; the in-game menu focuses on common family
+parameters and palettes. A custom world still requires its rule catalog at
+load time.
+\end{decisionbox}
+
+\subsection*{D-GC3 --- Separate ruleset identity from family}
+\begin{decisionbox}[title={D-GC3 \quad 2026-09-15}]
+\textbf{Decision:} Keep each ruleset's stable ID and display name independent
+from a typed \texttt{RuleFamily}. The Ruleset Workshop exposes starter rule,
+family, and ruleset name as separate choices. Changing family retains the
+custom ID/name and loads that family's starter parameters.\
+\textbf{Why:} A family describes transition semantics; it should not be
+conflated with the named, save-referenced rule that uses those semantics.\
+\textbf{Consequences:} Schema-v1/v2 JSON family strings and existing
+\texttt{.illumo} rule IDs remain unchanged. Family conversion is explicit at
+the registry boundary and the workshop rebuilds controls for the selected
+family.\
+\end{decisionbox}
+
+\subsection*{D-GC4 --- Family-owned cell schemas and pair persistence}
+\begin{decisionbox}[title={D-GC4 \quad 2026-09-15}]
+\textbf{Decision:} Store family and ruleset as separate data definitions.
+Families own the cell-state schema, labels, colors, and simulation model;
+every ruleset references exactly one family and owns its transition behavior.
+F1, New Simulation, runtime status, and saves carry the validated pair.
+Write \texttt{.illumo} version 4 with both IDs and retain readers that derive
+the family from the rule in older saves. Layer
+\pathref{families.user.json} and \pathref{rulesets.user.json} together after
+the selected valid base catalog pair.\\
+\textbf{Supersedes:} D-GC2's single rules overlay and version-3 save outcome;
+D-GC3's separation of UI identity is retained and now has separate family data.\\
+\textbf{Why:} Cell appearance and available states are family properties;
+transition parameters belong to one named ruleset bound to that family. This
+keeps cell schemas reusable while preventing meaningless cross-family pairs.\\
+\textbf{Consequences:} Legacy catalogs normalize in memory, old save formats
+remain readable, and pair validation occurs before catalog or world mutation.
+Built-in family edits become custom copies; user families are persisted before
+the rules that reference them.
+\end{decisionbox}
+
+\subsection*{D-GC5 --- Isolated cyclic multistate interaction}
+\begin{decisionbox}[title={D-GC5 \quad 2026-09-15}]
+\textbf{Decision:} Add a typed \texttt{cyclic} family whose rules advance a
+cell by a nonzero coprime step when a threshold number of Moore neighbors hold
+that successor state. Expose full 256-state neighbor counts through
+\texttt{RuleSet}; evaluate them in a separate serial sparse kernel that reuses
+transactional output and change journals.\\
+\textbf{Why:} Count-of-state-zero and Moore-table models cannot express many
+cell kinds directly chasing one another. A general pairwise language would be
+harder to author and unnecessary for the requested dynamic ecology.\\
+\textbf{Consequences:} Existing optimized binary/counting paths and save
+formats remain unchanged. State 1 stays sparse background and is quiescent
+without successor neighbors. Cyclic rule JSON owns threshold and step; the
+workshop edits both. The first histogram kernel prioritizes determinism and
+correctness over parity with specialized sparse performance.
+\end{decisionbox}
+
+\subsection*{D-GC6 --- Researched interaction and extended-range families}
+\begin{decisionbox}[title={D-GC6 \quad 2026-09-15}]
+\textbf{Decision:} Add typed \texttt{species\_life} and
+\texttt{larger\_than\_life} families. Colorized Life uses the existing
+full-state Moore histogram to preserve or select a live species.
+Larger-than-Life adds a bounded extended-range contract with square/circular
+shape, optional center counting, and inclusive transition intervals; its first
+sparse implementation is an isolated serial correctness kernel. Store an
+optional deterministic starter strategy with each rule.\\
+\textbf{Why:} Documented multi-species, long-decay, cyclic, and wide-range
+systems provide visibly different interactions, but a Life glider is not a
+meaningful initial condition for most of them. Repeated radius-one updates are
+not equivalent to a wide-neighborhood rule.\\
+\textbf{Consequences:} Immigration, QuadLife, Bosco/Bugs, Bugsmovie, Globe,
+Banners, Transers, Fireworks, and classic 14-color CCA ship as data. Existing
+catalog files remain readable because the new keys are additive. B0 remains
+invalid for sparse infinite worlds; extended range is capped at 16 and does not
+use the specialized radius-one candidate, memo, or worker paths. Starter soups
+are coordinate-hashed and repeatable. Continuous and block-partitioned
+automata remain out of scope.
+\end{decisionbox}
+
+\subsection*{D-GC7 --- Directional agents, lattice gas, and multilevel chemistry}
+\begin{decisionbox}[title={D-GC7 \quad 2026-09-15}]
+\textbf{Decision:} Add typed \texttt{hodgepodge}, \texttt{turmite},
+\texttt{lattice\_gas}, and \texttt{dominance} families. Preserve cardinal
+direction through a four-entry von Neumann rule contract and an isolated serial
+sparse evaluator. Reuse the complete Moore histogram for chemical levels and
+species predators. Keep state 1 as sparse background through explicit state
+encoding maps.\\
+\textbf{Why:} Unordered live counts cannot express moving directional agents,
+particle streaming, or weighted chemical infection. These models add genuinely
+different interactions while still fitting the byte-state synchronous domain.\\
+\textbf{Consequences:} RL/RRL/RRLL Turmites, 16-state HPP gas, 101-level
+Hodgepodge, and five-species RPSLS ship as data. Directional and histogram
+kernels publish transactionally but initially remain serial. Multi-agent
+Turmite collisions annihilate deterministically. The synchronous RPSLS rule is
+inspired by, not identical to, stochastic Monte Carlo scheduling. FHP/hexagonal
+gas, continuous chemistry, and generic Turing-machine controllers remain out of
+scope.
+\end{decisionbox}
+
+\subsection*{D-GC8 --- Rule tables, sandpiles, long-range cycles, and trails}
+\begin{decisionbox}[title={D-GC8 \quad 2026-09-23}]
+\textbf{Decision:} Add typed \texttt{von\_neumann\_table} and
+\texttt{sandpile} families on the existing directional contract. Rule tables
+are stored as Golly \texttt{@TABLE} text (variables, comma or compact
+transitions, \texttt{none}, \texttt{reflect\_horizontal},
+\texttt{rotate4}, \texttt{rotate4reflect}, or \texttt{permute} symmetry) and
+compile to a dense $n^5$ lookup for at most twelve states with Golly
+semantics: first match wins, repeated variables bind, unmatched neighborhoods
+keep their center, and Golly state 0 swaps with Illumo background state 1.
+Sandpiles use heights 0--7 plus a pulsed grain source whose phase count comes
+from the family. Cyclic rules gain an optional range and square, circular, or
+diamond shape and an optional inert background that is not a phase of the
+cycle; Larger than Life gains the diamond shape and Golly's C-state
+decay trail. Extended-range kernels count the state named by
+\texttt{RuleSet::getExtendedCountedState} and read a per-target halo window.
+Rules may carry an exact Golly-RLE starter.\\
+\textbf{Why:} Self-replicating loops, sandpile fractals, Griffeath spirals, and
+trailing Larger-than-Life spaceships are well-documented behaviors that the
+unordered-count and radius-one cyclic contracts could not express. Storing
+published tables verbatim keeps them auditable against their sources.\\
+\textbf{Consequences:} Langton, Byl, Chou--Reggia, SDSR, and Evoloop loops,
+three sandpile starters, six Griffeath rules, four trailing LtL rules, and 45
+classic Life-like and Generations rules ship as data. Loop evolution is checked
+against an independent reference implementation. Radius-one square cyclic rules
+keep the Moore histogram path and serialized form. A full cycle advances the
+empty background too, so long-range soups would grow without bound on the
+infinite canvas; the shipped Griffeath rules use the inert background, while
+existing full-cycle rules are unchanged. The halo window replaces
+per-neighbor hash lookups for extended and directional rules without changing
+their results; the kernels remain serial and use the existing transactional
+publication. Moore-neighborhood tables, JvN29-scale state counts, and
+Margolus partitioning remain out of scope.\\
+\textbf{Extends:} D-GC6, D-GC7
+\end{decisionbox}
+
+\subsection*{D-GC9 --- Lenia as quantized weighted-kernel rules}
+\begin{decisionbox}[title={D-GC9 \quad 2026-09-25}]
+\textbf{Decision:} Add a typed \texttt{lenia} family model on a new
+\texttt{WeightedKernel} neighborhood contract instead of a floating-point cell
+domain. Cells stay bytes: a family of $n \le 256$ states holds intensity
+levels $0..n-1$ (background state 1 is level 0, states $2..n-1$ are levels
+$1..n-2$, state 0 is the full level). Rules carry Lenia's radius $R \le 16$,
+time steps $T$, growth centre $\mu$ and width $\sigma$, one to four kernel
+ring peaks $\beta$, and polynomial, exponential, or step core and growth
+shapes. Compilation quantizes the normalized kernel to integer tap weights and
+$G(u)/T$ to a fixed-point level delta per potential bin, evaluating
+exponentials with a deterministic series rather than the platform
+\texttt{exp}. The evaluator sums weight $\times$ level exactly in integers and
+rounds the clipped update to the nearest level, which is Lenia's own
+$P$-quantized update with $P = n-1$.\\
+\textbf{Why:} Lenia's continuous state fits the sparse byte domain once it is
+quantized, and Chan defines state resolution $P$ as part of the model. Keeping
+bytes reuses storage, saves, presentation, editing, and simulation lanes
+unchanged. Exact integer potentials and platform-independent tables keep the
+control store, WASM lanes, and native oracle bit-identical, which lane parity
+requires.\\
+\textbf{Consequences:} A 256-level family and six species (Orbium, Orbium
+bicaudatus, Gyrorbium, Scutium, Discutium, Paraptera) ship with
+\texttt{lenia\_rle} starters from Chan's MIT-licensed catalogue; Orbium's
+quantized evolution matches an independent numpy model exactly and glides.
+Growth that raises empty space is rejected so the infinite canvas stays sparse.
+The kernel is serial and direct ($O(R^2)$ taps per cell); larger worlds rely
+on simulation lanes. Species with $R > 16$, FFT convolution, multi-channel and
+multi-kernel Lenia, and exact floating-point states remain out of scope.\\
+\textbf{Extends:} D-GC6, D-GC8
+\end{decisionbox}
+
+\subsection*{D-GC10 --- Every cell family on the worker pool}
+\begin{decisionbox}[title={D-GC10 \quad 2026-09-25}]
+\textbf{Decision:} The full-state histogram, directional, extended-range, and
+weighted-kernel models share one chunk-parallel driver on the grid's worker
+pool. Target discovery is serial; each target chunk is evaluated from its own
+per-worker halo window (the grid-wide window is gone); the change journal and
+inactive-map publication run serially in target order. Work above 131,072
+neighbor reads (target cells times per-cell kernel work) uses up to eight
+workers, so wide kernels parallelize from two targets. Elementary 1D computes
+its next row in bounded blocks split across the pool and writes it serially.
+The pool gains a generic indexed-job entry point with stable per-thread slots.\\
+\textbf{Why:} Only the radius-one count-table paths used the pool, leaving
+colorized Life, cyclic, Hodgepodge, dominance, Turmites, HPP, rule tables,
+sandpiles, Larger than Life, and Lenia on one thread. Their targets were already
+independent reads of a frozen source, so parallel evaluation needs no change to
+rule contracts or results.\\
+\textbf{Consequences:} Every shipped rule is checked to publish byte-identical
+generations with one and four workers on infinite and toroidal worlds, and each
+neighborhood kind is checked to dispatch more than one worker. The histogram
+kernel now reads a one-cell halo window instead of hashing each neighbor. The
+WASM guest still compiles the pool serially; in the package, simulation lanes
+remain the parallelism (for every rule since D-E29). The optimized
+radius-one candidate, frontier, and memo paths are unchanged.\\
+\textbf{Extends:} D-GC5, D-GC6, D-GC8, D-GC9
+\end{decisionbox}
+
+\subsection*{D-DEP1 --- Narrow public math dependency exposure}
+\begin{decisionbox}[title={D-DEP1 \quad 2026-09-14}]
+\textbf{Decision:} Illumo exports its public headers and a CMake-managed GLM-only
+include directory. Other vendor roots remain private.\\
+\textbf{Why:} Public math types intentionally expose GLM, but exporting the
+entire thirdparty parent directory exposed unrelated libraries too.\\
+\textbf{Consequences:} GLM header paths and types remain unchanged. Configure
+tracks header content and membership; deleted headers leave the generated
+include tree. Vendored sources and versions are unchanged. Consumers of other
+vendor APIs must declare those dependencies explicitly.
+\end{decisionbox}
+
+\subsection*{D-PROF1 --- Bounded in-game frame timing pie}
+\begin{decisionbox}[title={D-PROF1 \quad 2026-09-14}]
+\textbf{Decision:} Illumo owns a fixed 120-frame main-thread elapsed-time
+collector. DebugModule borrows it explicitly and renders a navigable GameVisual
+pie in Debug and RelWithDebInfo.\\
+\textbf{Why:} In-game attribution exposes expensive frame phases without
+requiring a separate profiler client. CPU command submission and presentation
+must be separate so pacing is not mistaken for rendering work.\\
+\textbf{Consequences:} No GPU timing or asynchronous worker totals are included.
+The collector is off by default; enabling does not depend on FPS, memory, or
+Tracy. Number-key capture covers both events and polling without synthetic
+releases. Existing context ownership, module order, and rendering tokens remain.
+\end{decisionbox}
+
+\subsection*{D-UI1 --- One shared menu shell for primitive-composed overlays}
+\begin{decisionbox}[title={D-UI1 \quad 2026-09-16}]
+\textbf{Decision:} Overlay behavior that more than one screen needs lives in
+\symbolref{Illumo/Gui/GuiMenuShell}: \symbolref{GuiEasing} curves,
+\symbolref{GuiMenuAnimator} reveal/row-stagger/selection/value-pulse/ambient/
+caret clocks with reduced motion, \symbolref{GuiPanelLayout} virtual-resolution
+fitting plus row-window and wheel arithmetic, and \symbolref{GuiPointerTracker}
+virtual-space pointer sampling with press-edge detection. IllumoGame's menus
+compose it instead of carrying private copies.\\
+\textbf{Why:} Drawing and color were already shared through GuiKit and UiTheme,
+but each menu had re-derived the same clocks, easing curve, UI-scale fit,
+scroll clamping, and mouse-edge bookkeeping. Adding another interface meant
+copying that machinery again, and the copies had already drifted in their
+scale floor and reveal durations.\\
+\textbf{Consequences:} A new screen supplies only its rows, layout constants,
+and GameVisual composition. Menu timings are defined once, so theming and
+animation stay consistent across screens. NewSimulationMenu adopts the shared
+0.25 scale floor and the shared panel reveal in place of its own 0.35\,s
+entrance; its per-row focus weights remain screen-local. MainMenuModule keeps
+its slower title-screen entrance clock. GuiDialog keeps its own dialog-fitted
+layout and clocks and shares only the easing curve. No retained widget tree is
+introduced, and GuiMenuShell performs no drawing. IllEd's docked panels and
+IllMeshViewer's overlay adopt the same shell for pointer edges, easing, and
+viewport resolution: \symbolref{GuiPanelLayout::viewport} anchors docked chrome
+to the real window where \symbolref{GuiPanelLayout::fit} would wrongly impose
+the centered-overlay design floor. EditorModule keeps its own world-picking and
+gizmo drag state, which is world input rather than panel chrome.
+\end{decisionbox}
+
+\subsection*{D-R26 --- Gradient quads and living-glass menu chrome}
+\begin{decisionbox}[title={D-R26 \quad 2026-09-22}]
+\textbf{Decision:} \symbolref{GameVisual} gains
+\texttt{ShapeKind::GradientQuad}: convex, fan-ordered quads with one color per
+vertex, carried by the existing shape vertex format and shader. GuiKit composes
+soft chrome from them (glass panels, gradient surfaces, rounded bands for
+outlines, soft shadows and glows, radial glows, vignettes, sheens, keycaps).
+\symbolref{GuiMenuShell} adds \symbolref{GuiSpring} and
+\symbolref{GuiSpringArray} (closed-form damped springs), \texttt{outBack} and
+\texttt{inOutCubic} curves, and animator clocks for a stretching selection
+span, arrival sheen, press pulse and directional value pulse. Every IllumoGame
+menu and in-game overlay adopts the resulting ``living glass'' language, and
+the title screen runs a live Immigration Life world behind its panel.\\
+\textbf{Why:} The menus were tasteful but static: flat cards, a flat selection
+fill, and a decorative background hidden under an opaque fill. Soft light and
+physical motion need per-vertex color and springs; both fit the existing
+primitive stream without a new shader, blur pass, or widget tree.\\
+\textbf{Consequences:} Rounded rectangles pack two corner wedges per quad
+(27 quads become 15, same pixels, same three-rectangle prefix). Fades target
+the same color at zero alpha. Flat GuiKit helpers and GuiDialog's flat style
+are unchanged. Feedback animation never delays an action and never moves a hit
+area; overlays still close immediately and emit no commands when closed.
+Reduced motion snaps every spring and disables decorative motion. The title
+screen restores the saved ruleset preferences its \symbolref{CellContext}
+would overwrite and refreshes canvas targets after each advance. Runtime
+captures gain \texttt{--capture-script} and are saved opaque. No persistence,
+ABI, or frame-schema change.
+\end{decisionbox}
+
 \subsection*{Template for new entries}
 \begin{lstlisting}[language={}]
 \subsection*{D-0XX --- short title}
@@ -1802,3 +2457,1213 @@ details.
 \textbf{Supersedes:} D-0YY (optional)
 \end{decisionbox}
 \end{lstlisting}
+
+\subsection*{D-AUD1 --- Report contract corrections (2026-09-19)}
+D-R14 is refined by D-R22/D-RP1: ordered layers coexist with the shared shadow
+pass and configured offscreen/post passes. D-B1 includes Debug and RelWithDebInfo;
+Release excludes DebugModule. Native GPU identifiers are private GL implementation
+state; supported consumers use generational handles. D-C3's storage-independent
+rules boundary is completed by moving dense evaluation and reference adapters
+into test-only sources. No persistence format changes accompany these corrections.
+Renderer-bound primitives reject foreign lifetimes; rejected tokens or truncated
+geometry prevent frame presentation. See the report remediation plan for tests.
+
+\subsection*{D-E13 --- IllumoGame ships only as a WASM package}
+\begin{decisionbox}[title={D-E13 \quad 2026-09-22}]
+\textbf{Decision:} The complete IllumoGame product executes inside
+\texttt{IllumoGame.wasm}, hosted by the generic \texttt{IllumoRuntime.exe}
+(Windows x64, pinned Wasmtime 48.0.2). No native game executable is built.
+Inside the store, \symbolref{GuestModuleApplication} composes a guest-local
+\symbolref{IllumoContext} (window snapshot, input, storage-backed settings,
+camera, recording renderer, scene, console bridge, module host) so the
+existing modules, menus and workshop run unchanged. Product I/O goes through
+the product-owned \symbolref{CSimPlatform} seam; the simulation runner is
+serial in the guest. Frame schema version 2 adds the world camera, line and
+depth-tested batches, lit meshes and shadow casters so the 3D diagnostic
+renders through the host's shared shadow pass.\\
+\textbf{Why:} The design goal is a generic host that plays isolated game
+packages; keeping a native IllumoGame alongside the package made the host a
+second copy of the product.\\
+\textbf{Consequences:} \texttt{IllumoGameCore} remains only as the native test
+oracle for the shared sources. The default Windows build requires the pinned
+WASM toolchain; other hosts build no playable game until a Linux runtime pin
+exists. Host console built-ins address runtime settings, while game commands
+are trampolined into the package. Generations run inside the control call
+until a worker-store offload with asynchronous drains lands. The earlier
+rejection of compiling \texttt{CellGameModule} into the reactor is superseded
+because every context member is now a guest object.\\
+\textbf{Supersedes:} D-E7 (IllumoGame application seam)
+\end{decisionbox}
+
+\subsection*{D-E14 --- Every client program is a WASM package}
+\begin{decisionbox}[title={D-E14 \quad 2026-09-22}]
+\textbf{Decision:} Every interactive Illumo client program runs as a WASM
+package inside the one generic \texttt{IllumoRuntime.exe}. Packages live in
+\texttt{apps/<name>/} beside the runtime with an \texttt{app.json} manifest
+(\texttt{id}, \texttt{module}, optional \texttt{worker}, \texttt{title},
+\texttt{launchAccess} \texttt{read} or \texttt{edit}, requested budgets
+clamped to host ceilings) and private storage in \texttt{storage/<id>/}. The
+installed apps are \texttt{game} (\texttt{IllumoGame.wasm}), \texttt{illed}
+(\texttt{IllEd.wasm}) and \texttt{meshviewer} (\texttt{IllMeshViewer.wasm});
+the former \texttt{game/} directory and \texttt{game.json} are replaced.
+\texttt{--app} selects a package, \texttt{--open} grants one launch document
+whose base name alone reaches the guest (writable when the manifest says
+\texttt{edit}), and \texttt{--capture} renders to a chosen frame, writes a new
+PNG from the presented backbuffer and prints one JSON result, folding the
+standalone \texttt{IllumoCapture} executable into the runtime. Frame schema
+version 3 adds retained host meshes (\texttt{CreateMesh},
+\texttt{WriteMesh}, \texttt{ReleaseMesh}), cubemaps with \texttt{Skybox}
+batches, and a per-batch blend flag. IllEd and IllMeshViewer reach files and
+dialogs through the product-owned \texttt{IllEdPlatform} and
+\texttt{MeshViewerPlatform} seams.\\
+\textbf{Refined by:} D-E22 (2026-09-23): \texttt{illumo.json} replaces
+\texttt{app.json}, and packages may be \texttt{.ilpk} archives.\\
+\textbf{Why:} D-E13 proved the generic host with the game; keeping native
+editor, viewer and capture executables beside it left three programs outside
+the sandbox and a second capture path that did not render real applications.\\
+\textbf{Consequences:} \texttt{IllEd.exe}, \texttt{IllMeshViewer.exe} and
+\texttt{IllumoCapture.exe} are no longer built; \texttt{IllEdCore} and
+\texttt{IllMeshViewerCore} remain as native test oracles with
+\texttt{IllEdTests} and \texttt{IllMeshViewerTests}. The engine
+\symbolref{FrameCapture} API and the explicit \texttt{IllumoCaptureGpuTests}
+target remain; \texttt{tools/verify\_capture.py} drives
+\texttt{IllumoRuntime --capture}. IllEd save, open and close confirmation
+become asynchronous over opaque locations; \texttt{.ilsc} is unchanged.
+Motion blur and MSAA stay host policy. Linux, lacking a runtime pin, has no
+runnable applications and builds only the engine libraries and native test
+suites.\\
+\textbf{Extends:} D-E13 (IllumoGame WASM package)
+\end{decisionbox}
+
+\subsection*{D-E15 --- Host-chosen WASM engine modes}
+\begin{decisionbox}[title={D-E15 \quad 2026-09-22}]
+\textbf{Decision:} Code generation depends on \texttt{WasmEngineOptions}
+(fuel metering, explicit bounds checks). The host chooses them per store and
+passes them to the isolated compiler, so an artifact always matches the engine
+that deserializes it; a mismatch fails closed. Explicit guest bounds checks
+follow AddressSanitizer (\texttt{ILLUMO\_ENABLE\_ASAN}, default on for Debug),
+not \texttt{\_DEBUG}. Package manifests choose \texttt{metering}
+\texttt{fuel} (default) or \texttt{epoch}; the three first-party packages are
+epoch-only, mods stay fuel-metered, and \texttt{--fuel} forces metering for a
+launch. \texttt{build.py} adds the \texttt{dev} (RelWithDebInfo) and
+\texttt{debug-noasan} profiles beside the \texttt{debug} sanitizer profile.\\
+\textbf{Why:} Players used the sanitizer profile, where every guest memory
+access carried an explicit check, and fuel instrumented every compiled block
+although the epoch deadline already bounds each call.\\
+\textbf{Consequences:} Epoch-only stores are bounded by their deadline alone;
+fuel remains an opt-in and a comparison tool. Measured: removing fuel gains
+3--7\% on the game's own generations; the Debug sanitizer profile costs
+1.3--1.6$\times$ in headless play.\\
+\textbf{Extends:} D-E13, D-E14
+\end{decisionbox}
+
+\subsection*{D-E16 --- Frame schema v4: retained dynamic meshes}
+\begin{decisionbox}[title={D-E16 \quad 2026-09-22}]
+\textbf{Decision:} Dynamic 2D meshes (Shape, Sprite, Canvas; at most 4\,MiB
+per buffer) are retained on the host. \texttt{CreateMesh} with the dynamic
+flag returns a ready, zero-filled mesh; a frame's trailing
+\texttt{meshWrites} section patches it before any of the frame's batches draw,
+and the host validates each write into a CPU shadow and uploads only dirty
+spans. The guest sends only the span that differs from its mirror, draws
+inline until the host copy exists, and makes a mesh inline for good (converting
+that frame's by-reference draws) when it changes after being drawn in the same
+frame. Remaining inline batches use one grow-only host mesh pool per style.
+Versions 1--3 stay valid.\\
+\textbf{Why:} Every UI, text and GameVisual buffer was re-extracted,
+serialized, decoded and re-uploaded each frame, and batch reordering rebuilt
+host meshes.\\
+\textbf{Consequences:} The game menu's per-frame module work fell from
+2.75\,ms to 0.64\,ms, IllEd's from 0.51\,ms to 0.23\,ms and the mesh viewer's
+from 0.35\,ms to 0.16\,ms (Release, idle screens). Lit dynamic meshes stay
+inline so shadow bounds remain exact.\\
+\textbf{Extends:} D-E14 (frame schema v3)
+\end{decisionbox}
+
+\subsection*{D-E17 --- Simulation lanes with retire-on-drain}
+\begin{decisionbox}[title={D-E17 \quad 2026-09-22}]
+\textbf{Decision:} IllumoGame generations run on up to eight isolated
+simulation lanes: worker stores of \texttt{CSimWorkerGuest.wasm} reached
+through the generic \texttt{LaneJob} and \texttt{JobLanes} services. Each lane
+owns interleaved bands of eight chunk rows with a one-row halo and advances
+them exactly with the unchanged sparse kernels;
+\symbolref{SparseCellGrid}\texttt{::applyChunkPatches} keeps its frontier
+journal sound across halo updates. The control store merges the owned changes
+into the spare grid as one exact delta, launches the next generation from the
+halos before merging, and publishes through the unchanged mirror path.
+\symbolref{SimulationRunner}\texttt{::canBlock()} is false with lanes, so
+edits, loads, ruleset changes, saves and exit retire the outstanding
+generation instead of waiting for it. Lanes engage above 4\,ms serial
+generations; elementary 1D rules (global source row), radii above 16 and lane
+failures stay serial.\\
+\textbf{Why:} Serial generations ran inside the frame's update call, so large
+worlds froze frames; native production used a worker thread and 4--8 pool
+workers.\\
+\textbf{Consequences:} Frames no longer wait for generations: a
+4,285-chunk dense world holds 60\,FPS at vsync instead of about 48, and
+uncapped headless frame rates rise 3--4$\times$. Throughput is bounded by the control
+store's merge (about 2\,ms per dense generation); measured uncapped TPS is
+1.3--1.6$\times$ serial for dense worlds and remains below native production
+(about 20--35\%). At most one generation is discarded when the world changes
+while running. The whole-world \texttt{CSW1} worker remains for parity tests.\\
+\textbf{Completes:} D-E13 (worker-store offload, milestone 6)
+\end{decisionbox}
+
+\subsection*{D-E18 --- Illumo::Content, the shared content layer}
+\begin{decisionbox}[title={D-E18 \quad 2026-09-23}]
+\textbf{Decision:} Add the optional static library \texttt{Illumo::Content}
+(\texttt{Illumo/Include/Illumo/Content}, \texttt{Illumo/Source/Content}) above
+the engine. It owns virtual paths, package manifests, \texttt{.ilpk} archives,
+the virtual file tree, the \texttt{.ilsc} scene format and
+\texttt{SceneInstance}. Core \texttt{Illumo} never includes
+\texttt{<Illumo/Content/...>}; Content never depends on the WASM host or a
+product; nlohmann stays private to its sources. Guests link the serial-safe
+mirror \texttt{IllumoGuestContent} (paths, manifests, scene format, scene
+instances); archives and the file tree stay host-side.\\
+\textbf{Why:} IllEd, IllMeshViewer, IllumoGame and the runtime all needed the
+same scene and package code. D-E10's condition for promoting the codec (a
+second loader) was met.\\
+\textbf{Consequences:} \texttt{SceneGraph} still never serializes itself;
+Content builds graphs only through the public API. Engine tools reach the
+file tree through the core interface \texttt{IFileTreeSource}
+(\texttt{IllumoContext::fileTree}), which Content implements as
+\texttt{VfsTreeSource}.\\
+\textbf{Supersedes:} D-E10 (editor-owned codec)
+\end{decisionbox}
+
+\subsection*{D-E19 --- .ilsc format 2 is the one scene format}
+\begin{decisionbox}[title={D-E19 \quad 2026-09-23}]
+\textbf{Decision:} Every Illumo program reads and writes \texttt{.ilsc} format
+2 (\texttt{format\_version} \texttt{[2, minor]}; newer minors are refused).
+A document holds \texttt{metadata}, \texttt{settings} (world mode and one
+environment: skybox, ambient colour, one directional sun), an \texttt{assets}
+table (\texttt{mesh}, \texttt{texture}, \texttt{atlas}, cubemaps), nodes with
+stable string ids, parents, transforms, tags and core components
+(\texttt{primitive}, \texttt{mesh}, \texttt{sprite}, \texttt{light},
+\texttt{camera}), namespaced components and \texttt{extensions} kept verbatim,
+and an \texttt{editor} block. Core components are strict: unknown keys fail.
+Asset references are package-relative (\texttt{meshes/tree.obj}) or explicit
+absolute virtual paths (\texttt{/engine/...}, \texttt{/packages/<id>/...}).
+Output is canonical: fixed key order and shortest round-trip floats.
+\texttt{SceneInstance} is the live loader: it owns the document, graph,
+attachments and id map, applies per-node edits incrementally, shares one unit
+mesh per primitive kind, and falls back to placeholders for missing assets.\\
+\textbf{Why:} Version 1 could only describe coloured primitives, could not
+reference an asset, failed on any unknown kind, and only IllEd read it.
+Package-relative references let a project directory, its packed
+\texttt{.ilpk} and a mounted copy share one file unchanged.\\
+\textbf{Consequences:} Clean break: version 1 files are not read. Loads
+collect references (\texttt{collectSceneFetches}), fetch them, then
+instantiate, so \texttt{IAssetSource} stays synchronous. IllumoGame's
+\texttt{render3dTest} and IllMeshViewer scenes use the same path.
+\end{decisionbox}
+
+\subsection*{D-E20 --- .ilpk packages are a bounded ZIP subset}
+\begin{decisionbox}[title={D-E20 \quad 2026-09-23}]
+\textbf{Decision:} A package is a directory or an \texttt{.ilpk} archive: a
+ZIP subset with stored and deflate entries only (no zip64, multi-disk,
+encryption or symlinks). The reader rejects unsafe or duplicate names,
+file/directory collisions and local headers that disagree with the central
+directory; it bounds entry count (65,535), directory bytes (16\,MiB),
+per-entry (256\,MiB) and total (1\,GiB) inflated size and the compression
+ratio (1,024), and checks CRC-32 on every full read. The host writer
+(\texttt{PackageArchiveWriter}, the \texttt{IllumoPack} tool and the Pack file
+action) deflates through the vendored \texttt{stb\_image\_write} compressor and
+stores already-compressed images as they are.\\
+\textbf{Why:} Mods and expansions need one shippable file that standard tools
+can inspect, without a new dependency and without trusting the archive.\\
+\textbf{Consequences:} Inflate uses \texttt{stb\_image}'s decoder with an
+exact output bound. CMake's own zip output is a test fixture, so the reader is
+checked against an independent writer.
+\end{decisionbox}
+
+\subsection*{D-E21 --- Packages mount on one host virtual file tree}
+\begin{decisionbox}[title={D-E21 \quad 2026-09-23}]
+\textbf{Decision:} \texttt{IllumoRuntime} owns a \texttt{VirtualFileSystem}.
+It mounts \texttt{/engine} (runtime assets), \texttt{/app} (the launched
+package plus overlays), \texttt{/packages/<id>} (every package found in
+\texttt{packages/} beside the runtime and each \texttt{--mount}), and a
+writable \texttt{/project} only with \texttt{--project <dir>}. Mount tables are
+immutable snapshots swapped under a mutex; open files keep their backend
+alive after an unmount. Overlays target only \texttt{/app}: priority, then
+dependency order, then id; directories union and the top file wins; there are
+no whiteouts. Directory lookups are case-exact on every file system, and a
+path that escapes its root through a link does not exist. \texttt{stat} names
+the supplying package but never a host path.\\
+\textbf{Why:} Content must be browsable at runtime and in the console, and
+several packages must coexist for mods and expansions without any package
+choosing its own mount point.\\
+\textbf{Consequences:} The host \texttt{vfs} console command lists, stats and
+reads the tree, and debug builds add the \texttt{files} browser. Writes go only
+to \texttt{/project}; \texttt{*.wasm} and \texttt{illumo.json} are refused
+there. A mod cannot delete a base file.
+\end{decisionbox}
+
+\subsection*{D-E22 --- illumo.json is the one package manifest}
+\begin{decisionbox}[title={D-E22 \quad 2026-09-23}]
+\textbf{Decision:} Every package carries \texttt{illumo.json}
+(\texttt{format ilpk}, \texttt{format\_version} 1, \texttt{id},
+\texttt{version}, \texttt{title}, \texttt{kind} \texttt{app}, \texttt{content}
+or \texttt{mod}, \texttt{targets}, \texttt{dependencies}, \texttt{overlays},
+and an \texttt{app} or \texttt{mod} section). The \texttt{app} section absorbs
+the former \texttt{app.json} fields and their clamping to host ceilings. A
+\texttt{kind} whose sections do not match is refused; dependency order is
+Kahn's algorithm and cycles are refused.\\
+\textbf{Why:} Apps, content and mods are all packages; two manifest formats
+would have diverged.\\
+\textbf{Consequences:} \texttt{app.json} and \texttt{AppManifest} are removed;
+staging emits \texttt{illumo.json}; \texttt{--app} and \texttt{--package}
+accept a directory or an \texttt{.ilpk}.\\
+\textbf{Refines:} D-E14
+\end{decisionbox}
+
+\subsection*{D-E23 --- File protocol v2 and the ProjectFiles capability}
+\begin{decisionbox}[title={D-E23 \quad 2026-09-23}]
+\textbf{Decision:} Guest file requests gain a \texttt{Mounted} area addressed
+by absolute virtual paths, and the Package area becomes an alias for
+\texttt{/app}. New actions: \texttt{List} (paged), \texttt{Stat},
+\texttt{Import} (copy a dialog grant into \texttt{/project}) and \texttt{Pack}
+(\texttt{/project} to an \texttt{.ilpk} on a dedicated host worker). Mounted
+reads use blocks of up to 1\,MiB, and a guest may keep 16 file tasks in
+flight. Writing a mounted path, Import and Pack need the new capability
+\texttt{ProjectFiles} (bit 9), which the host offers only while a project is
+mounted; the project quota is tracked incrementally.\\
+\textbf{Why:} Guests could read only their own flat package directory; the
+editor needs to browse every mount and write a project without learning host
+paths.\\
+\textbf{Consequences:} Reading mounted paths needs only \texttt{Assets}.
+A pack never replaces a currently mounted archive: the replace fails and the
+guest sees \texttt{IoError} (there is no up-front check). The guest SDK adds
+\texttt{GuestFileTree}. Every new request shape has decoder and deny tests.
+\end{decisionbox}
+
+\subsection*{D-E24 --- Guest asset cache over the file tree}
+\begin{decisionbox}[title={D-E24 \quad 2026-09-23}]
+\textbf{Decision:} \texttt{GuestVfsAssets} replaces \texttt{GuestPackageAssets}
+as the guest \texttt{IAssetSource}. \texttt{packageAssets()} remains a pinned
+bootstrap preload; loads fetch sets of virtual paths on demand and hold them
+until released; unpinned, unheld bytes are evicted least recently used past a
+256\,MiB budget; \texttt{/local/<name>} holds bytes the app supplies itself.
+\texttt{GuestSceneFetches} (\texttt{IllumoGuestContent}) adds the second stage
+that fetches the material libraries an OBJ declares.\\
+\textbf{Why:} Asset bytes must be readable synchronously when a scene
+instantiates, but a guest cannot preload every package it might open.\\
+\textbf{Consequences:} IllEd and IllMeshViewer share one fetch pipeline; a
+missing material library is tolerated, a missing asset is reported and drawn
+as a placeholder.
+\end{decisionbox}
+
+\subsection*{D-E25 --- IllEd editing model}
+\begin{decisionbox}[title={D-E25 \quad 2026-09-23}]
+\textbf{Decision:} IllEd edits a format 2 document over \texttt{SceneInstance}.
+Each command is a patch of node records (before, after, parent, sibling
+position); drags merge into one command; history is capped at 512 commands
+and 64\,MiB and cleared on load; dirty means the history cursor differs from
+the saved one. Selection is a set with a primary node. One shortcut table
+drives menus and keys. New nodes go under the root unless ``create as child''
+is chosen. Picking uses \texttt{raycastCandidates} in both world modes.
+Clipboard fragments (\texttt{illed.fragment}, at most 4\,MiB) remap ids on
+paste. With \texttt{--project}, the asset browser places files from the tree,
+and Import, Save to Project and Pack Project write through D-E23.\\
+\textbf{Why:} The prototype had no undo, one selected node, world-axis
+translation only, a read-only inspector and no assets; camera motion marked
+documents dirty.\\
+\textbf{Consequences:} The module is split into document, history, selection,
+shortcut, gizmo, inspector, clipboard, asset and project units. Console
+commands \texttt{scene\_select}, \texttt{scene\_place} and
+\texttt{scene\_save\_project} script the same flows for tests.
+\end{decisionbox}
+
+\subsection*{D-E26 --- SceneGraph sibling order}
+\begin{decisionbox}[title={D-E26 \quad 2026-09-23}]
+\textbf{Decision:} Add one narrow ordering call to SceneGraph v2:
+\texttt{setParent(node, parent, insertBefore)} places a node immediately
+before a sibling, or last when \texttt{insertBefore} is null. An unchanged
+position is a no-op, and invalid or cyclic requests fail without mutating.\\
+\textbf{Why:} Scene documents and the editor hierarchy are ordered, and undo
+must restore a node to its exact position.\\
+\textbf{Consequences:} \texttt{SceneInstance} and IllEd reorder, paste and undo
+in place. No other part of the v2 contract changes.\\
+\textbf{Refines:} D-E12
+\end{decisionbox}
+
+\subsection*{D-UI6 --- GuiTextEdit and GuiFileTree}
+\begin{decisionbox}[title={D-UI6 \quad 2026-09-23}]
+\textbf{Decision:} Two primitive-composed helpers join \texttt{Illumo/Gui},
+native and guest. \texttt{GuiTextEdit} is a UTF-8 line editor (caret,
+selection, clipboard) fed by \texttt{InputManager::getCharQueue} and drawn by
+\texttt{GuiKit::drawTextField}. \texttt{GuiFileTree} keeps expansion state
+and the listings received so far, and flattens them without recursion into
+rows drawn with \texttt{GuiKit::drawTreeRow}. There is no retained widget
+tree.\\
+\textbf{Why:} IllEd's inspector needed typed fields, and the asset browser and
+the debug file browser needed one tree view over asynchronous listings.\\
+\textbf{Consequences:} The IllEd inspector and asset browser use them, and so
+does DebugModule's \texttt{files} command, which browses
+\texttt{IllumoContext::fileTree} with the keyboard and wheel only, so every
+input it takes is consumed before the product sees it.\\
+\textbf{Extends:} D-UI1 (menu shell)
+\end{decisionbox}
+
+\subsection*{D-UI7 --- Plain tool look and detachable panels}
+\begin{decisionbox}[title={D-UI7 \quad 2026-09-23}]
+\textbf{Decision:} IllEd and IllMeshViewer share a plain tool look
+(\texttt{GuiToolStyle}: a neutral palette, flat panels, title bars, splitters,
+rows, buttons, toggles, sliders, text fields, menus and status bars) and one
+\texttt{GuiPanelDock} per app window. The dock stacks panels in left and right
+columns with draggable splitters; each title bar can hide a panel or pop it
+out into its own window, and dragging a title past the window edge tears it
+off, as the console does. A detached panel docks back from its title bar, its
+window's close box or View \textgreater{} Reset Layout. Panels are content
+renderers: they draw into a \texttt{GuiPanelPlacement} (content rectangle
+plus surface) and read their pointer through \texttt{GuiPanelPointer}, which
+samples the main window or the panel's window and honours presses other
+chrome took. The layout is saved in the \texttt{panelLayout} setting and
+detached panels reopen on the next start.\\
+\textbf{Why:} The owner asked for the editor and viewer interfaces to be
+redone with panels that break off into separate windows, like the developer
+console, in a plain tool look.\\
+\textbf{Consequences:} IllEd's Hierarchy, Assets, Tools and Inspector panels
+and the viewer's Info and Display panels detach; an asset dragged from a
+detached Assets window places where it is dropped in the viewport. The chrome
+keeps fixed tool metrics while \texttt{fontSize} scales panel content. There
+is still no retained widget tree.\\
+\textbf{Extends:} D-UI4 (plain console palette), D-UI5 (console pop-out)
+\end{decisionbox}
+
+\subsection*{D-E27 --- Panel surfaces}
+\begin{decisionbox}[title={D-E27 \quad 2026-09-23}]
+\textbf{Decision:} \texttt{IPanelSurfaces}, published as
+\texttt{IllumoContext::panelSurfaces}, gives products extra top-level windows.
+Surface 0 is the main window; others are opened, titled and closed by id, and
+report size, screen origin, pointer and window events. Keys stay in the one
+\texttt{InputManager} queue and \texttt{focused()} names their window. Guests
+get it through the \texttt{Windows} capability (bit 10), which the host grants
+only when it can present windows, the Window service (17) and input v2;
+\texttt{WasmPanelWindows} owns the host windows and closes them on failure and
+exit. Products must work fully docked without it.\\
+\textbf{Why:} Product modules are shared by the guest and the native test
+oracles, so they need a seam free of guest types; \texttt{FakePanelSurfaces}
+drives the same code in tests.\\
+\textbf{Consequences:} Linux, \texttt{--capture}, \texttt{--bench-*} and
+headless runs keep every panel docked with pop-out disabled.\\
+\textbf{Extends:} D-E23 (capabilities)
+\end{decisionbox}
+
+\subsection*{D-E28 --- Sound effects}
+\begin{decisionbox}[title={D-E28 \quad 2026-09-24}]
+\textbf{Decision:} \texttt{IAudio}, published as \texttt{IllumoContext::audio},
+registers decoded clips as sounds (at most 256) and plays them by
+generational handle, one voice per play (at most 32, the oldest replaced),
+with volume, pan, pitch, \texttt{stopAll} and a master volume. The native
+implementation, \texttt{AudioDevice}, and the \texttt{AudioDecoder} for WAV,
+FLAC and MP3 wrap vendored miniaudio 0.11.25, which stays private to
+\texttt{Illumo/Source/Audio}. Guests get \texttt{IAudio} through the
+\texttt{Audio} capability (bit 11), granted only when the host has an output
+and never for \texttt{--capture} or \texttt{--bench-*}, and the Audio service
+(18): \texttt{GuestAudioRequest} version 1 with Create, Destroy, Play, StopAll
+and SetVolume. Requests complete in the same exchange without a payload and
+the guest queue discards their completions.\\
+\textbf{Why:} Guests decode their own package files, as they decode textures,
+so the host never parses untrusted encoded audio; only range-checked float
+samples cross the ABI. The decoder uses miniaudio's memory entry points so
+no file-system import reaches a guest. The public seam keeps products free of
+library and guest types, as D-E27 did for windows.\\
+\textbf{Consequences:} A clip holds at most 3\,Mi samples and a guest at most
+64\,MiB of registered samples; beyond that, and for unknown ids, requests are
+rejected without retiring the guest. The host releases a guest's sounds and
+restores the master volume when it retires. Products must also work
+silently. CSim plays seven cues scaled by its \texttt{soundVolume} setting.\\
+\textbf{Refined by:} D-E32 (looping music, chunked clips, protocol version 2)\\
+\textbf{Extends:} D-E27 (capability pattern)
+\end{decisionbox}
+
+\subsection*{D-E29 --- Lanes for every rule from 1\,ms}
+\begin{decisionbox}[title={D-E29 \quad 2026-09-25}]
+\textbf{Decision:} The guest runner moves generations to simulation lanes once
+serial generations exceed 1\,ms (previously 4\,ms) and returns them to the game
+store when all lanes together work under 0.5\,ms (previously 1\,ms).
+Elementary 1D rules also take lanes: their partition runs along chunk columns,
+the coordinator finds the global source row (the highest row with a counted
+cell and its counted extent) and sends it with each Advance, each lane writes
+only its own columns of the next row, and every lane reports the source row of
+its owned columns so the coordinator combines the next one without the merged
+grid. The lane protocol becomes CSL1 version 2: SyncBegin carries the axis;
+Advance and Advanced carry the row; decoders reject version 1, an inverted row
+extent, and an axis or row that does not match the rule.\\
+\textbf{Why:} \texttt{IllumoGame.Wasm.PackageBench} shows that at about 1\,ms
+a lane generation costs the game store only its merge (0.30--0.41\,ms on 1\,ms
+worlds, median frame 1.36\,ms to 0.55\,ms), so the old threshold left
+frames carrying work lanes could take. Elementary 1D was excluded only because
+a row band cannot see the global source row; supplying the row removes the
+reason, and each lane then also copies only its own columns of the growing
+history.\\
+\textbf{Consequences:} Uncapped peak TPS on light worlds drops by roughly a
+fifth (the round trip, about 1.3\,ms), which normal speeds never reach; frame
+time falls instead. \texttt{IllumoGame.Wasm.LaneParity} now requires lanes for
+every catalog rule and adds wide elementary rows on infinite and wrapping
+worlds with an edit; \texttt{IllumoGame.Wasm.LaneProtocol} covers version 2.
+Two light benchmark worlds (\texttt{bench-dense16}, \texttt{bench-sparse64})
+cover the threshold region.\\
+\textbf{Supersedes:} the 4\,ms entry and the elementary exclusion of D-E17
+\end{decisionbox}
+
+\subsection*{D-R27 --- Surface frames and offscreen readback}
+\begin{decisionbox}[title={D-R27 \quad 2026-09-23}]
+\textbf{Decision:} Frame schema v5 adds a trailing section of at most eight
+surfaces, each a UI-only batch list with a revision, or \texttt{same} when
+nothing it draws changed. The host replays a changed surface through
+\texttt{Renderer::renderOffscreen} into a per-window target and queues an
+asynchronous readback (\texttt{IBackend::requestFramebufferReadback} and
+\texttt{takeFramebufferReadback}, two fenced pixel-pack buffers per stream);
+the newest completed copy is presented by the window's \texttt{PixelWindow},
+one frame late.\\
+\textbf{Why:} Detached panels must draw exactly as docked ones (sprites,
+ellipses, text) without a second GL context or a CPU rasterizer.\\
+\textbf{Consequences:} An unchanged panel costs neither a replay nor a
+readback. Versions 1--4 remain valid, and the frame quotas span the main frame
+and every surface.\\
+\textbf{Extends:} D-UI5 (no second GL context), D-R25
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-E30 --- The host owns render and media objects}
+\begin{decisionbox}[title={D-E30 \quad 2026-09-26}]
+\textbf{Decision:} A WASM guest manages its game state and makes presentation
+decisions (layout, hit testing, animation, painter order). Every render and
+media object lives on the native host, and the guest manages it through host
+calls rather than copying geometry or draw state every frame. World objects,
+materials and the environment move first (frame schema v6 world operations
+behind a \texttt{HostRender} capability), then 2D visuals and composition
+lists. The guest SDK checks every frame against the host's count quotas
+before sending it.\\
+\textbf{Why:} IllMeshViewer with 2,000 primitive cubes ran at 41 FPS: 20.6 of
+23.9\,ms per frame went to guest recording plus host validation and copying
+(3.4\,MB per frame). Keeping small static meshes on the host roughly doubled
+that to 85 FPS, but the guest still recorded about 22 tokens and a batch per
+object.\\
+\textbf{Consequences:} Guests keep today's decisions and tools. Frame versions
+1--5 and the batch path stay for older packages. Design and milestones:
+\texttt{docs/host-render-world-design.md}.\\
+\textbf{Refines:} the guest-side presentation model of
+\texttt{docs/wasm-game-runtime-design.md} section 7; \textbf{Extends:} D-E14,
+D-E16, D-E28; \textbf{Refined by:} D-R29 (2D visuals, the sky, and the
+batches that remain)
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-R28 --- Instancing, recorded lists and RenderWorld}
+\begin{decisionbox}[title={D-R28 \quad 2026-09-26}]
+\textbf{Decision:}
+\begin{itemize}
+  \item Backends gain generational instance and uniform buffers
+    (\texttt{BufferHandle}) and the tokens \texttt{WriteBuffer},
+    \texttt{BindUniformBuffer}, \texttt{SetInstanceStream} and
+    \texttt{DrawIndexedInstanced}.
+  \item \symbolref{Renderer} owns a per-frame \texttt{FrameUniforms} block
+    (camera, previous camera, light space, shadow state), written once per
+    \texttt{RenderScene} on first use. The instanced styles
+    \texttt{LitMeshInstanced} and \texttt{ShadowDepthInstanced} read it, so
+    recorded tokens never carry camera- or light-dependent values.
+  \item A \texttt{RecordedCommandList} is recorded once through the ordinary
+    push helpers (\texttt{Renderer::beginRecording}) and executed in place by
+    an \texttt{ExecuteList} token. It owns its matrices, refuses nested
+    lists, has its own ceiling, and is counted in
+    \texttt{Renderer::getRecordedListStats}.
+  \item \texttt{RenderWorld} is the engine owner of persistent world objects
+    behind \texttt{IRenderWorld}. Instances sharing a mesh range and
+    material form a bucket that draws with one instanced call per pass. Its
+    lists re-record only when its buffers, material or the environment
+    change; per frame it culls, streams visible instances from host memory
+    and patches instance counts.
+\end{itemize}
+\textbf{Why:} The measured workload that D-R24 waited for exists (D-E30).
+With a mock backend, 2,000 objects cost 3.8\,ms and 50,017 tokens per frame
+as one MeshVisual each, and 0.11\,ms and 30 tokens in one RenderWorld; 50,000
+objects cost 2.4\,ms. On a real GPU both paths produce bit-identical images,
+shadows included (\texttt{Illumo.Gpu.RenderWorldParity}).\\
+\textbf{Consequences:} Recorded payloads are host-owned and main-thread only;
+the GL context does not move. The frame queue keeps its ceiling and
+rejection metrics, and the list ceiling and statistics sit beside them.
+MeshVisual and SceneGraphDrawable are unchanged. Real-GPU checks carry the
+\texttt{IllumoGpu} label.\\
+\textbf{Supersedes:} D-R24's deferral of instance aggregation, and D-R25's
+requirement of a separate decision for recorded payloads (for host-owned
+lists)
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-R29 --- Host-retained 2D visuals and compositions}
+\begin{decisionbox}[title={D-R29 \quad 2026-09-26}]
+\textbf{Decision:}
+\begin{itemize}
+  \item \texttt{VisualStore} keeps 2D visuals on the host by id. Each is a
+    \symbolref{GameVisual} edited in place (items set or removed by index,
+    opacity) whose draw tokens are recorded once and replayed until its
+    geometry or frame state changes. Native \symbolref{GameVisual} output is
+    unchanged.
+  \item Frame schema v7 (still \texttt{HostRender}) adds visual operations and
+    per-target compositions. A composition places the target's visuals among
+    its remaining batches and the render world, carries the logical size that
+    pixel-space visuals lay out in, and lasts only for its own frame unless
+    repeated as \texttt{same}. The host validates operations and compositions
+    against its live state before applying anything. Text items name a
+    LoadFont atlas, whose \texttt{Font} the host keeps.
+  \item In a guest, \texttt{GameVisual::AppendCommands} offers the visual to
+    \texttt{IBackend::AppendVisual}. The SDK's \texttt{GuestVisualProxies}
+    sends only item and property changes the host has not confirmed, and
+    confirms them only for delivered frames. Visuals that cannot travel
+    record batches as before: custom styles, textures or fonts not yet on the
+    host, a spent per-frame budget, and visuals that change most of their
+    items frame after frame.
+  \item A guest \texttt{SkyboxVisual} becomes the render world's sky through
+    \texttt{IBackend::AppendSkybox} and the v7 \texttt{Skybox} world
+    operation. The host rebuilds the rotation-only sky matrix from the frame
+    camera.
+\end{itemize}
+\textbf{Why:} Idle tool UIs re-sent every batch each frame: IllEd 9.25\,KB
+and IllMeshViewer 6.55\,KB per frame. With host visuals they send 0.27\,KB,
+and the viewer's 500-cube scene 0.39\,KB (one batch) against 154\,KB. Menu
+chrome that animates nearly every item each frame was cheaper as batches
+(111\,KB) than as item operations (159\,KB), hence the churn fallback.\\
+\textbf{Consequences:} By owner decision, the canvas quad and the
+\symbolref{MeshVisual} line overlays (IllEd's grid, selection and gizmo;
+IllMeshViewer's grid and wireframe) stay retained batches. Their geometry is
+already host-retained, and each costs one draw reference of about 150 bytes
+per frame. The batch path therefore remains for these, for visuals that cannot
+travel, and for packages built against frame versions 1--6. Guest settings
+\texttt{hostRenderWorld=0} and \texttt{hostVisuals=0} are the rollbacks.\\
+\textbf{Refines:} D-E30; \textbf{Extends:} D-R27 (surface revisions), D-R28
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-E31 --- Programs own scenes; modules are gone}
+\begin{decisionbox}[title={D-E31 \quad 2026-09-26}]
+\textbf{Decision:}
+\begin{itemize}
+  \item Each package is one WASM program that manages scenes. The engine has
+    no module registry: \texttt{IModule}, \texttt{IModuleHost},
+    \texttt{IllumoContext::moduleHost}, required and optional registration,
+    transitions and rollback are removed.
+  \item \symbolref{Illumo} runs a frame in phases (\texttt{beginUpdate},
+    \texttt{endUpdate}, \texttt{beginRender}, \texttt{endRender}). IllumoRuntime's
+    \texttt{RuntimeShell} puts the debug overlay (debug-tool builds) and the
+    one \texttt{WasmProgram} between them: input and global hotkeys, the
+    overlay, the program, then render, where the program dispatches before the
+    overlay. \texttt{DebugModule} is now \texttt{DebugOverlay}.
+  \item In a guest, a \texttt{GuestProgram} owns a \texttt{SceneDirector}. A
+    \texttt{ProgramScene} (\texttt{Illumo::Content}, mirrored in
+    \texttt{IllumoGuestContent}) owns its \symbolref{SceneInstance}, its camera
+    state, its render world and its scene-scoped commands. It starts once,
+    enters and leaves any number of times, and stops once.
+  \item Switches happen at a frame boundary (cut or cover). The scene left is
+    kept, frozen, and resumes where it was unless the program releases it.
+  \item The engine's per-frame drawable list \texttt{Scene} is renamed
+    \texttt{DrawList}.
+\end{itemize}
+\textbf{Why:} CSim's title screen and canvas were two modules: each switch
+destroyed one and rebuilt the other (a 4.4--5.2\,ms guest update each way),
+and there was no way back to a canvas. ``Module'' also meant two unrelated
+things, a host registration and a product screen. Since the WASM cutover every
+product is a program, so the host needs exactly one program slot.\\
+\textbf{Consequences:} CSim keeps its canvas across trips to the title and
+offers to resume it; returning costs about 2\,ms instead of 5.2--5.8\,ms.
+IllEd's document is its scene's content. Each program describes its WASM
+module and package (\texttt{GuestTargets.cmake},
+\texttt{PackageTargets.cmake}, listed in \texttt{ILLUMO\_PROGRAMS}), which is
+also how generated projects build; \texttt{Templates/SpinningCube} is a scene
+program. Whoever owns a program or director destroys it before
+\texttt{Illumo::shutdown}. Crossfades wait. Design and milestones:
+\texttt{docs/scene-programs-design.md}.\\
+\textbf{Supersedes:} D-004, D-E1; \textbf{Refines:} D-E4 (the type is
+\texttt{DrawList}), D-E5 (the audit moves to each scene's start), D-E9, D-B1
+(both now name \texttt{DebugOverlay})
+\end{decisionbox}
+
+%----------------------------------------------------------------------------
+\subsection*{D-R30 --- A render world per scene (frame schema v8)}
+\begin{decisionbox}[title={D-R30 \quad 2026-09-26}]
+\textbf{Decision:} Frame schema v8 addresses host render worlds.
+\texttt{SelectWorld(id)} sends the world operations after it to world
+\texttt{id}, created on first use; \texttt{ShowWorld(id)} picks the world that
+draws (0: none); \texttt{DestroyWorld(id)} releases one and everything in it.
+A version 7 frame is exactly ``world 1, shown''. A guest has at most 8 worlds;
+material and instance ids are per world; the shown world draws with the frame
+camera. The SDK's \texttt{GuestSceneWorlds} gives every scene of a program its
+own \texttt{GuestRenderWorld} through the director and merges their
+operations, so steady frames send nothing.\\
+\textbf{Why:} A kept scene (D-E31) must neither draw nor lose its host objects.
+One shared world would need a visibility sweep on every switch and rules out
+drawing two scenes at once.\\
+\textbf{Consequences:} A hidden world costs host memory and nothing per frame.
+IllMeshViewer's 2,000-cube scene is the new reference at 619--648\,FPS. Guest
+setting \texttt{hostRenderWorld=0} still gives scenes no world. A camera per
+world waits for crossfades.\\
+\textbf{Extends:} D-E30, D-R29
+\end{decisionbox}
+
+\subsection*{D-R31 --- The canvas fade runs in the shader (frame schema v9)}
+\begin{decisionbox}[title={D-R31 \quad 2026-09-28}]
+\textbf{Decision:} \texttt{CanvasView}'s texture holds two RGBA8 texels per
+cell: the colour a fade starts from and its target, whose alpha bytes hold
+the fade's start time in 1/512\,s ticks, wrapping every 128\,s. Frame schema
+v9 gives the Canvas batch \texttt{uCanvasFade} (the fade clock, the fade speed
+and the texture layout), and \texttt{canvas\_frag.glsl} shows
+$\mathrm{mix}(\mathit{to}, \mathit{from}, e^{-\mathit{speed} \cdot
+\mathit{age}})$. The CPU writes a cell's slot only when its target changes,
+starting the new fade from the colour on screen, and settles finished fades
+in a sweep every 0.25\,s (at most 100\,s, before the wrap). Layout 0, one RGB
+texel per cell, keeps frames before version 9 drawing.\\
+\textbf{Why:} Tracy showed the per-frame CPU fade at 1.4\,ms of a 2\,ms guest
+update, rewriting and uploading about 250\,KB of texture every frame while
+any cell faded.\\
+\textbf{Consequences:} A fading canvas costs no per-frame CPU work or upload.
+At the owner's settings (12 generations per second) the canvas went from
+about 400 to about 2,100\,FPS and its frame packets from 299\,KB to 5\,KB.
+The texture is twice as wide and four channels deep, so a changed cell
+uploads 8 bytes instead of 3.\\
+\textbf{Extends:} D-R29
+\end{decisionbox}
+
+\subsection*{D-R32 --- Canvas fade pre-pass and a leaner frame path}
+\begin{decisionbox}[title={D-R32 \quad 2026-09-29}]
+\textbf{Decision:} Right before a layout-1 canvas draws, the host resolves its
+fade texture into a cell-sized RGBA8 target, one fragment per cell
+(\texttt{Renderer::pushCanvasFadeResolve} with the built-in
+\texttt{CanvasFade} style), restores the pass framebuffer, viewport and
+scissor, and draws the canvas from that target as layout~0. The target lives
+with its guest texture; the direct layout-1 path remains the fallback. On the
+frame path, the guest writes its frame straight into the reply envelope and
+patches the size afterwards, the host reads every reply in place from guest
+memory (\texttt{WasmInstance::viewMemory}) and lends the frame to the decoder
+without a copy (\texttt{WasmGuest::invokeView}, valid until the next guest
+call), and the wire codec appends and reads words in bulk.\\
+\textbf{Why:} With the fade on the GPU (D-R31), the LED canvas shader
+evaluated it for all nine neighbours of every pixel, and each frame was
+copied whole once in the guest and twice on the host.\\
+\textbf{Consequences:} At 2560$\times$1440 with LED cells the canvas went from
+about 1,530 to about 1,650\,FPS, and the guest's frame build from 0.066 to
+0.055\,ms. The remaining difference from flat cells (about 0.13\,ms) is the
+LED look itself. A frame view must be decoded before the guest is called
+again.\\
+\textbf{Extends:} D-R31
+\end{decisionbox}
+
+\subsection*{D-R33 --- A Vulkan backend with OpenGL's behaviour}
+\begin{decisionbox}[title={D-R33 \quad 2026-09-30}]
+\textbf{Decision:} \texttt{Rendering/Vulkan/} implements \symbolref{IBackend}
+on Vulkan 1.3 (dynamic rendering, synchronization2, push descriptors) and is
+chosen per launch by \texttt{GraphicsAPI} (\texttt{--graphics-api}, console
+\texttt{set}, or CSim's Video tab Renderer row, carried by Display wire
+version~5, which appends the saved and the running backend; a guest sends a
+choice only after the host has reported its own); OpenGL stays the default and
+takes over when Vulkan cannot start. It reproduces the OpenGL backend's observable results: images stored
+bottom row first with the present flipping them, inverted front faces and
+remapped clip $z$, the frontend's GLSL 330 compiled at run time by glslang,
+program-owned uniform values, persistent texture units and binding points,
+uploads ordered with draws, OpenGL's readback conversions, and the NVIDIA
+OpenGL driver's multisample line, sample and resolve behaviour. Presentation
+waits are bounded and presents pause while the login session is locked.
+\texttt{FrameCaptureOptions::graphicsApi} picks the capture backend.\\
+\textbf{Why:} The owner asked for a Vulkan backend to switch to and from, with
+no Vulkan logic in the renderer front end and the OpenGL backend's feature
+set.\\
+\textbf{Consequences:} Nothing Vulkan-specific reaches \texttt{Renderer},
+public headers, guests or products; a token or shader-visible change now has
+to keep \texttt{Illumo.Gpu.BackendParity} passing. Four vendored dependencies
+(Vulkan-Headers, volk, glslang 16.6.0 and VMA 3.4.0, all from Vulkan SDK
+1.4.363.0) are updated together. Recording costs more CPU time than OpenGL's
+driver-threaded submission (median 0.09 to 0.17 against 0.03 to 0.10\,ms per
+frame at 60\,Hz for the shipped packages), well inside the frame budget;
+uncapped, Vulkan matches or beats OpenGL's frame rate.\\
+\textbf{Extends:} D-R8, D-R11, D-UI13
+\end{decisionbox}
+
+\subsection*{D-R34 --- GameVisual merges batches across non-overlapping draws}
+\begin{decisionbox}[title={D-R34 \quad 2026-10-01}]
+\textbf{Decision:} Consecutive \symbolref{GameVisual} geometry of one style,
+texture and kind forms a run. A run joins the latest earlier batch with its
+key when no batch drawn in between overlaps it, and the vertices are rewritten
+so each batch stays one range. Overlap tests are conservative: touching or
+non-finite bounds overlap, and a batch keeps the exact bounds of its 16 latest
+runs plus one box around older ones. The look-back is 64 batches, and a visual
+with a single run skips the work.\\
+\textbf{Why:} Moving a draw earlier past draws it does not overlap leaves
+every pixel's sequence of writes unchanged, while the 2D UI alternated shape
+and sprite or text draws for every widget, costing a pipeline bind each on
+Vulkan (about 290\,ns on the reference NVIDIA driver) and a program switch on
+OpenGL.\\
+\textbf{Consequences:} IllEd went from 88 draws and 70 program switches per
+frame to 29 and 24; Vulkan recording fell from 0.069 to 0.032\,ms (the mesh
+viewer from 0.051 to 0.034\,ms) and OpenGL IllEd rose from about 3,000 to
+4,000--4,400\,FPS uncapped. A rebuild of 300 widgets drops from 351 draws to
+3 and costs less overall. Draws of different visuals still alternated
+between the shape and sprite pipelines; D-R35 removes most of those
+switches.\\
+\textbf{Extends:} D-R15
+\end{decisionbox}
+
+\subsection*{D-R35 --- GameVisual shapes draw through the sprite pipeline}
+\begin{decisionbox}[title={D-R35 \quad 2026-10-01}]
+\textbf{Decision:} \symbolref{GameVisual} shapes without a custom style are
+tessellated as before and then written as sprite vertices sampling
+\texttt{Renderer::whiteTexture()}, a renderer-owned 1$\times$1 opaque white
+texture (nearest, clamped) at UV (0.5, 0.5). They draw with the built-in
+Sprite style, so shapes, sprites and text differ only by texture and D-R34
+batches them alike. Shapes with a custom style keep the shape mesh, as does a
+visual of more than 64 items that are all shapes. Backends whose new textures
+draw only in a later frame report it through
+\texttt{IBackend::TexturesDrawWhenCreated}; the guest recorder does, gets no
+white texture, and records shapes as before.\\
+\textbf{Why:} After D-R34 most remaining pipeline switches came from
+neighbouring visuals, each drawing shapes and then text. The sprite shader
+multiplies the vertex colour by an exact white texel, so the image is
+unchanged.\\
+\textbf{Consequences:} Vulkan pipeline binds per frame fell from 17 to 2 in
+IllEd, 22 to 3 in the mesh viewer and 11 to 10 in CSim; Vulkan recording fell
+from 0.032 to 0.028\,ms in IllEd and 0.035 to 0.028\,ms in the mesh viewer,
+and OpenGL IllEd rose from about 4,100 to 4,400--4,650\,FPS uncapped.
+Converting every shape regressed CSim, which rebuilds a visual of 1,412 shapes
+each frame: its vertices grew from 16 to 24 bytes for no saved switch, hence
+the shapes-only limit; a full rebuild of 300 mixed widgets costs about
+2.5\% more (222 to 227\,$\mu$s). These shapes now write zero motion velocity, as sprites
+do; before, they inherited whatever motion-blur uniforms a \symbolref{MeshVisual}
+had left on the shared shape program. The guest frame wire is unchanged:
+proxied visuals travel as items and are rebuilt on the host.\\
+\textbf{Extends:} D-R34
+\end{decisionbox}
+
+\subsection*{D-UI8 --- Liquid, bouncy menu motion}
+\begin{decisionbox}[title={D-UI8 \quad 2026-09-23}]
+\textbf{Decision:} The glass menus move like liquid. A travelling selection
+is a drop whose head and tail are two springs
+(\texttt{GuiMotion::kLiquidHead}, \texttt{kLiquidTail}) owned by
+\symbolref{GuiMenuAnimator}: from rest it leaves the old row, mid-flight it
+keeps its momentum, and \texttt{GuiSelectionSpan::squash} reports the jelly
+response from the closing speed between head and tail.
+\texttt{GuiKit::drawLiquidSelection} draws it as non-overlapping slices across
+the travel: the head cell keeps full width, the drop necks behind it and
+tapers toward the tail like a teardrop, and at rest it is exactly a rounded
+rectangle. Panels and rows drop in on springs
+(\texttt{GuiEasing::springStep}), presses and stepped values wobble
+(\texttt{GuiEasing::wobble}, \texttt{pressWobble}, \texttt{valueWobble}), and
+screens tune every spring from shared \texttt{GuiMotion} presets rather than
+literal frequencies. \texttt{GuiKit::drawSplash} adds a ripple and teardrop
+droplets for a press. Every glass panel swivels toward the pointer through
+\texttt{GuiPanelTilt} (a \texttt{GuiMotion::kSway} spring pair): its layers
+shift by depth and \texttt{GuiGlassStyle::tiltX}/\texttt{tiltY} slide the
+shadow away, draw a glare that follows the pointer and light the facing
+edges; each screen shifts its layout origin by the body layer so hit testing
+follows the drawing. The simulator's corner EDIT/NORMAL label becomes a
+product-drawn \texttt{ModeBadge} in the same glass (superseding D-OWN1's
+\symbolref{SplashText} member; the engine class stays).\\
+\textbf{Why:} The owner asked for menu animation that feels bouncier, more
+alive, and more like liquid and teardrops.\\
+\textbf{Consequences:} \texttt{beginSelectionTravel} takes the row left and
+the row targeted; a selection changed without a travel reads as its own row.
+Hit areas still never follow animated offsets beyond the entrance, reduced
+motion snaps every new spring and wobble, and the rounded
+\symbolref{GuiDialog} shares the same drop horizontally while its flat style
+is unchanged.\\
+\textbf{Extends:} D-UI1 (menu shell), D-R26 (living-glass chrome)
+\end{decisionbox}
+
+\subsection*{D-UI9 --- Variable-weight type for CSim}
+\begin{decisionbox}[title={D-UI9 \quad 2026-09-23}]
+\textbf{Decision:} CSim sets its type in Kikuta (SIL OFL 1.1), a
+variable-weight face shipped under \texttt{Assets/Fonts/Kikuta}. The host font
+service keeps its closed catalog and adds the name
+\texttt{kikuta:<weight>[:<glyphs>]}: FreeType instances the \texttt{wght} axis
+(\texttt{FontFaceOptions}), rasterizes the printable ASCII Kikuta lacks from
+Space Mono, and can restrict an atlas to up to 32 glyphs. Weight animates
+without a live rasterizer: \texttt{FontWeightRamp} holds a few rasterized
+weights and maps any weight to the two around it, and
+\texttt{TextPrimitive::heavyFont} overlays the heavier at the fraction between
+them with interpolated advances. \texttt{CSimTypeface} installs Kikuta 400 as
+the default font and a 400--1000 UI ramp during package bootstrap;
+\texttt{GuiKit::drawEmphasizedText} and its centered and measuring companions
+turn a row or button's emphasis spring into weight, and the CSIM title animates
+its own four-glyph ramp (thin while falling, heavy on impact, a rolling weight
+swell and a pull toward the pointer). \texttt{TextPrimitive::stretchX} and
+\texttt{stretchY} squash and stretch a run about its left edge and baseline;
+the title letters use them with weight for random one-at-a-time poses (flex,
+slim, hop) and a hop wave when the word is clicked.\\
+\textbf{Why:} The owner supplied the face and asked for hover emphasis to
+thicken labels and for play with the title's weight.\\
+\textbf{Consequences:} The guest ABI and \texttt{GuestFontRequest} are
+unchanged. Products without an installed ramp draw emphasized text plainly, so
+IllEd and the viewer are unaffected. Each ramp sample is one font request
+against the guest's 32-font budget (CSim uses at most 20). Kikuta's B and S
+resemble 8 and 5, which rule strings such as B3/S23 inherit.\\
+\textbf{Extends:} D-UI8 (menu motion), D-R26 (living-glass chrome)
+\end{decisionbox}
+
+\subsection*{D-UI10 --- CSim's software pointer}
+\begin{decisionbox}[title={D-UI10 \quad 2026-09-24}]
+\textbf{Decision:} CSim draws its own mouse pointer (\texttt{SoftwareCursor})
+and hides the system cursor while it does. Display wire version 2 appends
+\texttt{hideSystemCursor} to \texttt{GuestDisplayState}; the host applies it
+with GLFW's hidden-cursor mode on the main window only
+(\texttt{IRenderWindow::setSystemCursorHidden}), still decodes version 1 and
+answers each request in its own version, and a version 1 request leaves the
+cursor alone. \texttt{WasmGameServices::cancel} restores the system cursor, so
+a stopped or failed guest never leaves it hidden.
+\texttt{GuestModuleApplication} gains \texttt{updateOverlay} and
+\texttt{dispatchOverlay} for product overlays that outlive module transitions
+and draw above them. The pointer's tip sits exactly on the pointer; its body
+leans against sideways motion on a spring, a faint holographic afterimage
+follows movement, and a press squishes it and throws a splash. It takes the menu
+glass palette: a dark halo, a rim lit cyan at the tip and violet at the tail,
+a deep glass body, and a soft glow around the edge.\\
+\textbf{Why:} The owner asked for a software cursor with sway and
+movement-driven animation.\\
+\textbf{Consequences:} The system cursor returns while the host console is
+open (it draws above the game) and outside the window's content area.
+The Software cursor toggle in F1 settings (the persisted
+\texttt{softwareCursor} option, also \texttt{toggle softwareCursor}) turns it
+off.
+IllEd and the viewer never set the field. The drawn pointer follows the last
+input snapshot, so it can trail the hardware pointer by a frame.\\
+\textbf{Extends:} D-UI8 (menu motion), D-E23 (capabilities)
+\end{decisionbox}
+
+\subsection*{D-UI11 --- Fractional and automatic UI scale}
+\begin{decisionbox}[title={D-UI11 \quad 2026-09-25}]
+\textbf{Decision:} The persisted \texttt{uiScale} setting accepts fractional
+factors (for example 1.25) and \texttt{auto} (or 0). The header-only
+\texttt{UiScale} helper resolves it against the window being laid out:
+automatic scale is 1x at 1280$\times$720 and grows in 0.25 steps with the
+smaller of the two axis ratios, clamped to 1x--4x; explicit positive factors
+pass through unchanged and an unset or unreadable value is 1x.
+\texttt{Renderer} resolves it for every frame, so resizing the window changes
+the automatic scale on the next frame, and the console uses the same rule.
+Display wire version 3 carries the scale in hundredths (0 for automatic,
+otherwise 100--400); the host still decodes versions 1 and 2 and answers
+them with the whole factor currently in effect. CSim's F1 UI scale becomes a
+slider (Auto, then 1x to 4x) and new CSim settings default to
+\texttt{auto}.\\
+\textbf{Why:} The owner asked for fractional UI scaling and an automatic mode
+that picks a scale as the window is resized.\\
+\textbf{Consequences:} Existing settings files keep their stored factor.
+IllEd and the viewer accept the same values without changes of their own.
+Automatic scale follows window size, not monitor DPI. The glass menus still
+fit oversized scales down to their design space.\\
+\textbf{Extends:} D-UI10 (display wire version 2), D-E23 (capabilities)
+\end{decisionbox}
+
+\subsection*{D-UI12 --- Canvas, control and behaviour settings}
+\begin{decisionbox}[title={D-UI12 \quad 2026-09-25}]
+\textbf{Decision:} CSim's F1 settings gain Canvas and Controls tabs.
+\texttt{SimulatorSettings} owns the new keys, defaults and ranges for both the
+canvas and the main menu: \texttt{startPaused}, \texttt{cellStyle}
+(\texttt{led}/\texttt{flat}), \texttt{cellGlow} (0--2), \texttt{gridLines},
+\texttt{showFPS}/\texttt{showMemory}, \texttt{zoomStep} (wheel zoom per notch),
+\texttt{invertZoom}, \texttt{panSpeed} (arrow keys, screen pixels per second,
+0 off), \texttt{autosaveMinutes} (\texttt{autosave.csim} in private storage, 0
+off) and \texttt{confirmClear} (\texttt{clear\_canvas} asks in the
+confirmation dialog; \texttt{clear\_canvas yes} skips it). The cell look
+reaches the host's Canvas shader through the cell quad's colour attribute as
+(glow / 2, LED keys, grid lines); \texttt{GLMesh} now binds that attribute for
+\texttt{Pos3Color3Uv2}. The FPS and memory readout is CSim's own
+\texttt{PerformanceOverlay}, drawn by the guest over every screen.\\
+\textbf{Why:} The owner asked for more engine and game settings: camera
+controls, canvas appearance, a performance overlay and simulation behaviour.
+The engine's \texttt{DebugModule} overlay is compiled only into development
+builds, so a toggle for it would do nothing in Release.\\
+\textbf{Consequences:} No uniform, frame schema or ABI change: the colour
+attribute was already carried guest to host (quantized to 8 bits on the inline
+path, which the look tolerates). The memory line reports the store's linear
+memory, which only grows. The engine's F3 overlay is unchanged. Autosave drains
+the simulation briefly on each write, like a manual save.\\
+\textbf{Extends:} D-UI10, D-UI11
+\end{decisionbox}
+
+\subsection*{D-UI13 --- Restart from inside the application}
+\begin{decisionbox}[title={D-UI13 \quad 2026-09-25}]
+\textbf{Decision:} Settings read only when the window is created (today
+MSAA) can be applied by restarting from inside the application.
+\texttt{IRenderWindow::requestRestart} is a close request that remembers a
+relaunch; a deferred close drops it, and \texttt{RunIllumoApplication}
+relaunches the program with its original command line only after the engine
+and logger have shut down (\texttt{RelaunchCurrentProcess}). A guest asks with
+the new update flag \texttt{GuestUpdateFlags::RequestRestart} beside
+\texttt{RequestClose}; \texttt{WasmGameModule} honours it only for a guest
+granted Display and only when the runtime allows restarts (never for
+captures, benchmarks or tests), otherwise it is an ordinary close. Display
+wire version 4 appends the MSAA preference, which the host saves for its next
+window, and the running window's samples. After Apply, CSim asks ``Restart
+CSim?'' (Later / Restart now) whenever the applied MSAA differs from the
+running window's.\\
+\textbf{Why:} The owner asked that settings needing a restart offer one from
+inside the application. CSim's MSAA setting also never reached the host
+before version 4, so it had no effect at all.\\
+\textbf{Consequences:} A restart closes the canvas; the prompt warns that
+unsaved world changes are lost. MSAA lives in the host's settings, so apps
+sharing a runtime share it and each sends its own on start. The Linux
+relaunch uses \texttt{posix\_spawn} and is unverified, like the rest of the
+Linux platform.\\
+\textbf{Extends:} D-UI10, D-UI11, D-UI12
+\end{decisionbox}
+
+\subsection*{D-UI14 --- The engine's brand, splash and badge}
+\begin{decisionbox}[title={D-UI14 \quad 2026-09-27}]
+\textbf{Decision:} The Illumo brand kit (\path{docs/brand}) belongs to the
+engine. \texttt{GuiEngineBrand} in \texttt{Illumo/Gui} draws it from images in
+\path{Illumo/Assets/Branding} (\texttt{/engine/Branding} in a guest), which
+\path{tools/make_brand_assets.py} crops and pre-sizes because guest textures
+have no mipmaps. \texttt{RuntimeShell} plays \texttt{GuiEngineSplash} on every
+interactive launch: over the brand's dark ground the neon logo strikes like a
+neon tube (a plain fade with reduced motion), holds and fades in 2.3~seconds,
+and any key but Grave, or a fresh click, skips it. The program is started
+first but is neither updated nor drawn until the splash's last frame has
+shown, and a close during the splash ends the run without asking it. Capture
+and benchmark runs, and a missing logo, have no splash.
+\texttt{GuiEngineBadge} draws a `Powered by'' label over the flat wordmark;
+every \texttt{GuestProgram} preloads its image and CSim's title screen draws it
+in the lower left corner. \texttt{IllumoRuntime.exe} embeds the brand icon as
+its \texttt{GLFW\_ICON} resource.\\
+\textbf{Why:} The owner asked for the brand on the app icon, the README and
+the title screen, for engine branding to live in Illumo rather than in a
+product, and for programs not to have to trigger the splash.\\
+\textbf{Consequences:} Every app, tools included, opens on the splash, and a
+settings restart plays it again because the relaunch replays the command line.
+Capture scripts and benchmarks are unaffected. A program's first scene starts
+once the splash ends, so its entrance is seen in full.\\
+\textbf{Extends:} D-E31, D-UI7
+\end{decisionbox}
+
+\subsection*{D-UI15 --- Canvas toolbar and selection context menu}
+\begin{decisionbox}[title={D-UI15 \quad 2026-09-27}]
+\textbf{Decision:} CSim's Edit mode gains a glass toolbar,
+\texttt{CanvasActionBar}, centred along the top edge between the mode badge
+and the settings button. It rides the edit chrome's lift spring and offers
+Save and Load (the platform pickers behind \texttt{save\_dialog} and
+\texttt{load\_dialog}), Paste (over the selection, else at the middle of the
+view) and Clear (the Confirm clearing dialog when that setting is on). While
+cells are selected a group with the selection's size, Copy, Cut, Fill (with the
+paint brush), Erase and Deselect pours out of it. A right press inside the
+selection now opens \texttt{CanvasContextMenu} (Cut, Copy, Paste here, Fill,
+Erase, Deselect) instead of erasing; it chooses on a click, on a right-button
+release after moving onto a row, or with Up/Down and Enter, and Escape or a
+press elsewhere closes it (a right press elsewhere on the selection reopens it
+there). Both widgets only report a \texttt{CanvasEditAction};
+\texttt{CanvasScene} runs it.\\
+\textbf{Why:} The owner asked for canvas buttons (clear, save and load) and a
+desktop-style right-click menu on a selection.\\
+\textbf{Consequences:} Right-dragging that starts inside a selection no longer
+erases; outside a selection the right button still does. Presses on the
+toolbar or menu, and the press that dismisses the menu, never reach the world.
+While the menu is open the camera holds still and the paint drawer ignores
+the pointer. No engine, ABI or save-format change.\\
+\textbf{Extends:} D-UI7, D-UI12
+\end{decisionbox}
+
+\subsection*{D-UI16 --- Resetting the canvas to its starting pattern}
+\begin{decisionbox}[title={D-UI16 \quad 2026-09-27}]
+\textbf{Decision:} The canvas toolbar gains Reset between Paste and Clear,
+and the console gains \texttt{reset\_canvas [yes]}. Reset replaces the world
+with the active rule's starting pattern, the same one
+\texttt{seedInitialPattern} places when a new canvas opens, starts the
+generation count over and returns the camera to the home view that frames
+it. The world's topology, family and ruleset and the EDIT/NORMAL mode are
+kept. Confirm clearing guards it as it guards Clear
+(\texttt{ExitConfirmDialog::openResetCanvas}; \texttt{yes} skips it).\\
+\textbf{Why:} The owner asked for a way back to each rule's starting colony
+without reopening the canvas.\\
+\textbf{Consequences:} The toolbar's base group has five buttons; a narrow
+window still fits it by one scale. No engine, ABI or save-format change.\\
+\textbf{Extends:} D-UI15, D-UI12
+\end{decisionbox}
+
+\subsection*{D-UI17 --- Drop-down lists for families and rulesets}
+\begin{decisionbox}[title={D-UI17 \quad 2026-09-27}]
+\textbf{Decision:} \texttt{GuiDropdownList} joins \texttt{Illumo/Gui}: a
+pick-one list for glass-menu fields with more values than stepping through
+them suits. It opens below its field, or above when more rows fit there, and
+shows up to eight rows that the arrows, Page Up/Down, Home/End, the wheel and
+type-ahead letters scroll; it marks the current value and chooses with Enter
+or a click, while Escape or a press elsewhere closes it. It pops open on a
+\texttt{kBoing} spring, highlights with \texttt{drawLiquidSelection}, draws
+its card, highlight and labels into three caller-owned layers above the menu,
+and follows its field as the panel tilts. Like \texttt{GuiDialog} it keeps its
+own state and hit testing; the owner routes a frame's input to it while it is
+open and voices its own cues. CSim's F1 settings and New Canvas screen use it
+for Cell family (each with its rule count) and Ruleset (the family's rules);
+Left/Right still step to the neighbouring value.\\
+\textbf{Why:} With 38 families and up to 27 rules in one family, the owner
+found stepping left and right through them too slow.\\
+\textbf{Consequences:} Enter and a click on those rows open the list instead
+of stepping. A new family keeps the ruleset only if it belongs to it. No ABI
+or save-format change.\\
+\textbf{Extends:} D-UI8, D-UI12, D-GC3
+\end{decisionbox}
+
+\subsection*{D-E32 --- Looping music over the sound seam}
+\begin{decisionbox}[title={D-E32 \quad 2026-09-27}]
+\textbf{Decision:} Music is a looping sound, not a separate streaming
+service. \texttt{SoundPlayback} gains \texttt{loop} and a fade-in (at most
+10~s); \texttt{IAudio} gains \texttt{stop(sound, fade)} and
+\texttt{setVolume(sound, gain)} for one sound's voices; voice replacement
+spares looping voices while any other can go. A clip may hold 16\,Mi samples
+(about 3~min~10~s of 44.1~kHz stereo). The Audio service moves to
+\texttt{GuestAudioRequest} version 2: \texttt{Create} declares the whole sample
+count and carries the first chunk, \texttt{Append} carries the rest (at most
+2\,Mi samples each), and the host registers the sound when the last sample
+lands; \texttt{Play} carries the loop flag and fade, and \texttt{Stop} and
+\texttt{SetSoundVolume} are new. \texttt{GuestAudio} keeps requests the service
+queue cannot take in an ordered backlog that \texttt{GuestProgram} pumps each
+update. CSim's title scene loops \texttt{Music/music\_main\_menu.mp3} at its own
+\texttt{musicVolume} setting (the Audio tab's Music volume row, heard live
+while adjusted) and fades it out when a canvas opens.\\
+\textbf{Why:} The owner asked for a 64-second track to loop on the main menu.
+It is too large for one service record (and one exchange) but small once
+decoded, so uploading it whole keeps playback on the mixer thread, immune to
+guest stalls such as scene loads, and needs no host-side decoding of guest
+media.\\
+\textbf{Consequences:} Version 1 audio records are malformed, so packages
+built before this change retire on their first audio request. A guest may keep
+128\,MiB of samples, sounds still arriving counted at their whole size. A
+large sound reaches the host over several updates, and requests made after it
+follow it. Tracks longer than the clip bound would need real streaming.\\
+\textbf{Extends:} D-E28
+\end{decisionbox}
+
+\subsection*{D-E33 --- Guest profiling imports}
+\begin{decisionbox}[title={D-E33 \quad 2026-09-28}]
+\textbf{Decision:} Guests report profiling markers to the host's Tracy
+client through five imports in the \texttt{illumo\_profile} module.
+\texttt{register} takes a site's kind (zone, plot or frame mark), name,
+function, file and line; the host copies the text, interns it for the rest of
+the process and returns an index, or $-1$. \texttt{zone\_begin},
+\texttt{zone\_end}, \texttt{plot} and \texttt{frame\_mark} then pass only that
+index. Every \texttt{WasmInstance} defines the imports; a host built without
+\texttt{TRACY\_ENABLE} answers every registration with $-1$. An instance
+registers at most 4096 sites and the process interns at most 16\,384 sites and
+4~MiB of text; zones nest at most 256 deep, deeper begins being counted so
+their ends still pair; unknown ids and unmatched ends are ignored, and zones a
+call leaves open are closed when it returns. \pathref{Illumo/Include/Illumo/Foundation/Profile.h}
+is the one marker API (\texttt{ILLUMO\_PROFILE\_ZONE}, \texttt{PLOT},
+\texttt{FRAME\_MARK}, \texttt{THREAD}) for host, engine, guest and product
+code: natively Tracy's macros, in a guest built with
+\texttt{ILLUMO\_GUEST\_PROFILE} the imports, otherwise nothing.
+\texttt{ILLUMO\_ENABLE\_TRACY} builds the guests that way, and
+\texttt{build.py}'s \texttt{tracy} profile selects it. The vendored client
+moves from Tracy 0.13.1 to an unmodified upstream 0.14.1 (BSD-3-Clause), the
+version of the owner's profiler tools.\\
+\textbf{Why:} The owner asked to audit IllumoGame's performance in Tracy.
+Every application now runs as a guest, where a Tracy client cannot run, so
+the game's zones compiled to nothing and a capture showed the whole guest as
+one host zone. Registering sites once keeps each zone to two cheap host calls,
+and emitting on the calling thread gives each simulation lane its own row.\\
+\textbf{Consequences:} Profiling guests import \texttt{illumo\_profile} and
+load only on hosts that define it (every host from this change on). Tracy
+retains interned sites for the process lifetime, which the process bounds
+limit. Guest zones include the cost of their import calls. Guests are always
+compiled Release, so a Debug host profiles only host code unless it is also
+configured with \texttt{ILLUMO\_ENABLE\_TRACY}. Tracy refuses connections
+across versions, so the profiler GUI and capture tools must be 0.14.1.\\
+\textbf{Extends:} D-E15, D-E17
+\end{decisionbox}
+
+\subsection*{D-E34 --- Simulation lanes v2}
+\begin{decisionbox}[title={D-E34 \quad 2026-09-28}]
+\textbf{Decision:} Four changes to how IllumoGame's generations leave the
+frame (\pathref{docs/simulation-lanes-v2-design.md}). The host delivers a
+finished job or lane reply to the first update after it completes
+(\texttt{WasmGameServices::harvest} before the services exchange) instead of
+a frame later. A lane owns one contiguous run of chunk lines, cut so lanes
+hold equal stored-chunk counts and recut at resynchronization or after
+persistent imbalance, with a halo two lines deep; it advances a block of up
+to $16H/r$ generations (32 for Life-like rules, one for elementary rows) and
+replies with every owned chunk the block changed (CSL1 version~3). A start
+may publish several generations as one delta
+(\texttt{SimulationRunnerTimings::generations}); the canvas asks for every
+whole step due, serial starts run as many generations as fit 4~ms of the
+frame, and the guest runner prefers lanes exactly when serial generations
+cannot deliver the requested generations per frame within that budget,
+returning once summed lane work would fit half of it.\\
+\textbf{Why:} Tracy captures (D-E33) showed lanes capped at 30 generations per
+second at vsync 60: every generation needed a two-frame round trip, fixed
+eight-row bands left six of eight lanes idle on typical worlds, and the
+per-generation thresholds kept lanes where serial was faster. Blocks
+amortize the round trip and the control-store merge over many generations;
+the same 619-chunk world now runs at about 980 generations per second with
+one-frame blocks.\\
+\textbf{Consequences:} Above the frame rate the canvas shows every block's
+last generation; the intermediate ones are computed exactly but not drawn,
+where before they were dropped. A drain retires a whole unpublished block.
+Deltas may span several revisions ($\texttt{toRevision} -
+\texttt{fromRevision} > 1$). CSL1 version~2 is refused; lanes and the
+control store ship in one package. The native runner still runs one
+generation per start.\\
+\textbf{Supersedes:} the partition and thresholds of D-E17 and D-E29\\
+\textbf{Extends:} D-E33
+\end{decisionbox}
+
+\subsection*{D-F2 --- Calendar build versions}
+\begin{decisionbox}[title={D-F2 \quad 2026-09-25}]
+\textbf{Decision:} A build's version is \texttt{vYY.MM\_B}, for example
+\texttt{v26.09\_12}. \texttt{YY.MM} is the release, held in
+\pathref{VERSION.txt} at the repository root and changed only when a release
+is cut (\texttt{python build.py version --set YY.MM} writes and commits it
+alone). \texttt{B} is the number of first-parent commits since the commit
+that last changed \pathref{VERSION.txt}, so each release starts at 0 and a
+merged pull request counts once. \pathref{cmake/IllumoVersion.cmake} computes
+it from Git on every build and regenerates the \symbolref{BuildInfo}
+definitions and the version of each staged \texttt{illumo.json}, rewriting
+them only when they change. The development watermark shows
+\texttt{VersionNumber}, and CSim's main menu shows the same form in its lower
+right corner, read by the guest from its staged manifest; logs, the
+startup report and \texttt{--version} show \texttt{FullVersion}, which adds
+the abbreviated commit and whether tracked files were modified
+(\texttt{v26.09\_12 (1f709073, dirty)}).\\
+\textbf{Why:} The previous \texttt{BuildInfo} was typed by hand and had not
+changed since 2024, and each app manifest repeated the release. Deriving the
+number from history needs no bookkeeping and cannot conflict between
+branches, which a counter kept in a file would on every merge. The release
+is not taken from the clock, so a September fix built in October stays in
+its release.\\
+\textbf{Consequences:} Two branches can reach the same \texttt{B}; the commit
+in the full version tells them apart. A tree without Git history or a
+shallow clone builds as \texttt{\_0} with commit \texttt{unknown} (or its
+commit), so release builds need a full clone. Source manifests no longer
+carry \texttt{version}; staging refuses one that does. The file is not named
+\texttt{VERSION} because the repository root is on include paths and on
+Windows \texttt{<version>} would resolve to it. \texttt{BuildDateShort} and
+\texttt{BuildTimestamp} are removed.
+\end{decisionbox}
+
+\subsection*{D-F3 --- No C++ exceptions}
+\begin{decisionbox}[title={D-F3 \quad 2026-09-29}]
+\textbf{Decision:} The host and every guest build without C++ exceptions.
+MSVC compiles every C++ target with \texttt{/EHs-c-} and
+\texttt{\_HAS\_EXCEPTIONS=0}, Clang with \texttt{-fno-exceptions}, and
+first-party MSVC targets treat warning C4530 as an error. Guests build with
+\texttt{-fno-exceptions} against the WASI SDK's no-exceptions libc++, and
+Wasmtime runs with the exception proposal off, so a module using exception
+opcodes is refused. Failures return errors: \texttt{bool} results with
+error strings, the sticky \symbolref{GuestWireWriter} failure, the guest
+recorder's first contract failure, \pathref{Foundation/ParseNumber.h} for
+numbers, \texttt{std::error\_code} file-system overloads, non-throwing JSON
+parsing and \pathref{Platform/PathText.h} for path text. A programming error
+or running out of memory or threads ends the process through
+\texttt{illumoFatal} (\pathref{Foundation/Fatal.h}).\\
+\textbf{Why:} Owner directive. It removes unwinding code and tables, keeps
+every failure path explicit, and lets guests use the smaller libc++ without
+\texttt{libunwind}.\\
+\textbf{Consequences:} Standard containers cannot report allocation failure,
+so the allocation-failure recovery in \symbolref{SparseCellGrid},
+\texttt{SceneGraphCompile} and \texttt{SceneQueryIndex} and its fault
+injection are removed; explicit input-size limits stay ordinary errors.
+Worker-thread creation failure is fatal. \texttt{GuestProgram::failStartup}
+replaces throwing from \texttt{bootstrap}. The
+\texttt{Illumo.Build.NoExceptions} test fails on any \texttt{try},
+\texttt{catch} or \texttt{throw} in first-party C++.
+\end{decisionbox}
+
+\subsection*{D-PL1 --- Retire the macOS scaffold (2026-09-19)}
+macOS is not a current product target. Remove the first-party Apple platform
+files, Cocoa framework/source selection, and dedicated scaffold package map.
+CMake rejects Apple targets explicitly. Windows remains supported; Linux keeps
+its existing source-repaired, native-validation-pending status. Vendored
+dependency portability code and historical design records retain their provenance.
+A future macOS port requires a new scope and native validation.

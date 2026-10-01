@@ -9,22 +9,33 @@ file as an architecture catalog.
 
 This C++23 workspace contains the product-agnostic `Illumo` static library and
 the in-tree applications that consume it. `IllumoGame` is the
-cellular-automata learning sandbox. `IllEd` is the SceneGraph world editor
+cellular-automata learning sandbox; it ships only as the isolated
+`IllumoGame.wasm` package played by the generic `IllumoRuntime` host (Windows
+x64). `IllEd` is the SceneGraph world editor
 used to bootstrap later Illumo applications (editor versus runtime, in the
-same sense as Unreal Editor versus Unreal). The supported product path is
+same sense as Unreal Editor versus Unreal). Every interactive client program
+is a WASM package in `apps/<name>/` beside that one host: `game`, `illed`
+(`IllEd.wasm`) and `meshviewer` (`IllMeshViewer.wasm`); `IllEdCore` and
+`IllMeshViewerCore` remain only as native test-oracle libraries. The supported product path is
 Windows, GLFW, OpenGL, and — for the simulator — the sparse infinite or
-finite-toroidal canvas. Illumo remains a reusable runtime and rendering
-foundation; application policy stays in the consuming product.
+finite-toroidal canvas. A Vulkan 1.3 backend with OpenGL's observable
+behaviour is selectable per launch (`GraphicsAPI`, `--graphics-api vulkan`;
+D-R33) and falls back to OpenGL when it cannot start. Illumo remains a reusable runtime and rendering
+foundation; application policy stays in the consuming product. The optional
+`Illumo::Content` layer owns the one scene format every program reads
+(`.ilsc` format 2, instantiated by `SceneInstance`), `.ilpk` packages, and
+the host virtual file tree on which apps, content packages and mods mount
+(`docs/content-packages-and-scenes-design.md`).
 
-The approved persistent `SceneGraph` v1 is deliberately bounded to handles,
-hierarchy, transforms, subtree state, and token render attachments. Do not
-expand it into an ECS, retained UI tree, serialization system, spatial index,
-or update framework, and do not introduce a render graph, additional graphics
-backend, compute backend, or broad framework merely for architectural
-completeness. Preserve public behavior and formats by default. A change to
-subsystem boundaries, dependency direction, ownership, lifetime, threading,
-persistence, or public contracts requires explicit authorization and a design
-appropriate to its blast radius.
+The approved `SceneGraph` v2 uses graph-local handles, intrusive hierarchy,
+TRS state, a compiled preorder, revision-cached bounds, ordered borrowed
+attachments, identity/payload metadata, and handle-based queries. Its derived
+BVH accelerates queries; `SceneGraphDrawable` consumes graph-owned snapshots.
+Keep this boundary separate from ECS components, retained UI, serialization,
+update callbacks, render graphs, and backend execution. Scene mutation,
+extraction, and attachment emission remain main-thread affine. Parallel scene
+stages and culling tiers remain measurement-gated; moving the OpenGL context
+or recording attachment payloads requires a separate accepted design.
 
 ## Sources of truth
 
@@ -33,7 +44,19 @@ editing. Route detail to these canonical sources:
 
 - repository use and exact common commands: `README.md`;
 - current architecture and decision catalog: `docs/architecture-consensus.md`;
-- persistent scene hierarchy contract: `docs/scene-graph-v1-design.md`;
+- intended charter direction and current boundary: `docs/charter-direction.md`;
+- capture API and runtime `--capture` mode: `docs/frame-capture.md`;
+- Tracy builds, `<Illumo/Foundation/Profile.h>` markers and the guest
+  `illumo_profile` imports: `docs/tracy-profiling.md`;
+- WASM runtime design, ABI and cutover: `docs/wasm-game-runtime-design.md`,
+  `docs/wasm-game-runtime-plan.md`, `docs/wasm-game-cutover-plan.md`, and
+  `docs/wasm-apps-cutover-plan.md`;
+- host-owned rendering (D-E30, D-R28, D-R29), instancing, recorded lists,
+  `RenderWorld`, `VisualStore` and frame schema v7:
+  `docs/host-render-world-design.md` and its tracker
+  `docs/host-render-world-plan.md`;
+- persistent scene hierarchy contract: `docs/scene-graph-v2-design.md`;
+- scene implementation and verification record: `docs/scene-graph-v2-plan.md`;
 - long-form design book and chart-only map: `docs/latex/illumo.tex` and
   `docs/latex/architecture-map.tex`;
 - formal decisions: `docs/latex/sections/09-design-decision-log.tex`;
@@ -80,11 +103,14 @@ Drawable::AppendCommands(Renderer*)
   -> GLBackend/GLDevice or MockBackend
 ```
 
-`SceneGraph` is a retained, scene-owned node hierarchy with graph-local
-generational handles. It participates in this flow as one drawable in the
-existing per-frame `Rendering::Scene`; borrowed `ISceneRenderAttachment`
-values receive resolved world transforms and append tokens. It is not CSim
-cell storage, an ECS, or a replacement for the frame list.
+`SceneGraph` owns persistent nodes, compiled transforms/bounds, and two reusable
+snapshot buffers. `SceneGraphDrawable` enters the existing per-frame
+`DrawList` as one drawable and uses one immutable view for collection, depth,
+and color. Attachments remain borrowed; detach or invalidate snapshots before
+retiring or changing their content. Already emitted token payloads must
+outlive synchronous submission. Unknown bounds fail open. Renderer fits shadows after
+caster collection, so shadow relevance is tested from snapshot values in the
+depth pass. CA storage and UI remain separate from the scene subsystem.
 
 Production drawables use the token path. Immediate `Draw()` is only the fallback
 for tests or incomplete stubs. Game and rules code must not issue raw OpenGL
@@ -95,24 +121,39 @@ submission returns.
 Backend resources use non-convertible slot+generation `MeshHandle`,
 `ShaderHandle`, and `TextureHandle` values; renderer styles use the same model.
 Backends allocate handles and validate replacement, destruction, queries, and
-command submission. `AssetManager` caches file textures/shaders by canonical
-path+options, owns one CPU file/decode worker, and performs GPU replacement only
-from render-thread `pump`. Debug builds poll timestamps every 500 ms; explicit
-reload remains available in all builds. The Debug renderer demo acquires both
-its atlas and contract-compatible sprite shader through this managed path.
+command submission. `AssetManager` caches file textures, shaders, and immutable
+static meshes by canonical path+options. Texture/shader file work uses one CPU
+decode worker and performs GPU replacement only from render-thread `pump`;
+mesh decode and enrollment are synchronous and main-thread affine. Debug builds
+poll texture/shader timestamps every 500 ms; explicit reload remains available
+for those resource types in all builds. `MeshVisual` borrows managed mesh
+handles while the acquiring owner retains their `AssetManager` references;
+procedural dynamic geometry remains visual-owned. The Debug renderer demo
+acquires both its atlas and contract-compatible sprite shader through this
+managed path.
 
 `GameVisual` is the reusable painter-correct 2D host. One stable ordered stream
 spans shapes, sprites, and text; only adjacent compatible items batch. Parent and
 local `Transform2D`, normalized pivots, atlas regions/flips, and bounded dynamic
 quad buffers are supported. `SpriteAnimator` is passive and caller-updated.
+In WASM guests with `HostRender`, a `GameVisual` travels whole: the recorder's
+visual proxies send item changes and the host draws it from `VisualStore`
+(D-R29), so products compose UI the same way in both hosts.
 
 Product UI is primitive-composed rather than a separate widget system.
 `CommandLine` and the Release-visible `ConfigurationMenu` build their panels
 from `GameVisual` fills, outlines, lines, and text; `GLString` may add cached
 panel chrome; FPS and `SplashText` use that decorated-label path. `UiTheme` is
-shared value-only styling. Preserve the
-existing drawable owners and Scene layers; do not introduce a retained UI tree
-for this surface.
+shared value-only styling, and `Illumo/Gui` is the single home for reusable UI
+behavior: `GuiKit` drawing helpers, `GuiDialog` modals, and `GuiMenuShell`
+overlay easing, animation clocks, virtual-space fitting, row windows, and
+pointer edges. Tool apps (IllEd, IllMeshViewer) use the plain `GuiToolStyle`
+look and a `GuiPanelDock` of detachable panels whose content draws into a
+`GuiPanelPlacement` and reads `GuiPanelPointer` (D-UI7); extra windows come
+from `IllumoContext::panelSurfaces` and products must work fully docked
+without it. A new screen composes those rather than restating them.
+Preserve the existing drawable owners and DrawList layers; do not introduce a
+retained UI tree for this surface.
 
 Canvas truth (verify here before trusting older notes):
 
@@ -147,6 +188,9 @@ Canvas truth (verify here before trusting older notes):
   counted-neighbor contribution work; Wireworld conductors are stored but only
   heads contribute. All-dense counted chunks bypass scratch construction. At
   32 or more halo targets, a grid-owned reusable pool uses up to eight workers.
+  Histogram, directional, extended-range and Lenia kernels share one
+  chunk-parallel driver on that pool (per-worker halo windows, serial in-order
+  journal and publication), and elementary 1D rows split into pool ranges.
   Complete-halo targets use a retained generation-stamped flat index and
   retained result storage instead of a local hash set, sorting, and disposable
   vectors. All evaluators index a per-ruleset 256x9 transition table; dense
@@ -156,9 +200,16 @@ Canvas truth (verify here before trusting older notes):
   generations publish only at frame boundaries with `SparseGenerationDelta`;
   journals of at least 2,048 presentation chunks carry a lightweight
   replacement marker instead of per-chunk payloads. The former display grid
-  consumes the delta before reuse. Only one generation
-  may be outstanding, overdue whole steps are dropped, and state mutations,
-  persistence, ruleset changes, manual stepping, and shutdown drain first.
+  consumes the delta before reuse. Only one start may be outstanding (it may
+  publish several generations as one delta), due whole steps beyond what it
+  accepts are dropped, and state mutations, persistence, ruleset changes,
+  manual stepping, and shutdown drain first. In the package, serial starts
+  run as many generations as fit 4 ms of the frame; once that cannot deliver
+  the requested rate, blocks of up to 32 generations run on up to eight
+  isolated simulation lanes (`CSimWorkerGuest.wasm` stores each owning a
+  contiguous, chunk-balanced run of lines with a two-line halo; D-E34) and
+  the control store merges one exact delta per block; there a drain retires
+  the outstanding block instead of waiting for it.
   Status derives achieved TPS from published completions and reports rolling
   generation latency. The default `0 x 0` topology is infinite and
   non-toroidal; positive chunk width and height select a finite torus with
@@ -188,20 +239,29 @@ Canvas truth (verify here before trusting older notes):
   `RenderWindow` defaults to monitor-synchronized swapping; persisted `vsync=0`
   remains the explicit uncapped profiling mode. Debug FPS output separates
   paced swap completions from CPU submissions.
-- Persistence always writes sparse version 3 with topology and reads versions
-  3 and 2 plus the prior dense format. Older formats select infinite topology.
+- Persistence always writes sparse version 4 with family/ruleset identity and
+  topology, and reads versions 4, 3, and 2 plus the prior dense format.
+  Version 2 and legacy dense files select infinite topology.
   Legacy `CellGrid`/`Canvas` remain compatibility fixtures,
   not a second production runtime path.
 
 Ruleset truth:
 
-- Active: Game of Life, Seeds, Brian's Brain, Highlife, Day & Night, Life
-  Without Death, Wireworld, Rule 90, and Rule 184.
+- Active catalogs include Life-like, Generations, Wireworld, elementary 1D,
+  cyclic/CCA (including long-range Griffeath rules), colorized Life,
+  Larger-than-Life (with decay trails), Hodgepodge chemistry, directional
+  Turmites, HPP lattice gas, five-species dominance, Golly-table
+  self-replicating loops, Abelian sandpile rules, and quantized Lenia.
 - Binary rules encode `0` as alive and `1` as dead.
 - Wireworld encodes head `0`, empty `1`, tail `2`, conductor `3`.
+- Lenia encodes intensity levels: `1` is level 0, `2..n-1` are levels
+  1..n-2, `0` is the full level. Its tables must compile bit-identically on
+  every platform (integer taps, deterministic exp).
 - Rule 90 and Rule 184 are elementary 1D space-time diagrams: source row is the
   maximum counted Y, destination is Y+1, older rows stay history.
-- `RuleSet` transitions (`nextState`) build a cached 256x9 table and palette
+- Count-based `RuleSet` transitions (`nextState`) build a cached 256x9 table;
+  full-state histograms, extended counts, and north/east/south/west directional
+  neighborhoods use isolated contracts. Palette
   evaluation (`evalCell`) supplies colors. Production hot loops index the table
   instead of making virtual transition calls and use separate stored/counting masks,
   retained chunk-local candidate scratch, and a generation-stamped flat address
@@ -221,11 +281,13 @@ Ruleset truth:
 |---|---|
 | Application runner and main loop | `Illumo/Source/Engine/Application.cpp` |
 | Public library API | `Illumo/Include/Illumo/*` |
-| Host, services, modules | `Illumo/Source/Engine/Illumo.cpp`, public Engine headers |
+| Host, services, frame phases | `Illumo/Source/Engine/Illumo.cpp`, public Engine headers, `Illumo/Source/Wasm/RuntimeShell.cpp` |
 | Persistent scene hierarchy | `Illumo/Include/Illumo/Scene/*`, `Illumo/Source/Scene/*` |
-| CA modes and editor | `IllumoGame/Source/Game/CellGameModule.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
-| World editor and `.ilsc` | `IllEd/Source/EditorModule.*`, `EditorDocument.*`, `IlscCodec.*`, `EditorToolbar.*` |
+| CA modes and editor | `IllumoGame/Source/Game/CanvasScene.*`, `TitleScene.*`, `CSimScenes.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
+| World editor | `IllEd/Source/EditorScene*.cpp`, `EditorDocument.*`, `EditorHistory.*`, `EditorSelection.*`, `EditorShortcuts.*`, `EditorGizmo.*`, `EditorInspector.*`, `EditorClipboard.*`, `EditorAssetBrowser.*`, `EditorToolbar.*` |
+| Scene format, packages, virtual file tree | `Illumo/Include/Illumo/Content/*`, `Illumo/Source/Content/*`, `Illumo/tools/IllumoPack.cpp` |
 | OS clipboard text | `Illumo/Include/Illumo/Platform/Clipboard.h`, platform `*Clipboard.cpp` |
+| Sound effects and looping music (miniaudio kept private) | `Illumo/Include/Illumo/Audio/*`, `Illumo/Source/Audio/*`, `IllumoGuest/Include/IllumoGuest/Audio.h`, `IllumoGame/Source/Game/CSimSounds.*` |
 | Domain cell storage | `IllumoGame/Source/Game/SparseCellGrid.*` |
 | Bounded view, fade, dirty upload | `IllumoGame/Source/Game/CanvasView.*`, `Illumo/Shader/canvas_*` |
 | Compatibility dense storage | `IllumoGame/Source/Game/CellGrid.*`, `Canvas.*` |
@@ -233,38 +295,96 @@ Ruleset truth:
 | Renderer and tokens | `Illumo/Include/Illumo/Rendering/*`, `Illumo/Source/Rendering/*` |
 | Resource handles and file assets | `Illumo/Include/Illumo/Rendering/ResourceHandle*`, `Illumo/Source/Rendering/AssetManager.cpp` |
 | World meshes, overlay primitives, animation | `Illumo/Source/Rendering/Primitives/*` (`MeshVisual`, `GameVisual`) |
-| GUI subsystem, dialogs, and atlas helpers | `Illumo/Include/Illumo/Gui/*`, `Illumo/Source/Gui/*` (`GuiKit`, `GuiDialog`, `GridAtlas`) |
+| GUI subsystem, dialogs, and atlas helpers | `Illumo/Include/Illumo/Gui/*`, `Illumo/Source/Gui/*` (`GuiKit`, `GuiDialog`, `GridAtlas`, `GuiToolStyle`, `GuiPanelDock`, `GuiPanelPointer`, `PanelSurfaces.h`) |
+| Detached panel windows (host) | `Illumo/Source/Wasm/WasmPanelWindows.*`, `Illumo/Include/Illumo/Platform/SurfaceWindow.h`, `IllumoGuest/Include/IllumoGuest/{Windows,PanelSurfaces}.h` |
 | Debug renderer atlas and shader | `Illumo/Assets/RendererDemo/*` |
-| Production backend factory | `Illumo/Source/Rendering/OpenGL/CreateOpenGLBackend.*` (composed in `Engine/Illumo.cpp`) |
-| Real graphics execution | `Illumo/Source/Rendering/OpenGL/*` |
+| Production backend factories and selection | `Illumo/Source/Rendering/OpenGL/CreateOpenGLBackend.*`, `Illumo/Source/Rendering/Vulkan/CreateVulkanBackend.*`, `Illumo/Source/Rendering/BackendConfig.h` (composed in `Engine/Illumo.cpp`) |
+| Real graphics execution | `Illumo/Source/Rendering/OpenGL/*`, `Illumo/Source/Rendering/Vulkan/*` (dependencies in `Illumo/cmake/IllumoVulkanDeps.cmake`) |
 | Headless backend | `Illumo/TestSupport/Include/Illumo/Testing/MockBackend.h` |
 | Input, console, env, logging, system CLI | `Illumo/Source/Services/*` |
 | OS entry and native save/load | `Illumo/Source/Platform/*` |
-| Tests | `Illumo/Tests/*`, `IllumoGame/Tests/*`, `IllEd/Tests/*` |
+| WASM host, ABI decoders, runtime | `Illumo/Source/Wasm/*`, `Illumo/Include/Illumo/Wasm/*`, `cmake/IllumoWasm.cmake` |
+| A program's WASM module and package | `<Program>/GuestTargets.cmake`, `<Program>/PackageTargets.cmake`, listed in the root `ILLUMO_PROGRAMS` |
+| Guest SDK, guest-side engine, wire headers | `IllumoGuest/Include/IllumoGuest/*`, `IllumoGuest/Source/*` |
+| IllumoGame package entry and platform adapter | `IllumoGame/Source/Wasm/*`, `IllumoGame/illumo.json` |
+| IllEd package entry and platform seam | `IllEd/Source/Wasm/EditorApplication.cpp`, `IllEd/Source/IllEdPlatform.h`, `IllEd/illumo.json` |
+| IllMeshViewer package entry and platform seam | `IllMeshViewer/Source/Wasm/ViewerApplication.cpp`, `IllMeshViewer/Source/MeshViewerPlatform.h`, `IllMeshViewer/illumo.json` |
+| Runtime command line and capture mode | `Illumo/Source/Wasm/RuntimeApplication.cpp` |
+| Tests | `Illumo/Tests/*`, `IllumoGame/Tests/*`, `IllEd/Tests/*`, `IllMeshViewer/Tests/*` |
 | Canonical architecture | `docs/architecture-consensus.md` |
 | Formal decisions | `docs/latex/sections/09-design-decision-log.tex` |
 
 ## Build and verification commands
 
-Run from the repository root on Windows.
+Run from the repository root on Windows. The default Windows configure
+builds `IllumoRuntime` and stages every app package (`apps/game`,
+`apps/illed`, `apps/meshviewer`), which requires the pinned toolchain from
+`tools/bootstrap-wasm.ps1` (or `python build.py wasm-tools`) in
+`build-wasm-tools/` (`-DILLUMO_BUILD_WASM_RUNTIME=OFF` builds without them;
+there are then no runnable applications).
 
 ```powershell
+.\tools\bootstrap-wasm.ps1
 cmake -S . -B build
 cmake --build build --config Release
 ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
 ```
 
+`build.py` passes `ILLUMO_BUILD_WASM_RUNTIME` explicitly (`--no-wasm` to
+skip), because `option()` keeps a stale cached `OFF`. `python build.py
+doctor` reports the toolchain, an `apps` check, and stale native pre-WASM
+outputs (`IllumoGame.exe`, `IllEd.exe`, `IllMeshViewer.exe`,
+`IllumoCapture.exe`, an old `game/` folder) to delete. `python build.py play
+--app game|illed|meshviewer [-- runtime args]` builds the runtime and runs
+one app (`--no-build` skips building). `python build.py test` builds every
+executable CTest runs; `tools/test_build.py` covers the orchestrator.
+Builds are versioned `vYY.MM_B` (D-F2): every build stamps `BuildInfo` and
+the staged `illumo.json` manifests from `VERSION.txt` and Git, so never edit
+the version by hand or add `version` to a source manifest. `python build.py
+version` prints it; `python build.py version --set YY.MM` cuts a release.
+Debug is the AddressSanitizer profile (`ILLUMO_ENABLE_ASAN`, default ON),
+whose WASM guests also use explicit bounds checks; play and measure with the
+`dev` profile (RelWithDebInfo) or `debug-noasan`, not Debug.
+
+Package-level checks drive each real package through the generic host:
+`IllumoGame.Wasm.GamePackage` (menu, setup, edit, step, save/load, 3D mode),
+`IllumoGame.Wasm.GamePackageAudio` (packaged sound cues and the chunked,
+looping menu music reach a recording audio output),
+`IllumoGame.Wasm.GamePackageLanes` (real simulation lanes against a native
+serial reference), `IllumoGame.Wasm.PackageFrameAllocations` (warmed control
+frames make no host heap allocations), `IllEd.Wasm.Package` (launch scene, preloaded atlas,
+keyboard pan, Ctrl+S save in place), `IllEd.Wasm.ProjectPackage` (project
+assets placed through the guest cache and saved into `/project`),
+`IllMeshViewer.Wasm.Package` (launch mesh as a retained host mesh, skybox
+cubemap), `IllMeshViewer.Wasm.ScenePackage` (a mounted package's scene opened
+with `viewer_open`) and `IllumoGame.Wasm.CatalogMerge` (package rule
+catalogs). `IllumoGame.Wasm.LaneParity`
+and `IllumoGame.Wasm.LaneProtocol` cover lane exactness and the CSL1
+decoders; `IllumoGame.Wasm.LaneAllocations` gates heap allocations of warmed
+lane generations. The `Illumo.Wasm.*` cases cover the sandbox, engine modes, the
+manifest decoder, ABI decoders and host services; `Illumo.Runtime.Help`,
+`Illumo.Runtime.InvalidCaptureFrame`, `Illumo.Runtime.InvalidBenchFrames` and
+`Illumo.Runtime.CaptureScriptNeedsCapture` cover the runtime command line.
+`--capture-script` drives a capture to a later screen (menus, overlays) for
+visual checks. Real-GPU capture is checked with `python
+tools/verify_capture.py build-workspace/Release/IllumoRuntime.exe
+--output-dir <dir>`. Performance is measured with `--bench-frames`,
+`IllumoGame.Sim.RunnerBench` and `IllumoGame.Wasm.PackageBench` (label
+`IllumoBenchmark`; see `docs/frame-capture.md`).
+
 Focused test work:
 
 ```powershell
-cmake --build build --config Release --target IllumoTests IllumoGameTests IllEdTests
+cmake --build build --config Release --target IllumoTests IllumoGameTests IllEdTests IllMeshViewerTests
 ctest --test-dir build -C Release -N -L IllumoWorkspace
 build/Release/IllumoTests.exe --list
 build/Release/IllumoGameTests.exe --list
 build/Release/IllEdTests.exe --list
+build/Release/IllMeshViewerTests.exe --list
 build/Release/IllumoTests.exe --run <Illumo.exact-name>
 build/Release/IllumoGameTests.exe --run <IllumoGame.exact-name>
 build/Release/IllEdTests.exe --run <IllEd.exact-name>
+build/Release/IllMeshViewerTests.exe --run <IllMeshViewer.exact-name>
 ```
 
 Clang/LLVM coverage:
@@ -272,7 +392,7 @@ Clang/LLVM coverage:
 Headless tests cover typed/generational MockBackend resources,
 Renderer/token/style/asset flow, retained scene hierarchy, painter-correct
 primitives and animation, rulesets,
-CellContext, CellGameModule commands and file-backed save/load, Canvas
+CellContext, CanvasScene commands and file-backed save/load, Canvas
 domain/fade/dirty behavior, input, environment/logging, SysCmdLine, and
 CommandLine/GLString/SplashText tokens. `ILLUMO_ENABLE_COVERAGE=ON` adds the
 Clang/LLVM `IllumoCoverage` target, an 85% production-line gate, and an HTML
@@ -315,56 +435,105 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
 ## Project-wide invariants
 
 - Illumo owns process entry, platform services, BuildInfo, SysCmdLine, logging
-  lifetime, DebugModule composition, and the frame loop. IllumoGame supplies
-  only CA defaults/CLI metadata and its required game-module factory; IllEd
-  supplies editor defaults/CLI metadata and its required editor-module
-  factory. Illumo must not depend on Game, Rulesets, or IllEd.
-- `IllumoContext` is a non-owning pointer bag frozen after engine startup.
-  Failed optional modules remain inactive; a failed required module rolls back
-  every accepted module and fails startup. Each product supplies one required
-  module; `DebugModule` is optional.
+  lifetime and the frame phases. `IllumoRuntime`'s `RuntimeShell` runs the
+  frame loop around its one `WasmProgram` and, in debug-tool builds, the
+  `DebugOverlay` (D-E31). There is no module registry and no native product.
+  Illumo must not depend on Game, Rulesets, or IllEd.
+- Content layering: core `Illumo` never includes `<Illumo/Content/...>`;
+  `Illumo::Content` depends only on `Illumo::Illumo` (never on
+  `Illumo/Source/Wasm` or a product) and keeps nlohmann private. It is the only
+  owner of `.ilsc`, `illumo.json` and `.ilpk` code; guests link its mirror
+  `IllumoGuestContent`. `SceneGraph` still never serializes itself. Engine
+  tools reach the file tree only through `IFileTreeSource`.
+- Guests address files by virtual path (`/app`, `/engine`, `/packages/<id>`,
+  `/project`, guest-local `/local`) or opaque dialog grants; host paths never
+  cross the ABI. Package mounts are read-only; only `--project` is writable,
+  and it refuses `*.wasm` and `illumo.json`. Package manifests are
+  `illumo.json`. Scene asset references are package-relative or explicit
+  absolute virtual paths.
+- IllumoGame executes only inside `IllumoGame.wasm`; IllEd and IllMeshViewer
+  likewise run only as `IllEd.wasm` and `IllMeshViewer.wasm`, reaching files
+  and dialogs through their `IllEdPlatform` / `MeshViewerPlatform` seams.
+  `IllumoRuntime` and `Illumo/Source/Wasm` stay product-agnostic: no Game,
+  Rulesets, IllEd or IllMeshViewer includes, no product-specific imports or
+  opcodes, no native product fallback. The guest composes
+  its own `IllumoContext` (`GuestProgram`, which runs the product's scenes); nothing about it crosses
+  the ABI, which carries only copied envelopes, services and frames. Package
+  manifests request budgets; the runtime grants at most its ceilings, and
+  launch options are never persisted. Frame schema changes, new capabilities
+  or new imports require decoder/deny tests with the change.
+- `IllumoContext` is a non-owning pointer bag frozen after engine startup;
+  the one exception is `fileTree`, which the program owning a file tree (the
+  WASM host) publishes when it starts and withdraws when it stops.
+  A program that fails to start fails the launch; a debug overlay that fails
+  to start is dropped. Inside a program, scenes are managed by its
+  `SceneDirector`, and a failed first scene closes the product.
 - Production consumers include only `<Illumo/...>` headers. Test-only support
   is exposed separately by `Illumo::TestSupport`.
-- Runtime window, input, module, rendering, and OpenGL work is main-thread
+- Runtime window, input, program, rendering, and OpenGL work is main-thread
   affine unless a documented subsystem contract explicitly provides workers.
 - Game and Rulesets do not issue raw OpenGL calls or depend on OpenGL types.
 - Production drawables append `RenderCommand` tokens to the backend-neutral
   `Renderer`; `IBackend` executes them. Any pointer carried by a command must
-  remain valid until synchronous queue submission returns.
-- `Rendering::Scene` is a non-owning ordered list rebuilt each frame.
-  `SceneGraph` separately owns persistent nodes and cached transforms, uses
-  graph-ID-plus-slot-plus-generation handles, borrows render attachments, and
-  emits through the token path as one frame-list drawable. It is not an ECS.
-  Rendering resource handles remain backend-neutral and registry-owned.
+  remain valid until synchronous queue submission returns. Tokens recorded
+  into a `RecordedCommandList` point at storage the list owns, and the list
+  must stay alive and unchanged until any submission that runs it (through
+  `ExecuteList`) returns. Lists never contain `ExecuteList`, never carry
+  per-frame camera or light values (those come from Renderer's
+  `FrameUniforms` block), and are recorded and run on the main thread.
+- Directional shadows use one Renderer-owned depth pass over camera-relevant
+  World casters before color rendering. Direct `MeshVisual` drawables and
+  SceneGraph attachments contribute bounds and depth tokens to the same fitted
+  light-space matrix and shared map; invalid camera reconstruction falls back
+  to all casters, and per-object shadow framebuffers are forbidden.
+- `DrawList` is a non-owning list rebuilt each frame. `SceneGraph`
+  separately owns persistent SoA state and derived preorder/bounds/query caches.
+  `SceneGraphDrawable` emits ordered snapshot attachments through the token
+  path. Handles remain graph-ID-plus-slot-plus-generation; no node addresses,
+  attachment ownership, ECS storage, or scene serialization cross this seam.
+- Snapshot views expire when their ring slot is republished, on graph teardown,
+  or when attachment content/lifetime is invalidated. Validate before every
+  callback; an expired view must never call a stale attachment.
 - `SparseCellGrid` is the production domain: signed 64-bit coordinates,
   non-background 16x16 sparse chunks, and configurable infinite non-toroidal
   or finite toroidal evolution.
   `CanvasView` is a bounded world-space presentation. Legacy `CellGrid` and
   `Canvas` remain compatibility fixtures, not a second production path.
-- Save writes preserve sparse format version 3 and loads remain compatible
-  with versions 3 and 2 plus the legacy dense format unless migration is
+- Save writes preserve sparse format version 4 and loads remain compatible
+  with versions 4, 3, and 2 plus the legacy dense format unless migration is
   explicitly authorized.
 - Ruleset transitions and palettes must remain deterministic. Update factory
   selection, known-mode validation, console help/completion, source lists, and
   focused tests together when ruleset availability changes.
-- Windows is the only supported and currently verified platform. Linux and
-  macOS are stale bootstrap scaffolds and must not be described as supported
-  until they configure, compile, launch, and pass platform smoke tests.
+- Windows is the only supported and currently verified platform. Linux sources
+  and CMake are repaired for Ubuntu 24.04 x86_64 (X11/XWayland, gtkmm-3
+  dialogs) and must not be described as supported until native configure,
+  compile, launch, dialog, render, and shutdown smoke exist on that host.
+  The WASM runtime is Windows x64 only, so Linux currently builds only the
+  engine libraries and native test suites and has no runnable applications.
+  macOS is not targeted; its platform scaffold has been removed. See
+  `docs/packages/platform-linux.md`.
 - Keep generic engine/services independent of game-domain policy. Keep raw
   platform and OpenGL details behind their existing boundaries.
 - Do not add or replace a third-party dependency without user approval and a
   licensing, maintenance, build, and deployment assessment.
 - `CommandQueue` reserves 2,048 commands, grows to a configurable 65,536
   default ceiling, and reports high-water/rejected counts. Do not remove the
-  ceiling or hide rejection metrics.
+  ceiling or hide rejection metrics. `RecordedCommandList` has its own
+  ceiling (65,536 by default); recording past it fails the list, and
+  executed lists and tokens are reported by `Renderer::getRecordedListStats`.
 - Product UI remains primitive-composed through `GameVisual`; do not introduce
-  a separate retained widget tree for the current console and labels.
+  a separate retained widget tree for the current console and labels. The
+  host-retained `VisualStore` holds visuals, not widgets: layout, input and
+  animation stay in the product (D-E30, D-R29).
 
 ## Code, documentation, and generated material
 
 Follow `docs/contributing.md`: avoid `auto`, namespaces, and recursion; use the
 documented names; run the Mozilla-based `clang-format` on every modified C++ or
-header file. Prefer explicit ownership and narrow dependencies. Owning types
+header file. The host and guests build without C++ exceptions (D-F3): no
+`try`/`catch`/`throw`, failures return errors, and a programming error or
+exhausted memory or threads ends the process through `illumoFatal`. Prefer explicit ownership and narrow dependencies. Owning types
 must define or delete copy/move operations deliberately.
 
 Use comments for non-obvious intent and invariants. Put current architecture,
@@ -397,16 +566,19 @@ A change is complete only when its scope is reviewed for accidental edits and:
 Subsystem rules live in:
 
 - `Illumo/Source/Engine/AGENTS.md`, `Illumo/Source/Foundation/AGENTS.md`, and
-  `Illumo/Source/Scene/AGENTS.md`, `Illumo/Source/Gui/AGENTS.md`, and
+  `Illumo/Source/Scene/AGENTS.md`, `Illumo/Source/Gui/AGENTS.md`,
+  `Illumo/Source/Audio/AGENTS.md`, and
   `Illumo/Source/Platform/AGENTS.md` plus
-  its Windows, Linux, and macOS child guidance;
+  its Windows and Linux child guidance;
 - `IllumoGame/Source/Game/AGENTS.md` and
   `IllumoGame/Source/Rulesets/AGENTS.md`;
 - `IllEd/Source/AGENTS.md` and `IllEd/Tests/AGENTS.md`;
+- `IllMeshViewer/Source/AGENTS.md` and `IllMeshViewer/Tests/AGENTS.md`;
 - `Illumo/Source/Services/AGENTS.md`, `Illumo/Tests/AGENTS.md`, and
   `IllumoGame/Tests/AGENTS.md`;
 - `Illumo/Source/Rendering/AGENTS.md` plus
   `Illumo/Source/Rendering/OpenGL/AGENTS.md`,
+  `Illumo/Source/Rendering/Vulkan/AGENTS.md`,
   `Illumo/Source/Rendering/Primitives/AGENTS.md`; test-only MockBackend guidance
   lives in `Illumo/TestSupport/AGENTS.md`.
 

@@ -51,6 +51,8 @@ public:
     position = targetPosition;
   }
   glm::dvec2 GetPositionPrecise() const { return position; }
+  glm::dvec2 GetTargetPositionPrecise() const { return targetPosition; }
+  float GetTargetZoom() const { return targetZoom; }
 
   void SetZoom(float z)
   {

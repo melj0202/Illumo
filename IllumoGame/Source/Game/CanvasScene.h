@@ -1,0 +1,362 @@
+#pragma once
+#include "CanvasActionBar.h"
+#include "CanvasContextMenu.h"
+#include "CellClipboard.h"
+#include "CellContext.h"
+#include "CellPattern.h"
+#include "ConfigurationMenu.h"
+#include "Cursor.h"
+#include "SelectionBox.h"
+#include "ExitConfirmDialog.h"
+#include "Game/IllumoCodec.h"
+#include "Game/SimulationRunner.h"
+#include "ModeBadge.h"
+#include "NewSimulationMenu.h"
+#include "RulesetWorkshopMenu.h"
+#include <Illumo/Content/ProgramScene.h>
+#include <Illumo/Content/SceneInstance.h>
+#include <Illumo/Foundation/Profile.h>
+#include <Illumo/Foundation/RollingMetric.h>
+#include <Illumo/Rendering/DrawList.h>
+#include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <Illumo/Rendering/Primitives/MeshVisual.h>
+#include <Illumo/Scene/SceneGraph.h>
+#include <Illumo/Scene/SceneGraphDrawable.h>
+#include <array>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <vector>
+
+enum class CellState
+{
+  NORMAL,
+  EDIT,
+  EXIT
+};
+
+// A CSim canvas: the simulation, its editor and chrome, as a program scene
+// (D-E31). Returning to the title screen asks CSimScenes for it.
+class CanvasScene : public ProgramScene
+{
+  friend class CanvasSceneTestAccess;
+
+public:
+  explicit CanvasScene(std::string initialSaveFile = {});
+  explicit CanvasScene(const NewSimulationConfiguration& configuration);
+  ~CanvasScene() override;
+  // A new canvas opens on its home view: centred, at zoom kHomeZoom.
+  static constexpr float kHomeZoom = 0.5f;
+
+  bool start(IllumoContext& context) override;
+  // Leaving for the title keeps the canvas frozen: no generation is left
+  // running, its commands and input context are withdrawn and its overlays
+  // close. Resuming restores them and replays the entrance.
+  void enter() override;
+  void leave() override;
+  void update(double dt) override;
+  void dispatch(DrawList& frame) override;
+  void stop() override;
+
+private:
+  void Normal(double dt);
+  void Edit(double dt);
+  void updateVisualTargets();
+  void syncSimRateFromEnv();
+  // Pushes the persisted cell look (style, glow, grid lines) to the view.
+  void syncCanvasLookFromEnv();
+  // Arrow keys pan the camera at the persisted speed.
+  void keyboardPan(double dt);
+  // Saves to private storage once the persisted interval has elapsed.
+  void updateAutosave(double dt);
+  void clearCanvas();
+  // Replaces the world with the active rule's starting pattern, the one a new
+  // canvas opens with, and returns the camera to the home view that frames it.
+  void resetCanvas();
+  void registerConsoleCommands();
+  void unregisterConsoleCommands();
+  bool SaveCellGame(std::string filename);
+  bool LoadCellGame(std::string filename);
+  // Platform I/O may complete later; `announce` reports success in the
+  // console. Returns false only for failures known before returning.
+  bool saveCellGameTo(std::string location, bool announce);
+  bool loadCellGameFrom(std::vector<std::string> candidates, bool announce);
+  // The platform save/load pickers (save_dialog, load_dialog, the toolbar).
+  void openSaveDialog();
+  void openLoadDialog();
+  bool applyLoadedDocument(IllumoDocument& document);
+  void importRuleCatalog(const std::string& location);
+  void exportRuleCatalog(const std::string& location);
+  void setRunning(bool running);
+  int stepSimulation(int generations);
+  void printStatus() const;
+  void CameraPan();
+  void CameraRotate();
+  void seedInitialPattern();
+  void updatePaintBrushFromInput();
+  void showModeSplash(const char* label);
+  // Loops the edit music while this canvas is on screen in EDIT and fades it
+  // out otherwise (running, left for the title, or exiting).
+  void syncEditMusic();
+  void updateEditorCursor(double dt);
+  void updateHamburgerVisual(double dt);
+  void updatePaintPalette(double dt);
+  void updateModeBadge(double dt);
+  void advanceCanvasEntrance(double dt);
+  void resetCameraToHome();
+  void requestMainMenuReturn();
+  void completeMainMenuReturn();
+  void rebuildCanvasEntrance();
+  bool isHamburgerHovered() const;
+  void toggleSettingsMenu();
+  void updateSelectionVisual();
+  void updateEditHintsVisual(double dt);
+  // Lays out the hint footer's primitives; updateEditHintsVisual calls it
+  // only when the footer's inputs (m_editHintsLayout) change.
+  void buildEditHints(float width,
+                      float height,
+                      float scale,
+                      int windowHeight,
+                      const std::shared_ptr<Font>& font);
+  bool isPointerOverEditHints() const;
+  void updateInspectorVisual();
+  void normalizeSelection(std::int64_t* x0,
+                          std::int64_t* y0,
+                          std::int64_t* x1,
+                          std::int64_t* y1) const;
+  bool captureSelection(CellPattern* pattern, std::string* error);
+  bool pastePatternAt(const CellPattern& pattern,
+                      std::int64_t originX,
+                      std::int64_t originY,
+                      std::string* error);
+  bool fillSelection(unsigned char state);
+  bool copySelection();
+  bool cutSelection();
+  bool pasteAtCursor();
+  // Pastes the OS clipboard's pattern with its top-left at the cell.
+  bool pasteAt(std::int64_t originX, std::int64_t originY);
+  bool stampNamed(const std::string& name);
+  // Runs the edit toolbar and the selection's context menu for one frame and
+  // performs what they chose.
+  void updateEditTools(double dt);
+  void openContextMenu(std::int64_t cellX, std::int64_t cellY);
+  void runEditAction(CanvasEditAction action, bool fromContextMenu);
+  bool isPointerOverEditTools() const;
+  bool isCellInSelection(std::int64_t cellX, std::int64_t cellY) const;
+  bool pointerCell(std::int64_t* cellX, std::int64_t* cellY) const;
+  std::string paintBrushName() const;
+  ColorRgba paintBrushColor() const;
+  bool importPatternText(const std::string& text,
+                         PatternFormat format = PatternFormat::Auto);
+  void handleEditorHotkeys();
+  bool isRender3dTestEnabled() const;
+  void ensureRender3dTestDrawables();
+  void applyRender3dTestCamera();
+  void restoreRender3dTestCamera();
+  void updateRender3dTestMatrices();
+  bool consumeCompletedSimulation(bool waitForCompletion);
+  void drainSimulation();
+  void prepareGridMutation();
+  SimulatorConfiguration currentConfiguration() const;
+  bool applyConfiguration(const SimulatorConfiguration& configuration);
+  CellClipboard& getClipboard() { return clipboard; }
+  const CellClipboard& getClipboard() const { return clipboard; }
+  IllumoContext* ic{ nullptr };
+  // Left for the title and not yet resumed.
+  bool m_suspended = false;
+  CellContext* cellContext;
+  CellState currentState;
+  InputContext inputContext;
+  long inputContextId = -1;
+  double simAccum;
+  // Seconds since the last autosave (or since it was configured).
+  double autosaveElapsed = 0.0;
+  double simStepSeconds;
+  double requestedSimulationTps;
+  double achievedSimulationTps;
+  double lastSimulationStepMilliseconds;
+  double lastSimulationFrameMilliseconds;
+  RollingMetric simulationStepMetric;
+  RollingMetric simulationMirrorMetric;
+  RollingMetric simulationAdvanceMetric;
+  RollingMetric simulationCaptureMetric;
+  int lastSimulationSteps;
+  bool simulationDebtDropped;
+  bool simulationBudgetLimited;
+  SimulationRunner simulationRunner;
+  SimulationRunnerTimings lastSimulationRunnerTimings;
+  SparseGenerationDelta mirrorDelta;
+  bool mirrorDeltaValid;
+  bool simulationRetryPending = false;
+  // Frames that skipped overdue generations this running session; one warning
+  // is logged when the shortfall is sustained.
+  static constexpr int kSimulationDebtWarningFrames = 30;
+  int simulationDebtFrames = 0;
+  bool simulationDebtReported = false;
+  // Module-owned corner EDIT / NORMAL badge shown on each mode change.
+  ModeBadge modeBadge;
+  // The mode the switch cue last voiced. The badge is re-shown without a
+  // change (a step or pause while already editing); the cue is not.
+  CellState soundedState = CellState::EDIT;
+  std::unique_ptr<ConfigurationMenu> configurationMenu;
+  std::unique_ptr<RulesetWorkshopMenu> rulesetWorkshopMenu;
+  std::unique_ptr<ExitConfirmDialog> exitConfirmDialog;
+  // The 3D diagnostic: Scenes/render3d-test.ilsc from the package, loaded on
+  // first use; the nodes "orbit" and "child" are animated by id.
+  std::unique_ptr<SceneInstance> render3dScene;
+  bool render3dLoadFailed;
+  double render3dTestTime;
+  bool render3dCameraApplied;
+  Cursor editorCursor;
+  // The button's shadow and breathing halo animate every frame, so they sit
+  // in their own visual behind the tile; the tile, bars and hint redraw only
+  // when m_hamburgerKey changes.
+  GameVisual m_hamburgerHaloVisual;
+  GameVisual hamburgerVisual;
+  GuiDrawKey m_hamburgerHaloKey;
+  GuiDrawKey m_hamburgerKey;
+  // The paint drawer draws in three layers so its breathing drop can redraw
+  // alone: the blob, header and cards; the chosen brush's drop; then the
+  // swatches, labels and hints. The outer two redraw only when their keys
+  // change. Beneath them, the collapsed bubble's halo (the settings button's,
+  // CanvasChromeStyle) redraws alone as it blooms on hover.
+  GameVisual m_paintBubbleHaloVisual;
+  GuiDrawKey m_paintBubbleHaloKey;
+  GameVisual m_paintPaletteVisual;
+  GameVisual m_paintDropVisual;
+  GameVisual m_paintPaletteTopVisual;
+  GuiDrawKey m_paintPaletteKey;
+  GuiDrawKey m_paintDropKey;
+  GuiDrawKey m_paintPaletteTopKey;
+  // Bumped when the rules or their tag change, so the keyed layers redraw
+  // state names.
+  const RuleSet* m_paintRules = nullptr;
+  std::uint32_t m_paintRulesRevision = 0u;
+  bool m_paintPaletteExpanded = false;
+  bool m_paintPaletteMouseWasDown = false;
+  bool m_paintPaletteCapturing = false;
+  bool m_paintPaletteHovered = false;
+  // The expand/collapse control (bubble or header) was under the pointer
+  // last frame; the hover cue plays as it first becomes hovered.
+  bool m_paintPaletteToggleHovered = false;
+  // The card slot (not state: the wheel scrolls states under a still
+  // pointer) hovered last frame, or -1. Cards that slide under the pointer
+  // as the drawer opens stay quiet until the pointer leaves them.
+  int m_paintPaletteHoveredCard = -1;
+  bool m_paintPaletteCardHoverQuiet = false;
+  // The chosen brush's liquid drop, in card slots: the head races to the new
+  // card and the tail sloshes after it, so the drop stretches between them.
+  GuiSpring m_paintSelectHead;
+  GuiSpring m_paintSelectTail;
+  bool m_paintSelectPlaced = false;
+  // Seconds the drawer has run, for the drop's slow breathing glow.
+  double m_paintPaletteBreath = 0.0;
+  // Height morph from the peeking bubble (0) to the open drawer (1); the
+  // width leads on its own springier morph, so the bubble stretches, then
+  // rises and bounces like a blob. Hover swells the collapsed bubble.
+  float m_paintPaletteReveal = 0.0f;
+  GuiSpring m_paintPaletteHeightMorph;
+  GuiSpring m_paintPaletteWidthMorph;
+  GuiSpring m_paintPaletteBubbleHover;
+  // Edit chrome enters on springs: the lifts overshoot so the hint bar and
+  // paint bubble bounce past their slots; the reveals are the same values
+  // clamped to 0..1 for the canvas inset and visibility.
+  float m_paintPaletteChromeReveal = 1.0f;
+  float m_editChromeReveal = 1.0f;
+  float m_paintPaletteChromeLift = 1.0f;
+  float m_editChromeLift = 1.0f;
+  GuiSpring m_paintPaletteChromeSpring;
+  GuiSpring m_editChromeSpring;
+  double m_paletteModeDelay = 0.0;
+  double m_hintsModeDelay = 0.0;
+  bool m_modeChromeTarget = true;
+  // Per-state emphasis (chosen 1, hovered 0.5) on jelly springs, so swatches
+  // hop and labels thicken with an overshoot.
+  std::vector<GuiSpring> m_paintPaletteEmphasis;
+  // Per-card-slot hover lift and click squish; the header's hover swell; and
+  // the brush chip's pop when the brush changes.
+  std::array<GuiSpring, 4> m_paintCardHover;
+  std::array<GuiSpring, 4> m_paintCardSquish;
+  GuiSpring m_paintHeaderHover;
+  GuiSpring m_paintChipPop;
+  unsigned char m_paintChipBrush = 0;
+  unsigned int m_paintPaletteStateOffset = 0u;
+  unsigned char m_paintBrush = 0;
+  std::string m_paintRuleTag;
+  GameVisual canvasEntranceVisual{ 4096u };
+  static constexpr double kCanvasEntranceSeconds = 0.9;
+  double canvasEntranceElapsed = kCanvasEntranceSeconds;
+  static constexpr double kCanvasExitSeconds = 0.48;
+  bool mainMenuReturnPending = false;
+  bool mainMenuReturnSubmitted = false;
+  float hamburgerX;
+  float hamburgerY;
+  float hamburgerSize;
+  bool hamburgerHovered;
+  bool hamburgerMouseWasDown;
+  // The button moves on the shared springs: it pops in like a bead whenever
+  // it reappears, hover swells it with a jelly overshoot (squashing along the
+  // way), each bar widens on its own springy spring a beat after the one
+  // above it, and the hint springs out on its own. A slow clock breathes its
+  // halo and ripples the hovered bars.
+  GuiSpring m_hamburgerPop;
+  GuiSpring m_hamburgerHover;
+  GuiSpring m_hamburgerTip;
+  std::array<GuiSpring, 3> m_hamburgerBars;
+  double m_hamburgerHoverClock = 0.0;
+  double m_hamburgerClock = 0.0;
+  bool m_hamburgerShown = false;
+  GameVisual editHintsVisual;
+  int editHintsInsetPixels = 0;
+  int editHintsFullInsetPixels = 0;
+  // Inputs of the built hint footer. While they are unchanged the footer's
+  // primitives (and their strings) are kept instead of rebuilt each frame.
+  struct EditHintsLayout
+  {
+    int windowWidth = 0;
+    int windowHeight = 0;
+    float scale = 0.0f;
+    bool selection = false;
+    bool buffer = false;
+    std::uint64_t ruleSetRevision = 0;
+    const Font* font = nullptr;
+    bool built = false;
+    bool operator==(const EditHintsLayout&) const = default;
+  };
+  EditHintsLayout m_editHintsLayout;
+  float m_editHintsPanelHeight = 0.0f;
+  bool paintStrokeActive = false;
+  std::int64_t lastPaintX = 0;
+  std::int64_t lastPaintY = 0;
+  SelectionBox selectionVisual;
+  GameVisual inspectorVisual;
+  // EDIT mode's top toolbar and the selection's right-click menu.
+  CanvasActionBar m_actionBar;
+  CanvasContextMenu m_contextMenu;
+  // The cell the context menu was opened on; its Paste lands there.
+  std::int64_t m_contextMenuCellX = 0;
+  std::int64_t m_contextMenuCellY = 0;
+  // A press that began on the toolbar or menu, or that dismissed the menu,
+  // keeps the canvas from painting until every mouse button is released.
+  bool m_editToolsCapturing = false;
+  bool m_rightMouseWasDown = false;
+  // The right button went down this frame (sampled by updateEditTools).
+  bool m_rightPressEdge = false;
+  CellClipboard clipboard;
+  std::int64_t hoverX;
+  std::int64_t hoverY;
+  bool hoverValid;
+  bool inspectorEnabled;
+  std::uint64_t simulationGeneration;
+  bool copyHeld;
+  bool cutHeld;
+  bool pasteHeld;
+  bool rotateHeld;
+  bool flipHeld;
+  bool inspectHeld;
+  bool deleteHeld;
+  std::string initialSaveFile;
+  std::optional<NewSimulationConfiguration> initialCanvas;
+  // Platform completions hold a weak reference and are dropped after Exit.
+  std::shared_ptr<bool> m_lifetime;
+};

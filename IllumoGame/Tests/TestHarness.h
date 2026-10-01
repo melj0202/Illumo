@@ -38,8 +38,8 @@ struct HeadlessCanvasFixture
   }
 
   // Game of Life convention in this codebase: 0 = alive, 1 = dead.
-  static const unsigned char Alive = 0;
-  static const unsigned char Dead = 1;
+  static constexpr unsigned char Alive = 0;
+  static constexpr unsigned char Dead = 1;
 
   void clearDead() { canvas->clearCanvas(); }
 

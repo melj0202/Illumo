@@ -1,6 +1,6 @@
 #include "Game/CanvasView.h"
 #include "Game/SparseCellGrid.h"
-#include "Rulesets/GameOfLifeRuleSet.h"
+#include "Rulesets/LifeLikeRuleSet.h"
 #include "Rulesets/WireworldRuleSet.h"
 #include "TestHarness.h"
 #include <Illumo/Rendering/Camera.h>
@@ -129,9 +129,7 @@ displayRedAt(const CanvasView& view, const CellAddress& address)
       y >= view.getTextureHeight()) {
     return 127;
   }
-  const std::size_t index =
-    static_cast<std::size_t>(y * view.getTextureWidth() + x) * 3u;
-  return view.getDisplayTexBuffer()[index];
+  return view.getDisplayedTexel(x, y)[0];
 }
 
 static void
@@ -172,7 +170,7 @@ static void
 testGameOfLifeAcrossToroidalSeams()
 {
   testSection("SparseCellGrid: Game of Life across toroidal seams");
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules("GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
 
   SparseCellGrid horizontal(2, 2);
   horizontal.setCell(CellAddress{ 15, 0 }, 0);
@@ -222,7 +220,7 @@ static void
 testWireworldAndDirectPublicationAcrossSeam()
 {
   testSection("SparseCellGrid: multi-state and dual-grid toroidal stepping");
-  WireworldRuleSet wireworld(nullptr);
+  WireworldRuleSet wireworld{};
   SparseCellGrid wire(2, 2);
   wire.setCell(CellAddress{ 15, 0 }, WireworldRuleSet::CELL_HEAD);
   wire.setCell(CellAddress{ -16, 0 }, WireworldRuleSet::CELL_CONDUCTOR);
@@ -236,7 +234,7 @@ testWireworldAndDirectPublicationAcrossSeam()
               WireworldRuleSet::CELL_TAIL,
               "wrapped head advances to tail");
 
-  GameOfLifeRuleSet life(nullptr);
+  LifeLikeRuleSet life("GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
   SparseCellGrid source(2, 2);
   source.setCell(CellAddress{ 15, 0 }, 0);
   source.setCell(CellAddress{ -16, 0 }, 0);
@@ -263,7 +261,7 @@ static void
 testFiniteSparseMicroBench()
 {
   testSection("SparseCellGrid: finite versus infinite sparse micro-benchmark");
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules("GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
   SparseCellGrid finite(64, 64);
   SparseCellGrid infinite;
   for (int blockY = 0; blockY < 8; ++blockY) {

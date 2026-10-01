@@ -1,0 +1,102 @@
+#include <Illumo/Foundation/Fatal.h>
+#include <Illumo/Foundation/Profile.h>
+#include <Illumo/Services/Logger.h>
+#include <IllumoGuest/Environment.h>
+#include <string>
+
+GuestEnvironment::GuestEnvironment(GuestFiles& files, std::string path)
+  : m_files(files)
+  , m_path(std::move(path))
+{
+  if (m_path.empty() || m_path.size() > 1024 ||
+      m_path.find('\0') != std::string::npos) {
+    illumoFatal("GuestEnvironment: invalid settings path");
+  }
+}
+
+GuestEnvironment::~GuestEnvironment()
+{
+  m_files.cancel(m_request);
+}
+
+void
+GuestEnvironment::load()
+{
+  if (!idle()) {
+    illumoFatal(
+      "GuestEnvironment: settings reload while persistence is pending");
+  }
+  m_loaded = false;
+  m_writable = false;
+  m_error.clear();
+  m_reading = true;
+  m_request = m_files.read(GuestFileArea::Storage, m_path, 1024u * 1024u);
+}
+
+void
+GuestEnvironment::save()
+{
+  if (!m_writable) {
+    m_error = "Settings cannot be saved before a successful load";
+    return;
+  }
+  // Coalesce requests, but capture the latest values only when the preceding
+  // atomic write completes. Completion of an older write cannot lose edits.
+  m_savePending = true;
+}
+
+void
+GuestEnvironment::pump()
+{
+  if (m_reading && m_request == 0) {
+    m_request = m_files.read(GuestFileArea::Storage, m_path, 1024u * 1024u);
+    return;
+  }
+  if (m_request != 0) {
+    GuestFileResult result;
+    if (!m_files.take(m_request, result)) {
+      return;
+    }
+    m_request = 0;
+    if (m_reading) {
+      m_reading = false;
+      m_loaded = true;
+      m_writable = result.outcome == GuestFileOutcome::NotFound;
+      if (result.outcome == GuestFileOutcome::Success) {
+        ILLUMO_PROFILE_ZONE("Environment.loadText");
+        const std::string_view text(
+          reinterpret_cast<const char*>(result.bytes.data()),
+          result.bytes.size());
+        m_writable = loadText(text);
+      }
+      if (!m_writable) {
+        m_error = "Settings are invalid or unreadable; original file preserved";
+      } else {
+        m_error.clear();
+      }
+    } else if (result.outcome != GuestFileOutcome::Success) {
+      m_error = "Settings save failed";
+      Logger::LogWarning(
+        "Settings could not be saved to " + m_path + " (outcome " +
+        std::to_string(static_cast<int>(result.outcome)) + ")");
+    } else {
+      m_error.clear();
+    }
+  }
+  if (m_savePending) {
+    ILLUMO_PROFILE_ZONE("Environment.save");
+    const std::string text = saveText();
+    if (text.size() > 1024u * 1024u) {
+      m_savePending = false;
+      m_error = "Settings exceed the one MiB limit";
+      Logger::LogWarning(
+        "Settings were not saved: " + std::to_string(text.size()) +
+        " bytes exceeds the one MiB limit");
+      return;
+    }
+    const std::span<const std::byte> bytes =
+      std::as_bytes(std::span(text.data(), text.size()));
+    m_request = m_files.write(m_path, { bytes.begin(), bytes.end() });
+    m_savePending = m_request == 0;
+  }
+}

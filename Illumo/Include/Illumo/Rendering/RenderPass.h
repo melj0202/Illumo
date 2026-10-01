@@ -6,6 +6,7 @@
 #include <Illumo/Rendering/RenderTargetPool.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>

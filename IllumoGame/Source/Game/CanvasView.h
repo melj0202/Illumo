@@ -1,9 +1,11 @@
 #pragma once
 
+#include "Game/CanvasCoordinatePolicy.h"
 #include "Game/SparseCellGrid.h"
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -67,11 +69,19 @@ public:
            grid->setCell(address, state);
   }
   void syncVisibleRegion();
+  // Reserve a bottom UI band in window pixels without moving world coordinates.
+  void setBottomInsetPixels(int pixels);
+  int getBottomInsetPixels() const { return bottomInsetPixels; }
   void rebuildTargetsFromGrid();
   void rebuildPalette(const RuleSet* rules);
   void rebuildDefaultPalette();
   void setFadeSpeed(float speed);
   float getFadeSpeed() const { return fadeSpeed; }
+  // Up-close cell look (see canvas_frag.glsl): glow strength 0-2 (1 is the
+  // standard look), LED keys or flat pixels, and grid lines between cells.
+  // It travels to the Canvas shader in the cell quad's colour channel as
+  // (glow / 2, LED keys, grid lines), so it needs no extra uniforms.
+  void setCellLook(float glow, bool ledKeys, bool gridLines);
   void tickVisual(float dt);
   void snapVisualToTargets();
 
@@ -80,9 +90,20 @@ public:
 
   GameVisual& getVisual() { return visual; }
   const GameVisual& getVisual() const { return visual; }
+  // The cell quad: bottom-left, bottom-right, top-right, top-left, each x, y,
+  // z, r, g, b, u, v (Pos3Color3Uv2).
+  const std::array<float, 32>& getCellQuadVertices() const
+  {
+    return cellQuadVertices;
+  }
 
   CellAddress getVisibleCell(int x, int y) const;
-  const unsigned char* getDisplayTexBuffer() const { return texBuffer; }
+  // The colour (RGB8) of cache slot (x, y) as the canvas shader shows it now,
+  // for tests and diagnostics; the texture itself holds each fade's endpoints
+  // (see writeTexel).
+  std::array<unsigned char, 3> getDisplayedTexel(int x, int y) const;
+  // Seconds of fade time so far (advanced by tickVisual).
+  double getFadeClock() const { return fadeClock; }
   const unsigned char* getPaletteRgb() const { return paletteRgb; }
   bool isFadeActive() const { return fadeActive; }
   bool isTextureUploadPending() const { return textureUploadPending; }
@@ -94,6 +115,10 @@ public:
   const RollingMetric& getCacheRefillMetric() const
   {
     return cacheRefillMetric;
+  }
+  const RollingMetric& getCacheScrollMetric() const
+  {
+    return cacheScrollMetric;
   }
   const RollingMetric& getUploadByteMetric() const { return uploadByteMetric; }
   const RollingMetric& getUploadRectMetric() const { return uploadRectMetric; }
@@ -108,13 +133,29 @@ public:
   Renderer* renderer;
 
 private:
-  static const int kPaletteSize = 256;
-  static constexpr float kCellSize = 16.0f;
-  static const int kOverviewPixelsPerTexel = 4;
-  static const int kCachePaddingChunks = 2;
-  static const int kDirtyTileDim = 16;
-  static const std::size_t kMaximumUploadRects = 8u;
-  static const std::size_t kDenseChangedSampleDivisor = 4u;
+  static constexpr int kPaletteSize = 256;
+  static constexpr float kCellSize =
+    static_cast<float>(CanvasCoordinatePolicy::kCellSize);
+  static constexpr int kOverviewPixelsPerTexel = 4;
+  static constexpr int kCachePaddingChunks = 2;
+  static constexpr int kDirtyTileDim = 16;
+  static constexpr std::size_t kMaximumUploadRects = 8u;
+  static constexpr std::size_t kDenseChangedSampleDivisor = 4u;
+  // The canvas shader fades colours itself (canvas_frag.glsl): each cache slot
+  // is two RGBA8 texels, the fade's start colour and its target, whose alpha
+  // bytes hold the fade's start time in 1/512 s ticks, wrapping every 128 s.
+  // The CPU writes a slot only when its target changes or its fade retires.
+  static constexpr int kTexelsPerSlot = 2;
+  static constexpr int kSlotBytes = 8;
+  static constexpr double kFadeTicksPerSecond = 512.0;
+  static constexpr double kFadeWrapSeconds = 65536.0 / kFadeTicksPerSecond;
+  // Finished fades retire (start colour := target) on this period, so no
+  // slot's start time is older than the clock can express.
+  static constexpr double kFadeRetireSeconds = 0.25;
+  static constexpr double kMaximumFadeSeconds = 100.0;
+  // A channel within this of its target shows the target (as the former
+  // per-frame fade snapped it).
+  static constexpr float kFadeSnapDifference = 0.002f;
 
   struct UploadRect
   {
@@ -125,6 +166,7 @@ private:
   };
 
   int baseViewWidth;
+  int bottomInsetPixels = 0;
   int baseViewHeight;
   int textureWidth;
   int textureHeight;
@@ -141,10 +183,16 @@ private:
   CellAddress cacheFirstCell;
   SparseCellGrid* grid;
   unsigned char paletteRgb[kPaletteSize * 3];
+  // kSlotBytes per slot (see kTexelsPerSlot).
   unsigned char* texBuffer;
+  // Each slot's fade: it starts from displayRgb at fadeStart (fade clock
+  // seconds) and approaches targetRgb.
   float* displayRgb;
   float* targetRgb;
+  double* fadeStart;
   float* sampledRgb;
+  double fadeClock = 0.0;
+  double fadeRetireElapsed = 0.0;
   std::vector<int> fadingTexels;
   std::vector<unsigned char> fadingFlags;
   std::vector<int> changedSampleTexels;
@@ -159,12 +207,23 @@ private:
   std::size_t lastUploadRectCount;
   std::size_t cacheRefillCount;
   RollingMetric cacheRefillMetric;
+  RollingMetric cacheScrollMetric;
   RollingMetric uploadByteMetric;
   RollingMetric uploadRectMetric;
   float fadeSpeed;
 
   GameVisual visual;
   TextureHandle displayTextureHandle{};
+  // The cells draw as one quad in the canvas layout through the Canvas style
+  // (its shader tiles and lights each cell); the visual keeps the world
+  // boundary. Vertices are position, the encoded cell look and UV; they stay
+  // valid through submission.
+  MeshHandle cellQuadMesh{};
+  std::array<float, 32> cellQuadVertices{};
+  std::array<float, 3> cellLook{ 0.5f, 1.0f, 0.0f };
+  bool cellQuadDirty = false;
+  bool cellQuadReady = false;
+  bool emitCellQuad(Renderer* activeRenderer);
   bool gpuReady;
   bool fadeActive;
   bool textureUploadPending;
@@ -179,6 +238,9 @@ private:
   int quadCellHeight;
   int quadActiveWidth;
   int quadActiveHeight;
+  std::int64_t quadWorldChunkWidth;
+  std::int64_t quadWorldChunkHeight;
+  float quadBoundaryZoom;
   std::uint64_t lastGridRevision;
   bool regionReady;
   bool paletteDirty;
@@ -214,15 +276,22 @@ private:
                             int maximumX,
                             int minimumY,
                             int maximumY);
+  void sampleSparseCacheRectangle(int minimumX,
+                                  int maximumX,
+                                  int minimumY,
+                                  int maximumY);
   void sampleExposedCacheStrips(int deltaTexelsX, int deltaTexelsY);
   void sampleGrid(bool snap);
   bool sampleChangedChunks(std::uint64_t previousRevision);
   void sampleCacheTexel(int x, int y, bool snap);
   void markChangedCacheChunk(const ChunkAddress& address);
+  void markChangedCacheCells(const ChunkAddress& address,
+                             const SparseChunkMask& changed);
   void clearChangedSampleTexels();
   bool shouldSnapSample() const;
   bool tooManyChangedSampleTexels() const;
   void resampleMarkedCacheTexels(bool snap);
+  void resampleMarkedOverviewTexels(bool snap);
   void applySampledTargets(bool snap);
   void applySnappedSampledTargets();
   void clearFadingTexels();
@@ -238,4 +307,11 @@ private:
   void includeUpload(int x, int y);
   void writeTexel(int index, int x, int y);
   void setTargetForSlot(int index, float r, float g, float b, bool snap);
+  // A slot's colour on screen now: its fade evaluated at the fade clock.
+  void currentSlotColor(int index, float* rgb) const;
+  // Settles fades that have finished, so their slots no longer depend on
+  // their start time.
+  void retireFinishedFades();
+  // Allocates and whitens every per-slot buffer for the texture size.
+  void allocateSlotBuffers(std::size_t slotCount);
 };

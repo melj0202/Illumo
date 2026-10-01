@@ -1,10 +1,14 @@
 #pragma once
 #include <Illumo/Rendering/CommandQueue.h>
+#include <Illumo/Rendering/FrameReadback.h>
 #include <Illumo/Rendering/IMesh.h>
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/ITexture.h>
 #include <Illumo/Rendering/PipelineState.h>
+#include <Illumo/Rendering/RenderLayerId.h>
 #include <Illumo/Rendering/ResourceHandle.h>
+#include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -30,6 +34,20 @@ struct FramebufferAttachments
   TextureHandle depthStencilTexture{};
 };
 
+enum class BufferUsage : unsigned char
+{
+  Instance, // per-instance vertex attributes (SetInstanceStream)
+  Uniform,  // uniform blocks (BindUniformBuffer)
+};
+
+// Shaders that declare this uniform block read it from this binding point;
+// backends bind it when a program links. Renderer owns its contents.
+inline constexpr const char* FrameUniformsBlockName = "FrameUniforms";
+inline constexpr unsigned int FrameUniformsBindingPoint = 0;
+
+class GameVisual;
+class SkyboxVisual;
+
 class IBackend
 {
 public:
@@ -43,7 +61,68 @@ public:
   virtual void SubmitCommandQueue() = 0;
   virtual void PushToCommandQueue(RenderCommand command) = 0;
   virtual void ClearCommandQueue() = 0;
+  // Called while RenderScene emits commands, before each composition layer's
+  // drawables. Recording backends use it to tag subsequent commands; GPU
+  // backends need no action.
+  virtual void BeginLayer(RenderLayerId layer) { (void)layer; }
+  // Backends whose host keeps 2D visuals (the guest recorder under frame
+  // schema v7) take a GameVisual whole, at this point of the frame, instead
+  // of its tokens. False: the visual emits its own tokens as usual.
+  virtual bool AppendVisual(GameVisual& visual)
+  {
+    (void)visual;
+    return false;
+  }
+  // A visual AppendVisual took is being destroyed.
+  virtual void ForgetVisual(const GameVisual& visual) { (void)visual; }
+  // Likewise for a sky: true when the host shows it as its render world's
+  // background this frame.
+  virtual bool AppendSkybox(const SkyboxVisual& skybox)
+  {
+    (void)skybox;
+    return false;
+  }
+  // Cumulative metrics survive intermediate pass queue resets.
+  virtual size_t rejectedCommandCount() const { return 0; }
+  virtual size_t commandHighWaterMark() const { return 0; }
+  virtual std::string submissionError() const { return {}; }
   virtual int getFPS() const = 0;
+  // Synchronous default-backbuffer capture, after submission and before swap.
+  // Failure must include frame rejection/resource errors even after queue
+  // clear.
+  virtual FrameReadback readBackbuffer(int width, int height)
+  {
+    (void)width;
+    (void)height;
+    return { 0, 0, {}, "Backend does not support frame readback" };
+  }
+  // Asynchronous colour readback of an offscreen framebuffer's first colour
+  // attachment, for surfaces presented outside the GPU window (detached panel
+  // windows). A caller-numbered stream keeps up to two copies in flight:
+  // request queues a copy of everything submitted so far; take returns the
+  // oldest completed copy as top-down RGBA8, blocking for it when wait is
+  // true. request fails when both copies are still pending. Main-thread only.
+  virtual bool requestFramebufferReadback(std::uint32_t stream,
+                                          FramebufferHandle framebuffer,
+                                          int width,
+                                          int height)
+  {
+    (void)stream;
+    (void)framebuffer;
+    (void)width;
+    (void)height;
+    return false;
+  }
+  virtual bool takeFramebufferReadback(std::uint32_t stream,
+                                       bool wait,
+                                       FrameReadback& out)
+  {
+    (void)stream;
+    (void)wait;
+    out = { 0, 0, {}, "Backend does not support framebuffer readback" };
+    return false;
+  }
+  virtual void releaseReadbackStream(std::uint32_t stream) { (void)stream; }
 
   virtual MeshHandle CreateMesh(const void* vertices,
                                 size_t vertexSize,
@@ -83,13 +162,36 @@ public:
                                       const int height,
                                       int channels,
                                       const TextureOptions& options) = 0;
+  virtual TextureHandle CreateCubemap(
+    const std::array<const unsigned char*, 6>& facesData,
+    int width,
+    int height,
+    int channels = 3) = 0;
   virtual bool ReplaceTexture(TextureHandle handle,
                               const unsigned char* data,
                               int width,
                               int height,
                               int channels,
                               const TextureOptions& options) = 0;
+  // Preserve handle and cubemap kind; rejection leaves the previous resource.
+  virtual bool ReplaceCubemap(TextureHandle handle,
+                              const std::array<const unsigned char*, 6>& faces,
+                              int width,
+                              int height,
+                              int channels)
+  {
+    (void)handle;
+    (void)faces;
+    (void)width;
+    (void)height;
+    (void)channels;
+    return false;
+  }
   virtual bool DestroyTexture(TextureHandle handle) = 0;
+  // False when a new texture draws nothing until some later frame (the guest
+  // recorder waits for the host's copy). Renderer then offers no white
+  // texture, and flat colour keeps its untextured path (D-R35).
+  virtual bool TexturesDrawWhenCreated() const { return true; }
   virtual bool IsTextureValid(TextureHandle handle) const = 0;
   virtual TextureInfo GetTextureInfo(TextureHandle handle) const = 0;
 
@@ -103,4 +205,23 @@ public:
     TextureHandle* outDepthTexture) = 0;
   virtual bool DestroyFramebuffer(FramebufferHandle handle) = 0;
   virtual bool IsFramebufferValid(FramebufferHandle handle) const = 0;
+
+  // Instance and uniform buffers of a fixed capacity, filled by WriteBuffer.
+  // Backends without them return an invalid handle; callers fall back.
+  virtual BufferHandle CreateBuffer(BufferUsage usage, size_t capacityBytes)
+  {
+    (void)usage;
+    (void)capacityBytes;
+    return {};
+  }
+  virtual bool DestroyBuffer(BufferHandle handle)
+  {
+    (void)handle;
+    return false;
+  }
+  virtual bool IsBufferValid(BufferHandle handle) const
+  {
+    (void)handle;
+    return false;
+  }
 };

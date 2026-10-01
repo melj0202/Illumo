@@ -17,6 +17,8 @@ enum class MeshVertexLayout : int
   Pos3Norm3Color4U8Uv2 = 3,
   // 3D Textured lit meshes: float pos3 | float norm3 | float uv2 (stride 32)
   Pos3Norm3Uv2 = 4,
+  // Position only (e.g. skybox unit cube): float pos3 (stride 12)
+  Pos3 = 5,
 };
 
 class IMesh
@@ -44,14 +46,8 @@ public:
   {
     return static_cast<unsigned int>(_indexData.size());
   }
-  unsigned int getVAOID() const { return _vaoID; }
-  unsigned int getVBOID() const { return _vboID; }
-  unsigned int getEBOID() const { return _eboID; }
 
 protected:
   std::vector<float> _vertexData;
   std::vector<unsigned int> _indexData;
-  unsigned int _vaoID = 0;
-  unsigned int _vboID = 0;
-  unsigned int _eboID = 0;
 };

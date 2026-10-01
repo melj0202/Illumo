@@ -5,6 +5,7 @@
  "fullscreen": "0",
  "logLevel": "3",
  "showFPS": "1",
+ "showMemory": "0",
  "vsync": "1",
  "uiScale": "1",
  "fontSize": "13",

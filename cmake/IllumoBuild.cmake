@@ -3,14 +3,67 @@ include_guard(GLOBAL)
 option(ILLUMO_ENABLE_TRACY
   "Enable Tracy instrumentation in optimized builds" OFF)
 option(ILLUMO_ENABLE_COVERAGE
-  "Instrument both Illumo test runners for LLVM coverage" OFF)
+  "Instrument first-party workspace targets for LLVM coverage" OFF)
+# Debug is the sanitizer profile by default. With ASan off, a Debug host also
+# keeps Wasmtime's fast signal-based guest bounds traps.
+option(ILLUMO_ENABLE_ASAN
+  "Build Debug runtime targets with AddressSanitizer" ON)
 option(ILLUMO_ENABLE_CLANG_TIDY
   "Run clang-tidy on first-party C++ during build" ON)
+if(UNIX AND NOT APPLE)
+  option(ILLUMO_INSTALL_LINUX_DEPS
+    "Install Debian/Ubuntu apt packages during configure" ON)
+else()
+  option(ILLUMO_INSTALL_LINUX_DEPS
+    "Install Debian/Ubuntu apt packages during configure" OFF)
+endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 get_filename_component(ILLUMO_WORKSPACE_SOURCE_ROOT
   "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+
+if(ILLUMO_INSTALL_LINUX_DEPS AND UNIX AND NOT APPLE)
+  set(_illumo_linux_deps_script
+    "${ILLUMO_WORKSPACE_SOURCE_ROOT}/tools/install-linux-deps.sh")
+  if(EXISTS "${_illumo_linux_deps_script}")
+    set(_illumo_linux_deps_args)
+    if(ILLUMO_ENABLE_CLANG_TIDY)
+      list(APPEND _illumo_linux_deps_args --tidy)
+    endif()
+    if(ILLUMO_BUILD_DOCUMENTATION)
+      list(APPEND _illumo_linux_deps_args --docs)
+    endif()
+    message(STATUS "Checking Debian/Ubuntu packages for Illumo")
+    execute_process(
+      COMMAND bash "${_illumo_linux_deps_script}" ${_illumo_linux_deps_args}
+      WORKING_DIRECTORY "${ILLUMO_WORKSPACE_SOURCE_ROOT}"
+      RESULT_VARIABLE _illumo_linux_deps_result
+      OUTPUT_VARIABLE _illumo_linux_deps_output
+      ERROR_VARIABLE _illumo_linux_deps_error
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_STRIP_TRAILING_WHITESPACE)
+    if(_illumo_linux_deps_output)
+      message(STATUS "${_illumo_linux_deps_output}")
+    endif()
+    if(_illumo_linux_deps_error)
+      message(STATUS "${_illumo_linux_deps_error}")
+    endif()
+    if(NOT _illumo_linux_deps_result EQUAL 0)
+      message(FATAL_ERROR
+        "Linux apt packages are missing or could not be installed.\n"
+        "From a terminal run:\n"
+        "  bash ${_illumo_linux_deps_script} ${_illumo_linux_deps_args}\n"
+        "Then re-run CMake. Disable with -DILLUMO_INSTALL_LINUX_DEPS=OFF.")
+    endif()
+    unset(_illumo_linux_deps_args)
+    unset(_illumo_linux_deps_result)
+    unset(_illumo_linux_deps_output)
+    unset(_illumo_linux_deps_error)
+  endif()
+  unset(_illumo_linux_deps_script)
+endif()
+
 if(ILLUMO_ENABLE_CLANG_TIDY)
   find_program(ILLUMO_CLANG_TIDY_EXECUTABLE NAMES clang-tidy)
   if(NOT ILLUMO_CLANG_TIDY_EXECUTABLE)
@@ -27,7 +80,15 @@ if(NOT DEFINED CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   if(CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
   else()
-    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    # Single-config generators (Ninja/Makefiles) also create source-named
+    # binary dirs such as IllumoGame/. Put executables beside a config folder
+    # so they do not collide with those directories.
+    if(CMAKE_BUILD_TYPE)
+      set(CMAKE_RUNTIME_OUTPUT_DIRECTORY
+        "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}")
+    else()
+      set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    endif()
   endif()
 endif()
 if(NOT DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
@@ -45,21 +106,52 @@ if(NOT DEFINED CMAKE_ARCHIVE_OUTPUT_DIRECTORY)
   endif()
 endif()
 
+if(UNIX AND NOT APPLE AND NOT CMAKE_CONFIGURATION_TYPES)
+  # Ninja/Makefiles also create IllumoGame/, IllEd/, and IllMeshViewer/ under
+  # the build root. Executables cannot share those names in the same directory.
+  if(CMAKE_RUNTIME_OUTPUT_DIRECTORY STREQUAL "${CMAKE_BINARY_DIR}" OR
+     CMAKE_RUNTIME_OUTPUT_DIRECTORY STREQUAL "")
+    if(CMAKE_BUILD_TYPE)
+      set(CMAKE_RUNTIME_OUTPUT_DIRECTORY
+        "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}")
+    else()
+      set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    endif()
+  endif()
+endif()
+
 if(MSVC)
   add_compile_options(/FS)
+endif()
+
+# Illumo builds without C++ exceptions: failures return errors, and running
+# out of memory or threads ends the process (docs/contributing.md). Applied to
+# every C++ target, vendored ones included, so one binary never mixes STL
+# exception modes. MSVC's /EHsc comes from CMake's default flags.
+if(MSVC)
+  string(REGEX REPLACE "/EH[a-z-]*" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/EHs-c->)
+  add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:_HAS_EXCEPTIONS=0>)
+else()
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
 endif()
 
 function(illumo_configure_cpp_target target_name)
   target_compile_features(${target_name} PUBLIC cxx_std_23)
 
   if(MSVC)
-    target_compile_options(${target_name} PRIVATE /W4 /FS /MP)
+    # C4530: an exception handler in first-party code is an error (MSVC only
+    # warns when exceptions are off; Clang refuses try/throw itself).
+    target_compile_options(${target_name} PRIVATE /W4 /FS /MP /we4530)
   else()
     target_compile_options(${target_name} PRIVATE -Wall -Wextra)
   endif()
 
+  # Debug Tracy records only while a profiler is connected; otherwise every
+  # zone would be queued for a client that may never attach.
   target_compile_definitions(${target_name} PRIVATE
     $<$<CONFIG:Debug>:TRACY_ENABLE>
+    $<$<CONFIG:Debug>:TRACY_ON_DEMAND>
     $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:ILLUMO_ENABLE_DEBUG_TOOLS=1>
   )
   if(ILLUMO_ENABLE_TRACY)
@@ -90,11 +182,16 @@ endfunction()
 
 function(illumo_configure_runtime_target target_name)
   illumo_configure_cpp_target(${target_name})
+  if(ILLUMO_ENABLE_ASAN AND NOT ILLUMO_ENABLE_COVERAGE)
+    # Read by the WASM host to select explicit guest bounds checks.
+    target_compile_definitions(${target_name} PRIVATE
+      $<$<CONFIG:Debug>:ILLUMO_ASAN=1>)
+  endif()
   if(MSVC)
     target_compile_options(${target_name} PRIVATE
       $<$<CONFIG:Debug>:/Od>
       $<$<CONFIG:Release>:/O2>)
-    if(NOT ILLUMO_ENABLE_COVERAGE)
+    if(ILLUMO_ENABLE_ASAN AND NOT ILLUMO_ENABLE_COVERAGE)
       target_compile_options(${target_name} PRIVATE
         $<$<CONFIG:Debug>:/fsanitize=address>)
     endif()
@@ -103,7 +200,7 @@ function(illumo_configure_runtime_target target_name)
       $<$<CONFIG:Debug>:-O0>
       $<$<CONFIG:Debug>:-g>
       $<$<CONFIG:Release>:-O3>)
-    if(NOT ILLUMO_ENABLE_COVERAGE)
+    if(ILLUMO_ENABLE_ASAN AND NOT ILLUMO_ENABLE_COVERAGE)
       target_compile_options(${target_name} PRIVATE
         $<$<CONFIG:Debug>:-fsanitize=address>)
       get_target_property(target_type ${target_name} TYPE)
@@ -118,6 +215,7 @@ function(illumo_configure_runtime_target target_name)
 endfunction()
 
 function(illumo_discover_test_runner target_name label_name)
+  set_property(GLOBAL APPEND PROPERTY ILLUMO_WORKSPACE_TEST_RUNNERS ${target_name})
   set(discovery_file
     "${CMAKE_CURRENT_BINARY_DIR}/${target_name}-$<CONFIG>-discovered.cmake")
   set(discovery_include
@@ -160,4 +258,41 @@ function(illumo_discover_test_runner target_name label_name)
     COMMENT "Refreshing ${label_name} CTest discovery")
   set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
     "${discovery_include}")
+endfunction()
+
+# Call after the workspace subdirectories have registered their test runners.
+function(illumo_add_workspace_coverage)
+  if(NOT BUILD_TESTING)
+    message(FATAL_ERROR "ILLUMO_ENABLE_COVERAGE requires BUILD_TESTING=ON")
+  endif()
+  get_property(coverage_runners GLOBAL PROPERTY ILLUMO_WORKSPACE_TEST_RUNNERS)
+  if(NOT coverage_runners)
+    message(FATAL_ERROR "Workspace coverage requires registered test runners")
+  endif()
+  list(REMOVE_DUPLICATES coverage_runners)
+  set(coverage_dependencies IllumoPublicHeaderSmoke)
+  set(coverage_manifest "")
+  foreach(runner IN LISTS coverage_runners)
+    list(APPEND coverage_dependencies ${runner}Discover)
+    string(APPEND coverage_manifest "$<TARGET_FILE:${runner}>\n")
+  endforeach()
+  set(coverage_manifest_path "${CMAKE_BINARY_DIR}/coverage-binaries-$<CONFIG>.txt")
+  file(GENERATE OUTPUT "${coverage_manifest_path}" CONTENT "${coverage_manifest}")
+  find_program(ILLUMO_LLVM_PROFDATA_EXECUTABLE NAMES llvm-profdata REQUIRED)
+  find_program(ILLUMO_LLVM_COV_EXECUTABLE NAMES llvm-cov REQUIRED)
+  add_custom_target(IllumoCoverage
+    COMMAND ${CMAKE_COMMAND}
+      "-DTEST_BINARY_MANIFEST=${coverage_manifest_path}"
+      "-DBINARY_DIR=${CMAKE_BINARY_DIR}"
+      "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+      "-DCONFIG=$<CONFIG>"
+      "-DLLVM_PROFDATA=${ILLUMO_LLVM_PROFDATA_EXECUTABLE}"
+      "-DLLVM_COV=${ILLUMO_LLVM_COV_EXECUTABLE}"
+      "-DMINIMUM_LINE_COVERAGE=85"
+      -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/RunWorkspaceCoverage.cmake"
+    DEPENDS ${coverage_dependencies}
+    VERBATIM
+    USES_TERMINAL
+    COMMENT "Running combined Illumo workspace coverage"
+  )
 endfunction()

@@ -1,0 +1,1789 @@
+#include <Illumo/Foundation/Profile.h>
+#include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <Illumo/Rendering/Primitives/SkyboxVisual.h>
+#include <Illumo/Services/Logger.h>
+#include <IllumoGuest/RecordingBackend.h>
+#include <IllumoGuest/RenderWorld.h>
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
+static std::uint32_t
+retainedStyle(MeshVertexLayout layout);
+
+GuestRecordingBackend::GuestRecordingBackend(GuestServiceQueue& services,
+                                             std::size_t commandCeiling)
+  : m_services(services)
+  , m_commands(commandCeiling)
+  , m_visuals([this](TextureHandle handle) { return hostTexture(handle); })
+{
+  m_retirements.reserve(4096);
+  m_releases.reserve(GuestServices::MaximumRecords);
+}
+GuestRecordingBackend::~GuestRecordingBackend() = default;
+void
+GuestRecordingBackend::setRenderer(Renderer& renderer)
+{
+  m_renderer = &renderer;
+}
+void
+GuestRecordingBackend::setFrame(float width, float height)
+{
+  m_frame.width = width;
+  m_frame.height = height;
+}
+void
+GuestRecordingBackend::setLayer(GuestLayer layer)
+{
+  m_layer = layer;
+}
+void
+GuestRecordingBackend::beginSurface(std::uint32_t surface,
+                                    float width,
+                                    float height)
+{
+  GuestSurfaceFrame content;
+  content.surface = surface;
+  content.width = width;
+  content.height = height;
+  m_frame.surfaces.push_back(std::move(content));
+  m_surface = static_cast<std::ptrdiff_t>(m_frame.surfaces.size()) - 1;
+}
+void
+GuestRecordingBackend::endSurface()
+{
+  m_surface = -1;
+}
+std::vector<GuestBatch>&
+GuestRecordingBackend::targetBatches()
+{
+  return m_surface < 0
+           ? m_frame.batches
+           : m_frame.surfaces[static_cast<std::size_t>(m_surface)].batches;
+}
+float
+GuestRecordingBackend::targetWidth() const
+{
+  return m_surface < 0
+           ? m_frame.width
+           : m_frame.surfaces[static_cast<std::size_t>(m_surface)].width;
+}
+float
+GuestRecordingBackend::targetHeight() const
+{
+  return m_surface < 0
+           ? m_frame.height
+           : m_frame.surfaces[static_cast<std::size_t>(m_surface)].height;
+}
+void
+GuestRecordingBackend::BeginLayer(RenderLayerId layer)
+{
+  m_layer = layer == RenderLayerId::World ? GuestLayer::World : GuestLayer::Ui;
+  // A surface's scene has no world: the frame's camera and casters stay.
+  if (layer != RenderLayerId::World || m_renderer == nullptr ||
+      m_surface >= 0) {
+    return;
+  }
+  // The world camera and this frame's casters are final once RenderScene
+  // reaches the world layer; the host fits its shared shadow pass to them.
+  const Renderer::FrameContext& context = m_renderer->getFrameContext();
+  m_frame.hasCamera = context.active && context.hasWorldMvp;
+  m_frame.camera = context.worldMvp;
+  m_frame.shadowCasters.clear();
+  for (const Renderer::ShadowCasterDesc& source :
+       m_renderer->getShadowCasters()) {
+    GuestShadowCaster caster;
+    caster.boundsMin = source.boundsMin;
+    caster.boundsMax = source.boundsMax;
+    caster.lightDirection = source.lightDirection;
+    caster.mapSize =
+      static_cast<std::uint32_t>(std::clamp(source.mapSize, 64, 8192));
+    caster.minimumRadius = source.minimumRadius;
+    caster.lightDistance = source.lightDistance;
+    caster.casterDistance = source.casterDistance;
+    if (m_frame.shadowCasters.size() < GuestFrameLimits{}.shadowCasters) {
+      m_frame.shadowCasters.push_back(caster);
+    } else {
+      mergeShadowCaster(caster);
+    }
+  }
+}
+// Past the host's caster limit, the nearest caster lit the same way grows to
+// cover this one, so the shared shadow fit still includes its bounds.
+void
+GuestRecordingBackend::mergeShadowCaster(const GuestShadowCaster& caster)
+{
+  GuestShadowCaster* nearest = nullptr;
+  float nearestDistance = 0.0f;
+  for (GuestShadowCaster& existing : m_frame.shadowCasters) {
+    if (existing.lightDirection != caster.lightDirection ||
+        existing.mapSize != caster.mapSize ||
+        existing.minimumRadius != caster.minimumRadius ||
+        existing.lightDistance != caster.lightDistance ||
+        existing.casterDistance != caster.casterDistance) {
+      continue;
+    }
+    float distance = 0.0f;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      const float offset =
+        (existing.boundsMin[axis] + existing.boundsMax[axis] -
+         caster.boundsMin[axis] - caster.boundsMax[axis]) *
+        0.5f;
+      distance += offset * offset;
+    }
+    if (nearest == nullptr || distance < nearestDistance) {
+      nearest = &existing;
+      nearestDistance = distance;
+    }
+  }
+  if (nearest == nullptr) {
+    return;
+  }
+  for (std::size_t axis = 0; axis < 3; ++axis) {
+    nearest->boundsMin[axis] =
+      std::min(nearest->boundsMin[axis], caster.boundsMin[axis]);
+    nearest->boundsMax[axis] =
+      std::max(nearest->boundsMax[axis], caster.boundsMax[axis]);
+  }
+}
+bool
+GuestRecordingBackend::hasPendingTextures() const
+{
+  for (const std::pair<const std::uint32_t, Texture>& entry : m_textures) {
+    if (entry.second.replacing()) {
+      return true;
+    }
+  }
+  return false;
+}
+bool
+GuestRecordingBackend::Initialize()
+{
+  return true;
+}
+void
+GuestRecordingBackend::Shutdown()
+{
+  // The host revokes the complete owner table on retirement. Shutdown must
+  // never enqueue work during Renderer destruction.
+  m_textures.clear();
+  m_meshes.clear();
+  m_drawnDynamic.clear();
+  m_commands.Reset();
+  m_commandLayers.clear();
+}
+void
+GuestRecordingBackend::BeginFrame()
+{
+  ILLUMO_PROFILE_ZONE("RecordingBackend.beginFrame");
+  recycleFrame();
+  m_writtenTextures.clear();
+  m_surface = -1;
+  // A frame recorded but never delivered or dropped counts as dropped.
+  m_visuals.drop();
+  m_markers.clear();
+  m_compositionCursors.clear();
+  if (m_visualsEnabled) {
+    m_visuals.beginFrame(m_frame.visualOperations);
+  }
+  for (std::uint32_t slot : m_drawnDynamic) {
+    std::map<std::uint32_t, Mesh>::iterator found = m_meshes.find(slot);
+    if (found != m_meshes.end()) {
+      found->second.drawnThisFrame = false;
+    }
+  }
+  m_drawnDynamic.clear();
+  m_shadowPass = false;
+  m_shadowMeshes.clear();
+  m_lighting = GuestLighting{};
+  m_canvasFade = { 0.0f, 0.0f, 0.0f };
+  m_error.clear();
+  m_frameRejections = m_commands.GetTotalRejected();
+  m_mesh = {};
+  m_shader = {};
+  m_texture = {};
+  m_clip = {};
+  m_pipeline = {};
+  m_mvp = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+}
+void
+GuestRecordingBackend::EndFrame()
+{
+}
+void
+GuestRecordingBackend::PushToCommandQueue(RenderCommand command)
+{
+  const std::size_t before = m_commands.GetCommandCount();
+  m_commands.Submit(command);
+  if (m_commands.GetCommandCount() != before) {
+    m_commandLayers.push_back(m_layer);
+  }
+}
+void
+GuestRecordingBackend::ClearCommandQueue()
+{
+  m_commands.Reset();
+  m_commandLayers.clear();
+  m_markers.clear();
+}
+std::size_t
+GuestRecordingBackend::rejectedCommandCount() const
+{
+  return m_commands.GetTotalRejected();
+}
+std::size_t
+GuestRecordingBackend::commandHighWaterMark() const
+{
+  return m_commands.GetHighWaterMark();
+}
+std::string
+GuestRecordingBackend::submissionError() const
+{
+  return m_error;
+}
+int
+GuestRecordingBackend::getFPS() const
+{
+  return 0;
+}
+void
+GuestRecordingBackend::SubmitCommandQueue()
+{
+  ILLUMO_PROFILE_ZONE("RecordingBackend.submitCommands");
+  ILLUMO_PROFILE_PLOT("Guest commands submitted", m_commands.GetCommandCount());
+  const GuestLayer current = m_layer;
+  submitCommands();
+  m_markers.clear();
+  m_layer = current;
+}
+
+// Stops at the first command the guest contract refuses; fail() records it
+// in m_error, which drops the frame.
+bool
+GuestRecordingBackend::submitCommands()
+{
+  if (m_commandLayers.size() != m_commands.GetCommandCount()) {
+    return fail("Guest command layer journal mismatch");
+  }
+  std::size_t marker = 0;
+  for (std::size_t index = 0; index < m_commands.GetCommandCount(); ++index) {
+    while (marker < m_markers.size() && m_markers[marker].command == index) {
+      if (!placeVisual(m_markers[marker++].visual)) {
+        return false;
+      }
+    }
+    m_layer = m_commandLayers[index];
+    if (!consume(m_commands.GetCommand(index))) {
+      return false;
+    }
+  }
+  while (marker < m_markers.size()) {
+    if (!placeVisual(m_markers[marker++].visual)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool
+GuestRecordingBackend::fail(const std::string& message)
+{
+  if (m_error.empty()) {
+    m_error = message;
+  }
+  return false;
+}
+
+void
+GuestRecordingBackend::setVisuals(bool enabled, bool composeWorld)
+{
+  m_visualsEnabled = enabled;
+  m_composeWorld = composeWorld;
+}
+
+GuestResourceId
+GuestRecordingBackend::hostTexture(TextureHandle handle) const
+{
+  if (!IsTextureValid(handle)) {
+    return {};
+  }
+  const Texture& texture = m_textures.at(handle.slot);
+  if (texture.cubemap || texture.depthOnly || texture.replacing()) {
+    return {};
+  }
+  return texture.id;
+}
+
+std::uint32_t
+GuestRecordingBackend::currentTarget() const
+{
+  return m_surface < 0
+           ? 0u
+           : m_frame.surfaces[static_cast<std::size_t>(m_surface)].surface;
+}
+
+bool
+GuestRecordingBackend::AppendVisual(GameVisual& visual)
+{
+  if (!m_visualsEnabled || m_renderer == nullptr || m_shadowPass) {
+    return false;
+  }
+  const std::uint32_t target = currentTarget();
+  const bool world = visual.getSpace() == PrimitiveSpace::World;
+  // Surfaces draw only flat UI; world-space visuals follow the frame camera.
+  if ((m_surface >= 0 && (m_layer != GuestLayer::Ui || world)) ||
+      (world && !visual.drawsWithFrameCamera(m_renderer))) {
+    return false;
+  }
+  const std::array<float, 2> size = visual.pixelResolution(m_renderer);
+  if (!std::isfinite(size[0]) || !std::isfinite(size[1]) || size[0] < 1.0f ||
+      size[1] < 1.0f || size[0] > 65536.0f || size[1] > 65536.0f) {
+    return false;
+  }
+  std::size_t slot = m_frame.compositions.size();
+  for (std::size_t index = 0; index < m_frame.compositions.size(); ++index) {
+    if (m_frame.compositions[index].target == target) {
+      slot = index;
+    }
+  }
+  // Pixel-space visuals of one target share its logical size.
+  if (slot < m_frame.compositions.size() && !world &&
+      (m_frame.compositions[slot].width != size[0] ||
+       m_frame.compositions[slot].height != size[1])) {
+    return false;
+  }
+  const std::uint32_t id = m_visuals.sync(
+    visual, *m_renderer, m_layer, m_frame.visualOperations, m_textureEpoch);
+  if (id == 0) {
+    return false;
+  }
+  if (slot == m_frame.compositions.size()) {
+    GuestComposition& composition = m_frame.compositions.emplace_back();
+    composition.target = target;
+    composition.width = size[0];
+    composition.height = size[1];
+    if (target == 0 && m_composeWorld) {
+      composition.entries.push_back({ GuestCompositionKind::World, 0, 0 });
+    }
+    m_compositionCursors.push_back(0);
+  }
+  m_markers.push_back({ m_commands.GetCommandCount(), id });
+  return true;
+}
+
+void
+GuestRecordingBackend::ForgetVisual(const GameVisual& visual)
+{
+  m_visuals.forget(visual);
+}
+
+GuestResourceId
+GuestRecordingBackend::hostCubemap(TextureHandle handle) const
+{
+  if (!IsTextureValid(handle)) {
+    return {};
+  }
+  const Texture& texture = m_textures.at(handle.slot);
+  return texture.cubemap && texture.pending == 0 ? texture.id
+                                                 : GuestResourceId{};
+}
+
+bool
+GuestRecordingBackend::AppendSkybox(const SkyboxVisual& skybox)
+{
+  // A cubemap still uploading draws nothing either way; recording keeps the
+  // old path's behaviour until it is ready.
+  if (m_world == nullptr || m_surface >= 0 || m_layer != GuestLayer::World ||
+      hostCubemap(skybox.getCubemap()).owner == 0) {
+    return false;
+  }
+  const glm::vec4& tint = skybox.getTint();
+  return m_world->setSkybox(
+    { skybox.getCubemap(), { tint.x, tint.y, tint.z, tint.w } });
+}
+
+bool
+GuestRecordingBackend::placeVisual(std::uint32_t visual)
+{
+  const std::uint32_t target = currentTarget();
+  for (std::size_t index = 0; index < m_frame.compositions.size(); ++index) {
+    GuestComposition& composition = m_frame.compositions[index];
+    if (composition.target != target) {
+      continue;
+    }
+    const std::uint32_t batches =
+      static_cast<std::uint32_t>(targetBatches().size());
+    std::uint32_t& cursor = m_compositionCursors[index];
+    if (batches > cursor) {
+      composition.entries.push_back(
+        { GuestCompositionKind::Batches, cursor, batches - cursor });
+    }
+    composition.entries.push_back({ GuestCompositionKind::Visual, visual, 0 });
+    cursor = batches;
+    return true;
+  }
+  return fail("Guest visual placed outside its composition");
+}
+
+static bool
+sameComposition(const GuestComposition& left, const GuestComposition& right)
+{
+  if (left.target != right.target || left.width != right.width ||
+      left.height != right.height ||
+      left.entries.size() != right.entries.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < left.entries.size(); ++index) {
+    const GuestCompositionEntry& a = left.entries[index];
+    const GuestCompositionEntry& b = right.entries[index];
+    if (a.kind != b.kind || a.first != b.first || a.count != b.count) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void
+GuestRecordingBackend::finishCompositions()
+{
+  ILLUMO_PROFILE_ZONE("RecordingBackend.finishCompositions");
+  m_takenCompositions.resize(m_frame.compositions.size());
+  for (std::size_t index = 0; index < m_frame.compositions.size(); ++index) {
+    GuestComposition& composition = m_frame.compositions[index];
+    std::uint32_t batches = 0;
+    if (composition.target == 0) {
+      batches = static_cast<std::uint32_t>(m_frame.batches.size());
+    } else {
+      for (const GuestSurfaceFrame& surface : m_frame.surfaces) {
+        if (surface.surface == composition.target) {
+          batches = static_cast<std::uint32_t>(surface.batches.size());
+        }
+      }
+    }
+    const std::uint32_t cursor = m_compositionCursors[index];
+    if (batches > cursor) {
+      composition.entries.push_back(
+        { GuestCompositionKind::Batches, cursor, batches - cursor });
+    }
+    GuestComposition& taken = m_takenCompositions[index];
+    taken.target = composition.target;
+    taken.same = false;
+    taken.width = composition.width;
+    taken.height = composition.height;
+    taken.entries.assign(composition.entries.begin(),
+                         composition.entries.end());
+    for (const GuestComposition& delivered : m_deliveredCompositions) {
+      if (sameComposition(delivered, composition)) {
+        composition.same = true;
+        composition.entries.clear();
+        break;
+      }
+    }
+  }
+}
+
+void
+GuestRecordingBackend::commitVisuals()
+{
+  ILLUMO_PROFILE_ZONE("RecordingBackend.commitVisuals");
+  m_visuals.commit();
+  std::swap(m_deliveredCompositions, m_takenCompositions);
+}
+
+void
+GuestRecordingBackend::dropVisuals()
+{
+  ILLUMO_PROFILE_ZONE("RecordingBackend.dropVisuals");
+  m_visuals.drop();
+  // The host replaces its compositions with the dropped frame's (none), so
+  // none of them can be referred to as `same` any more.
+  m_deliveredCompositions.clear();
+  // The frame's texture writes never arrived; the retained pixels have them.
+  for (std::uint32_t slot : m_writtenTextures) {
+    const std::map<std::uint32_t, Texture>::iterator found =
+      m_textures.find(slot);
+    if (found != m_textures.end()) {
+      found->second.changed = true;
+    }
+  }
+  m_writtenTextures.clear();
+}
+GuestFrame
+GuestRecordingBackend::takeFrame()
+{
+  GuestFrame result;
+  takeFrame(result);
+  return result;
+}
+bool
+GuestRecordingBackend::takeFrame(GuestFrame& output)
+{
+  ILLUMO_PROFILE_ZONE("RecordingBackend.takeFrame");
+  if (m_commands.GetTotalRejected() != m_frameRejections) {
+    return fail(
+      "the frame recorded more render commands than the guest ceiling");
+  }
+  if (m_renderer && !m_renderer->frameError().empty()) {
+    return fail("Guest frame submission failed");
+  }
+  if (!m_error.empty()) {
+    return false;
+  }
+  // Only a frame that will be delivered consumes the dirty ranges.
+  emitMeshWrites();
+  finishCompositions();
+  // A few writes per frame at most; unused when profiling is off.
+  [[maybe_unused]] std::size_t textureWriteBytes = 0;
+  for (const GuestTextureWrite& write : m_frame.textureWrites) {
+    textureWriteBytes += write.pixels.size();
+  }
+  ILLUMO_PROFILE_PLOT("Guest texture write bytes", textureWriteBytes);
+  std::swap(output, m_frame);
+  // As before, a take leaves a default frame: nothing recorded remains.
+  recycleFrame();
+  const GuestFrame defaults;
+  m_frame.width = defaults.width;
+  m_frame.height = defaults.height;
+  m_frame.camera = defaults.camera;
+  return true;
+}
+void
+GuestRecordingBackend::recycleFrame()
+{
+  for (GuestTextureWrite& write : m_frame.textureWrites) {
+    if (m_spareBytes.size() < MaximumSpareBuffers &&
+        write.pixels.capacity() != 0) {
+      m_spareBytes.push_back(std::move(write.pixels));
+    }
+  }
+  for (GuestFrameMeshWrite& write : m_frame.meshWrites) {
+    if (m_spareBytes.size() < MaximumSpareBuffers &&
+        write.bytes.capacity() != 0) {
+      m_spareBytes.push_back(std::move(write.bytes));
+    }
+  }
+  m_frame.clear();
+}
+std::vector<std::byte>
+GuestRecordingBackend::takeSpareBytes()
+{
+  if (m_spareBytes.empty()) {
+    return {};
+  }
+  std::vector<std::byte> spare = std::move(m_spareBytes.back());
+  m_spareBytes.pop_back();
+  spare.clear();
+  return spare;
+}
+void
+GuestRecordingBackend::markDirty(std::size_t& begin,
+                                 std::size_t& end,
+                                 std::size_t offset,
+                                 std::size_t size)
+{
+  if (size == 0) {
+    return;
+  }
+  if (end <= begin) {
+    begin = offset;
+    end = offset + size;
+    return;
+  }
+  begin = std::min(begin, offset);
+  end = std::max(end, offset + size);
+}
+void
+GuestRecordingBackend::emitMeshWrites()
+{
+  ILLUMO_PROFILE_ZONE("RecordingBackend.emitMeshWrites");
+  const GuestFrameLimits limits;
+  std::size_t writes = 0;
+  std::size_t bytes = 0;
+  for (std::pair<const std::uint32_t, Mesh>& entry : m_meshes) {
+    Mesh& mesh = entry.second;
+    if (!mesh.dynamic || !mesh.retain || !mesh.ready || mesh.failed) {
+      continue;
+    }
+    // The host validates whole vertices and indices.
+    const std::size_t stride =
+      GuestMeshRequest::stride(retainedStyle(mesh.layout));
+    const std::size_t vertexBegin = mesh.vertexDirtyBegin / stride * stride;
+    const std::size_t vertexEnd =
+      std::min(mesh.vertices.size(),
+               (mesh.vertexDirtyEnd + stride - 1) / stride * stride);
+    const std::size_t indexBegin = mesh.indexDirtyBegin / 4 * 4;
+    const std::size_t indexEnd =
+      std::min(mesh.indices.size(), (mesh.indexDirtyEnd + 3) / 4 * 4);
+    const bool vertexDirty = mesh.vertexDirtyEnd > mesh.vertexDirtyBegin;
+    const bool indexDirty = mesh.indexDirtyEnd > mesh.indexDirtyBegin;
+    const std::size_t needed = (vertexDirty ? vertexEnd - vertexBegin : 0) +
+                               (indexDirty ? indexEnd - indexBegin : 0);
+    const std::size_t count = (vertexDirty ? 1u : 0u) + (indexDirty ? 1u : 0u);
+    if (count == 0) {
+      continue;
+    }
+    if (writes + count > limits.meshWrites ||
+        needed > limits.meshWriteBytes - bytes) {
+      // Over the frame's write quota: this frame's by-reference draws become
+      // inline copies of the current (final) contents.
+      demoteDynamic(mesh);
+      continue;
+    }
+    if (vertexDirty) {
+      GuestFrameMeshWrite& write = m_frame.meshWrites.emplace_back();
+      write.mesh = mesh.id;
+      write.indices = false;
+      write.offset = static_cast<std::uint32_t>(vertexBegin);
+      write.bytes = takeSpareBytes();
+      write.bytes.assign(
+        mesh.vertices.begin() + static_cast<std::ptrdiff_t>(vertexBegin),
+        mesh.vertices.begin() + static_cast<std::ptrdiff_t>(vertexEnd));
+    }
+    if (indexDirty) {
+      GuestFrameMeshWrite& write = m_frame.meshWrites.emplace_back();
+      write.mesh = mesh.id;
+      write.indices = true;
+      write.offset = static_cast<std::uint32_t>(indexBegin);
+      write.bytes = takeSpareBytes();
+      write.bytes.assign(
+        mesh.indices.begin() + static_cast<std::ptrdiff_t>(indexBegin),
+        mesh.indices.begin() + static_cast<std::ptrdiff_t>(indexEnd));
+    }
+    writes += count;
+    bytes += needed;
+    mesh.vertexDirtyBegin = mesh.vertexDirtyEnd = 0;
+    mesh.indexDirtyBegin = mesh.indexDirtyEnd = 0;
+  }
+  m_lastMeshWriteBytes = bytes;
+  ILLUMO_PROFILE_PLOT("Guest mesh write bytes", bytes);
+}
+void
+GuestRecordingBackend::demoteDynamic(Mesh& mesh)
+{
+  // Rare, and rescans every batch recorded so far.
+  ILLUMO_PROFILE_ZONE("RecordingBackend.demoteDynamic");
+  std::vector<std::vector<GuestBatch>*> lists{ &m_frame.batches };
+  for (GuestSurfaceFrame& surface : m_frame.surfaces) {
+    lists.push_back(&surface.batches);
+  }
+  for (std::vector<GuestBatch>* list : lists) {
+    for (GuestBatch& batch : *list) {
+      if (!batch.retained() || batch.mesh.owner != mesh.id.owner ||
+          batch.mesh.slot != mesh.id.slot ||
+          batch.mesh.generation != mesh.id.generation) {
+        continue;
+      }
+      const std::uint32_t first = batch.firstIndex;
+      const std::uint32_t count = batch.indexCount;
+      batch.mesh = {};
+      batch.firstIndex = 0;
+      batch.indexCount = 0;
+      // A failure is recorded in m_error, which drops the frame.
+      extractInline(mesh, batch, first, count);
+    }
+  }
+  forgetRetained(mesh);
+  mesh.dynamic = false;
+  mesh.drawnThisFrame = false;
+}
+MeshHandle
+GuestRecordingBackend::CreateMesh(const void* vertices,
+                                  std::size_t vertexBytes,
+                                  const void* indices,
+                                  std::size_t indexBytes)
+{
+  return CreateMesh(vertices,
+                    vertexBytes,
+                    indices,
+                    indexBytes,
+                    MeshVertexLayout::Pos3Color3Uv2,
+                    false);
+}
+MeshHandle
+GuestRecordingBackend::CreateMesh(const void* vertices,
+                                  std::size_t vertexBytes,
+                                  const void* indices,
+                                  std::size_t indexBytes,
+                                  MeshVertexLayout layout,
+                                  bool dynamic)
+{
+  if (m_meshes.size() >= 4096) {
+    return {};
+  }
+  const MeshHandle handle = m_meshHandles.allocate();
+  m_meshes.emplace(handle.slot, Mesh{});
+  if (!ReplaceMesh(
+        handle, vertices, vertexBytes, indices, indexBytes, layout, dynamic)) {
+    DestroyMesh(handle);
+    return {};
+  }
+  return handle;
+}
+// The retained-mesh style for a vertex layout; 0 when a layout has no
+// retained form (skybox cubes and other small built-in geometry).
+static std::uint32_t
+retainedStyle(MeshVertexLayout layout)
+{
+  switch (layout) {
+    case MeshVertexLayout::Pos3Color4U8:
+      return static_cast<std::uint32_t>(GuestBatchStyle::Shape);
+    case MeshVertexLayout::Pos3Color4U8Uv2:
+      return static_cast<std::uint32_t>(GuestBatchStyle::Sprite);
+    case MeshVertexLayout::Pos3Color3Uv2:
+      return static_cast<std::uint32_t>(GuestBatchStyle::Canvas);
+    case MeshVertexLayout::Pos3Norm3Color4U8Uv2:
+      return static_cast<std::uint32_t>(GuestBatchStyle::LitMesh);
+    default:
+      return 0;
+  }
+}
+bool
+GuestRecordingBackend::ReplaceMesh(MeshHandle handle,
+                                   const void* vertices,
+                                   std::size_t vertexBytes,
+                                   const void* indices,
+                                   std::size_t indexBytes,
+                                   MeshVertexLayout layout,
+                                   bool dynamic)
+{
+  if (!IsMeshValid(handle) ||
+      vertexBytes > GuestMeshRequest::MaximumVertexBytes ||
+      indexBytes > GuestMeshRequest::MaximumIndexBytes) {
+    return false;
+  }
+  Mesh candidate;
+  candidate.layout = layout;
+  candidate.vertices.resize(vertexBytes);
+  candidate.indices.resize(indexBytes);
+  if (vertices != nullptr) {
+    std::memcpy(candidate.vertices.data(), vertices, vertexBytes);
+  }
+  if (indices != nullptr) {
+    std::memcpy(candidate.indices.data(), indices, indexBytes);
+  }
+  const std::uint32_t style = retainedStyle(layout);
+  // Immutable geometry of any size is uploaded to the host once.
+  const bool shaped = style != 0 && indexBytes > 0 && vertexBytes > 0 &&
+                      vertexBytes % GuestMeshRequest::stride(style) == 0 &&
+                      indexBytes % 4 == 0;
+  // Dynamic 2D geometry (GameVisual, text, UI) lives on the host and only
+  // its changed bytes travel; lit and oversized dynamic meshes stay inline.
+  candidate.dynamic =
+    dynamic && shaped &&
+    style != static_cast<std::uint32_t>(GuestBatchStyle::LitMesh) &&
+    vertexBytes <= GuestMeshRequest::MaximumDynamicBytes &&
+    indexBytes <= GuestMeshRequest::MaximumDynamicBytes;
+  candidate.retain =
+    candidate.dynamic ||
+    (!dynamic && shaped && vertices != nullptr && indices != nullptr);
+  Mesh& target = m_meshes.at(handle.slot);
+  forgetRetained(target);
+  target = std::move(candidate);
+  return true;
+}
+void
+GuestRecordingBackend::forgetRetained(Mesh& mesh)
+{
+  if (mesh.id.owner != 0) {
+    m_meshRetirements.push_back(mesh.id);
+  }
+  if (mesh.create != 0) {
+    m_abandonedMeshes.push_back(mesh.create);
+  }
+  m_drained.insert(m_drained.end(), mesh.writes.begin(), mesh.writes.end());
+  mesh.retain = false;
+  mesh.id = {};
+  mesh.create = 0;
+  mesh.writes.clear();
+  mesh.vertexSent = 0;
+  mesh.indexSent = 0;
+  mesh.ready = false;
+  mesh.failed = false;
+  mesh.vertexDirtyBegin = mesh.vertexDirtyEnd = 0;
+  mesh.indexDirtyBegin = mesh.indexDirtyEnd = 0;
+}
+bool
+GuestRecordingBackend::DestroyMesh(MeshHandle handle)
+{
+  if (!IsMeshValid(handle)) {
+    return false;
+  }
+  forgetRetained(m_meshes.at(handle.slot));
+  m_meshes.erase(handle.slot);
+  return m_meshHandles.release(handle);
+}
+bool
+GuestRecordingBackend::IsMeshValid(MeshHandle handle) const
+{
+  return m_meshHandles.isCurrent(handle) && m_meshes.contains(handle.slot);
+}
+GuestRecordingBackend::HostMeshState
+GuestRecordingBackend::hostMeshState(MeshHandle handle,
+                                     GuestResourceId* id,
+                                     std::uint32_t* indexCount) const
+{
+  if (!IsMeshValid(handle)) {
+    return HostMeshState::Missing;
+  }
+  const Mesh& mesh = m_meshes.at(handle.slot);
+  if (mesh.layout != MeshVertexLayout::Pos3Norm3Color4U8Uv2 || !mesh.retain ||
+      mesh.dynamic || mesh.failed) {
+    return HostMeshState::Unusable;
+  }
+  if (!mesh.ready) {
+    return HostMeshState::Pending;
+  }
+  if (id != nullptr) {
+    *id = mesh.id;
+  }
+  if (indexCount != nullptr) {
+    *indexCount = static_cast<std::uint32_t>(mesh.indices.size() / 4);
+  }
+  return HostMeshState::Ready;
+}
+ShaderHandle
+GuestRecordingBackend::CreateShaderProgram(const ShaderPaths&)
+{
+  return m_shaderHandles.allocate();
+}
+ShaderHandle
+GuestRecordingBackend::CreateShaderProgram(const ShaderSources&)
+{
+  return m_shaderHandles.allocate();
+}
+bool
+GuestRecordingBackend::ReplaceShaderProgram(ShaderHandle, const ShaderSources&)
+{
+  return false;
+}
+bool
+GuestRecordingBackend::DestroyShaderProgram(ShaderHandle handle)
+{
+  return m_shaderHandles.release(handle);
+}
+bool
+GuestRecordingBackend::IsShaderValid(ShaderHandle handle) const
+{
+  return m_shaderHandles.isCurrent(handle);
+}
+TextureHandle
+GuestRecordingBackend::CreateTexture(const unsigned char* pixels,
+                                     int width,
+                                     int height)
+{
+  return CreateTexture(pixels, width, height, 3, {});
+}
+TextureHandle
+GuestRecordingBackend::CreateTexture(const unsigned char* pixels,
+                                     int width,
+                                     int height,
+                                     int channels,
+                                     const TextureOptions& options)
+{
+  if (m_textures.size() >= 1024) {
+    return {};
+  }
+  const TextureHandle handle = m_textureHandles.allocate();
+  m_textures.emplace(handle.slot, Texture{});
+  if (!ReplaceTexture(handle, pixels, width, height, channels, options)) {
+    DestroyTexture(handle);
+    return {};
+  }
+  return handle;
+}
+TextureHandle
+GuestRecordingBackend::CreateCubemap(
+  const std::array<const unsigned char*, 6>& faces,
+  int width,
+  int height,
+  int channels)
+{
+  if (m_textures.size() >= 1024 || width <= 0 || width != height ||
+      width > 2048 || (channels != 3 && channels != 4)) {
+    return {};
+  }
+  ILLUMO_PROFILE_ZONE("RecordingBackend.createCubemap");
+  GuestCubemapRequest request;
+  request.size = static_cast<std::uint32_t>(width);
+  const std::uint64_t bytes = GuestCubemapRequest::bytesFor(request.size);
+  if (bytes > GuestServices::MaximumBytes - 64) {
+    return {};
+  }
+  // The host samples RGBA faces; RGB sources gain an opaque alpha.
+  request.faces.resize(static_cast<std::size_t>(bytes));
+  const std::size_t pixels = static_cast<std::size_t>(width) * height;
+  for (std::size_t face = 0; face < faces.size(); ++face) {
+    if (faces[face] == nullptr) {
+      return {};
+    }
+    std::byte* output = request.faces.data() + face * pixels * 4;
+    for (std::size_t pixel = 0; pixel < pixels; ++pixel) {
+      for (std::size_t component = 0; component < 4; ++component) {
+        output[pixel * 4 + component] =
+          component < static_cast<std::size_t>(channels)
+            ? static_cast<std::byte>(faces[face][pixel * channels + component])
+            : std::byte{ 255 };
+      }
+    }
+  }
+  GuestWireWriter payload;
+  request.write(payload);
+  const std::uint64_t pending =
+    m_services.enqueue(GuestService::CreateCubemap, payload.take());
+  if (pending == 0) {
+    return {};
+  }
+  const TextureHandle handle = m_textureHandles.allocate();
+  Texture texture;
+  texture.cubemap = true;
+  texture.pending = pending;
+  ++m_textureEpoch;
+  texture.pendingInfo = { width, height, 4 };
+  m_textures.emplace(handle.slot, std::move(texture));
+  return handle;
+}
+bool
+GuestRecordingBackend::ReplaceTexture(TextureHandle handle,
+                                      const unsigned char* pixels,
+                                      int width,
+                                      int height,
+                                      int channels,
+                                      const TextureOptions& options)
+{
+  if (!IsTextureValid(handle) || m_textures.at(handle.slot).cubemap ||
+      width <= 0 || height <= 0 || width > 8192 || height > 8192 ||
+      (channels != 1 && channels != 3 && channels != 4) ||
+      options.wrapX != TextureWrap::ClampToEdge ||
+      options.wrapY != TextureWrap::ClampToEdge || options.generateMipmaps) {
+    return false;
+  }
+  const std::size_t bytes = static_cast<std::size_t>(width) * height * channels;
+  if (bytes > GuestServices::MaximumBytes - 64) {
+    return false;
+  }
+  ILLUMO_PROFILE_ZONE("RecordingBackend.replaceTexture");
+  Texture& texture = m_textures.at(handle.slot);
+  if (texture.pending != 0) {
+    // A newer replacement supersedes an unfinished one; the superseded
+    // acquisition is released when its completion arrives.
+    m_abandoned.push_back(texture.pending);
+    texture.pending = 0;
+  }
+  texture.pendingInfo = { width, height, channels };
+  texture.pendingPixels.resize(bytes);
+  if (pixels != nullptr) {
+    std::memcpy(texture.pendingPixels.data(), pixels, bytes);
+  } else {
+    std::fill(
+      texture.pendingPixels.begin(), texture.pendingPixels.end(), std::byte{});
+  }
+  texture.pendingLinear = options.filter == TextureFilter::Linear;
+  texture.unsent = true;
+  texture.changed = false;
+  ++m_textureEpoch;
+  // The queue holds a bounded number of outstanding requests, and scene
+  // changes release and create many resources at once. A replacement it
+  // refuses now is still accepted: pump() sends it once there is room, and
+  // until then the texture reports its new size, as a sent one does.
+  sendReplacement(texture);
+  return true;
+}
+void
+GuestRecordingBackend::sendReplacement(Texture& texture)
+{
+  if (!texture.unsent) {
+    return;
+  }
+  GuestWireWriter payload;
+  GuestTextureRequest::write(
+    payload,
+    static_cast<std::uint32_t>(texture.pendingInfo.width),
+    static_cast<std::uint32_t>(texture.pendingInfo.height),
+    static_cast<std::uint32_t>(texture.pendingInfo.channels),
+    texture.pendingLinear,
+    texture.pendingPixels);
+  std::vector<std::byte> bytes = payload.take();
+  const std::uint64_t pending =
+    m_services.tryEnqueue(GuestService::CreateTexture, bytes);
+  if (pending != 0) {
+    texture.pending = pending;
+    texture.unsent = false;
+  }
+}
+void
+GuestRecordingBackend::release(GuestResourceId id)
+{
+  if (id.owner == 0) {
+    return;
+  }
+  if (m_retirements.size() == 4096) {
+    // The host keeps the resource until this guest retires; nothing else is
+    // lost.
+    Logger::LogError("Guest retirement quota exceeded; a host resource is "
+                     "kept until the guest exits");
+    return;
+  }
+  m_retirements.push_back(id);
+}
+bool
+GuestRecordingBackend::DestroyTexture(TextureHandle handle)
+{
+  if (!IsTextureValid(handle)) {
+    return false;
+  }
+  const Texture& texture = m_textures.at(handle.slot);
+  if (texture.pending != 0) {
+    m_abandoned.push_back(texture.pending);
+  }
+  release(texture.id);
+  m_textures.erase(handle.slot);
+  ++m_textureEpoch;
+  return m_textureHandles.release(handle);
+}
+bool
+GuestRecordingBackend::IsTextureValid(TextureHandle handle) const
+{
+  return m_textureHandles.isCurrent(handle) && m_textures.contains(handle.slot);
+}
+TextureInfo
+GuestRecordingBackend::GetTextureInfo(TextureHandle handle) const
+{
+  if (!IsTextureValid(handle)) {
+    return {};
+  }
+  const Texture& texture = m_textures.at(handle.slot);
+  return texture.replacing() ? texture.pendingInfo : texture.info;
+}
+TextureHandle
+GuestRecordingBackend::importTexture(GuestResourceId id)
+{
+  if (id.owner == 0 || id.kind != GuestResourceKind::Texture ||
+      m_textures.size() >= 1024) {
+    return {};
+  }
+  const TextureHandle handle = m_textureHandles.allocate();
+  Texture texture;
+  texture.id = id;
+  m_textures.emplace(handle.slot, std::move(texture));
+  ++m_textureEpoch;
+  return handle;
+}
+void
+GuestRecordingBackend::pump()
+{
+  ILLUMO_PROFILE_ZONE("RecordingBackend.pump");
+  GuestServiceRecord result;
+  for (std::vector<std::uint64_t>::iterator it = m_releases.begin();
+       it != m_releases.end();) {
+    if (m_services.take(*it, result)) {
+      it = m_releases.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (std::vector<std::uint64_t>::iterator it = m_abandoned.begin();
+       it != m_abandoned.end();) {
+    if (m_services.take(*it, result)) {
+      if (result.status == GuestServiceStatus::Complete) {
+        GuestWireReader reader(result.payload);
+        release(GuestResourceId::read(reader));
+      }
+      it = m_abandoned.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (std::pair<const std::uint32_t, Texture>& entry : m_textures) {
+    Texture& texture = entry.second;
+    sendReplacement(texture);
+    if (texture.pending != 0 && m_services.take(texture.pending, result)) {
+      texture.pending = 0;
+      ++m_textureEpoch;
+      GuestWireReader reader(result.payload);
+      const GuestResourceId replacement =
+        result.status == GuestServiceStatus::Complete
+          ? GuestResourceId::read(reader)
+          : GuestResourceId{};
+      const bool malformed = result.status == GuestServiceStatus::Complete &&
+                             (!reader.finished() || replacement.owner == 0 ||
+                              replacement.kind != GuestResourceKind::Texture);
+      if (result.status != GuestServiceStatus::Complete || malformed) {
+        // A texture the host never held stays unusable; a replacement that
+        // failed leaves the previous pixels in place.
+        if (malformed) {
+          Logger::LogError("Invalid texture completion");
+        } else if (texture.id.owner == 0) {
+          Logger::LogError("Guest texture acquisition failed");
+        }
+        texture.pendingPixels.clear();
+        texture.changed = false;
+        continue;
+      }
+      release(texture.id);
+      texture.id = replacement;
+      texture.info = texture.pendingInfo;
+      texture.pixels = std::move(texture.pendingPixels);
+    }
+    // While a replacement is outstanding, writes land in its pixels; they
+    // reach the host whole once it completes.
+    if (texture.id.owner != 0 && texture.changed && !texture.replacing()) {
+      m_writtenTextures.push_back(entry.first);
+      GuestTextureWrite& write = m_frame.textureWrites.emplace_back();
+      write.texture = texture.id;
+      write.x = 0;
+      write.y = 0;
+      write.width = static_cast<std::uint32_t>(texture.info.width);
+      write.height = static_cast<std::uint32_t>(texture.info.height);
+      write.channels = static_cast<std::uint32_t>(texture.info.channels);
+      write.pixels = takeSpareBytes();
+      write.pixels.assign(texture.pixels.begin(), texture.pixels.end());
+      write.beforeBatch = static_cast<std::uint32_t>(m_frame.batches.size());
+      texture.changed = false;
+    }
+  }
+  while (!m_retirements.empty()) {
+    GuestWireWriter payload;
+    m_retirements.back().write(payload);
+    const std::uint64_t request =
+      m_services.enqueue(GuestService::ReleaseTexture, payload.take());
+    if (request == 0) {
+      break;
+    }
+    m_releases.push_back(request);
+    m_retirements.pop_back();
+  }
+  pumpMeshes();
+}
+
+void
+GuestRecordingBackend::pumpMeshes()
+{
+  ILLUMO_PROFILE_ZONE("RecordingBackend.pumpMeshes");
+  GuestServiceRecord result;
+  for (std::vector<std::uint64_t>::iterator it = m_drained.begin();
+       it != m_drained.end();) {
+    it = m_services.take(*it, result) ? m_drained.erase(it) : it + 1;
+  }
+  for (std::vector<std::uint64_t>::iterator it = m_abandonedMeshes.begin();
+       it != m_abandonedMeshes.end();) {
+    if (!m_services.take(*it, result)) {
+      ++it;
+      continue;
+    }
+    if (result.status == GuestServiceStatus::Complete) {
+      GuestWireReader reader(result.payload);
+      m_meshRetirements.push_back(GuestResourceId::read(reader));
+    }
+    it = m_abandonedMeshes.erase(it);
+  }
+  while (!m_meshRetirements.empty()) {
+    GuestWireWriter payload;
+    m_meshRetirements.back().write(payload);
+    const std::uint64_t request =
+      m_services.enqueue(GuestService::ReleaseMesh, payload.take());
+    if (request == 0) {
+      break;
+    }
+    m_drained.push_back(request);
+    m_meshRetirements.pop_back();
+  }
+  // Each pump keeps a bounded number of chunks in flight so retained uploads
+  // never starve fonts, textures or files sharing the service queue.
+  constexpr std::size_t maximumWrites = 8;
+  for (std::pair<const std::uint32_t, Mesh>& entry : m_meshes) {
+    Mesh& mesh = entry.second;
+    if (!mesh.retain || mesh.ready || mesh.failed) {
+      continue;
+    }
+    if (mesh.create != 0) {
+      if (!m_services.take(mesh.create, result)) {
+        continue;
+      }
+      mesh.create = 0;
+      GuestWireReader reader(result.payload);
+      const GuestResourceId id = GuestResourceId::read(reader);
+      if (result.status != GuestServiceStatus::Complete || !reader.finished() ||
+          id.owner == 0 || id.kind != GuestResourceKind::Mesh) {
+        mesh.failed = true;
+        continue;
+      }
+      mesh.id = id;
+      if (mesh.dynamic) {
+        // The host copy starts zero-filled: the next frame sends it all.
+        mesh.ready = true;
+        mesh.vertexDirtyBegin = 0;
+        mesh.vertexDirtyEnd = mesh.vertices.size();
+        mesh.indexDirtyBegin = 0;
+        mesh.indexDirtyEnd = mesh.indices.size();
+        continue;
+      }
+    } else if (mesh.id.owner == 0) {
+      GuestMeshRequest request;
+      request.style = retainedStyle(mesh.layout);
+      request.vertexBytes = static_cast<std::uint32_t>(mesh.vertices.size());
+      request.indexBytes = static_cast<std::uint32_t>(mesh.indices.size());
+      request.dynamic = mesh.dynamic;
+      GuestWireWriter payload;
+      request.write(payload);
+      mesh.create =
+        m_services.enqueue(GuestService::CreateMesh, payload.take());
+      continue;
+    }
+    for (std::vector<std::uint64_t>::iterator it = mesh.writes.begin();
+         it != mesh.writes.end();) {
+      if (!m_services.take(*it, result)) {
+        ++it;
+        continue;
+      }
+      mesh.failed =
+        mesh.failed || result.status != GuestServiceStatus::Complete;
+      it = mesh.writes.erase(it);
+    }
+    while (!mesh.failed && mesh.writes.size() < maximumWrites &&
+           (mesh.vertexSent < mesh.vertices.size() ||
+            mesh.indexSent < mesh.indices.size())) {
+      const bool indices = mesh.vertexSent == mesh.vertices.size();
+      const std::vector<std::byte>& source =
+        indices ? mesh.indices : mesh.vertices;
+      std::size_t& sent = indices ? mesh.indexSent : mesh.vertexSent;
+      GuestMeshWrite write;
+      write.mesh = mesh.id;
+      write.indices = indices;
+      write.offset = static_cast<std::uint32_t>(sent);
+      const std::size_t count = std::min<std::size_t>(
+        GuestMeshWrite::MaximumChunk, source.size() - sent);
+      write.bytes.assign(source.begin() + static_cast<std::ptrdiff_t>(sent),
+                         source.begin() +
+                           static_cast<std::ptrdiff_t>(sent + count));
+      GuestWireWriter payload;
+      write.write(payload);
+      const std::uint64_t request =
+        m_services.enqueue(GuestService::WriteMesh, payload.take());
+      if (request == 0) {
+        break;
+      }
+      mesh.writes.push_back(request);
+      sent += count;
+    }
+    if (mesh.failed) {
+      // Draw inline from now on; the host copy is released.
+      m_drained.insert(m_drained.end(), mesh.writes.begin(), mesh.writes.end());
+      mesh.writes.clear();
+      if (mesh.id.owner != 0) {
+        m_meshRetirements.push_back(mesh.id);
+        mesh.id = {};
+      }
+    } else if (mesh.writes.empty() && mesh.vertexSent == mesh.vertices.size() &&
+               mesh.indexSent == mesh.indices.size()) {
+      mesh.ready = true;
+    }
+  }
+}
+FramebufferHandle
+GuestRecordingBackend::CreateFramebuffer(const FramebufferDesc&,
+                                         FramebufferAttachments*)
+{
+  return {};
+}
+FramebufferHandle
+GuestRecordingBackend::CreateDepthFramebuffer(int width,
+                                              int height,
+                                              TextureHandle* depth)
+{
+  // One virtual shadow target: it records which meshes cast shadows and is
+  // never rendered. The host owns the real depth map.
+  if (m_shadowFramebuffer.isValid() || depth == nullptr || width <= 0 ||
+      height <= 0 || m_textures.size() >= 1024) {
+    return {};
+  }
+  const TextureHandle texture = m_textureHandles.allocate();
+  Texture target;
+  target.info = { width, height, 1 };
+  target.depthOnly = true;
+  m_textures.emplace(texture.slot, std::move(target));
+  m_shadowFramebuffer = m_framebufferHandles.allocate();
+  m_shadowDepth = texture;
+  *depth = texture;
+  return m_shadowFramebuffer;
+}
+bool
+GuestRecordingBackend::DestroyFramebuffer(FramebufferHandle handle)
+{
+  if (!IsFramebufferValid(handle)) {
+    return false;
+  }
+  m_textures.erase(m_shadowDepth.slot);
+  m_textureHandles.release(m_shadowDepth);
+  m_shadowDepth = {};
+  m_shadowFramebuffer = {};
+  return m_framebufferHandles.release(handle);
+}
+bool
+GuestRecordingBackend::IsFramebufferValid(FramebufferHandle handle) const
+{
+  return m_framebufferHandles.isCurrent(handle) &&
+         handle == m_shadowFramebuffer;
+}
+
+static float
+readFloat(const std::byte* bytes)
+{
+  float value = 0;
+  std::memcpy(&value, bytes, sizeof(value));
+  return value;
+}
+
+bool
+GuestRecordingBackend::draw(std::uint32_t first, std::uint32_t count)
+{
+  const bool lines = m_pipeline.primitives == Primitives::Lines;
+  if (!m_renderer || !IsMeshValid(m_mesh) ||
+      (!lines && m_pipeline.primitives != Primitives::Triangles) ||
+      count % (lines ? 2u : 3u) != 0 || m_pipeline.wireframe) {
+    return fail("Unsupported guest draw");
+  }
+  if (count == 0) {
+    return true;
+  }
+  GuestBatch batch;
+  bool styleFound = false;
+  // Derived styles (MeshVisual's depth-tested lines, triangles and world
+  // sprites) share a built-in shader; the host re-derives the pipeline from
+  // the recorded primitive, depth test and blend.
+  for (RenderStyleId style : { RenderStyleId::Shape,
+                               RenderStyleId::Sprite,
+                               RenderStyleId::Canvas,
+                               RenderStyleId::LitMesh,
+                               RenderStyleId::Skybox }) {
+    const RenderStyle* registered =
+      static_cast<const Renderer*>(m_renderer)->getStyle(style);
+    if (registered && registered->shaderHandle == m_shader) {
+      batch.style = style == RenderStyleId::Shape    ? GuestBatchStyle::Shape
+                    : style == RenderStyleId::Sprite ? GuestBatchStyle::Sprite
+                    : style == RenderStyleId::Canvas ? GuestBatchStyle::Canvas
+                    : style == RenderStyleId::Skybox ? GuestBatchStyle::Skybox
+                                                     : GuestBatchStyle::LitMesh;
+      styleFound = true;
+      break;
+    }
+  }
+  if (!styleFound) {
+    return fail("Shader has no guest recording contract");
+  }
+  if (lines && batch.style != GuestBatchStyle::Shape) {
+    return fail("Only shape batches may draw lines");
+  }
+  const bool lit = batch.style == GuestBatchStyle::LitMesh;
+  const bool sky = batch.style == GuestBatchStyle::Skybox;
+  if ((lit || sky) && m_layer != GuestLayer::World) {
+    return fail("Lit meshes and skyboxes draw only in the world");
+  }
+  if (m_surface >= 0 &&
+      (m_layer == GuestLayer::World || m_pipeline.depthTestEnabled)) {
+    return fail("Surfaces draw only flat UI");
+  }
+  batch.primitive = lines ? GuestPrimitive::Lines : GuestPrimitive::Triangles;
+  batch.depthTest = m_pipeline.depthTestEnabled;
+  batch.blend = m_pipeline.blendEnabled;
+  if (lit) {
+    batch.lighting = m_lighting;
+    batch.lighting.castsShadow = m_shadowMeshes.contains(m_mesh.slot);
+  } else if (batch.style != GuestBatchStyle::Shape) {
+    if (!IsTextureValid(m_texture) ||
+        m_textures.at(m_texture.slot).cubemap != sky) {
+      return fail("Guest draw references a stale texture");
+    }
+    batch.texture = m_textures.at(m_texture.slot).id;
+    if (batch.texture.owner == 0) {
+      return true;
+    } // acquisition is still pending
+    if (sky) {
+      batch.lighting.tint = m_lighting.tint;
+    }
+    if (batch.style == GuestBatchStyle::Canvas) {
+      batch.canvasFade = { m_canvasFade[0], m_canvasFade[1] };
+      batch.canvasLayout = m_canvasFade[2] != 0.0f ? 1u : 0u;
+    }
+  }
+  Mesh& mesh = m_meshes.at(m_mesh.slot);
+  const MeshVertexLayout expected =
+    batch.style == GuestBatchStyle::Shape    ? MeshVertexLayout::Pos3Color4U8
+    : batch.style == GuestBatchStyle::Sprite ? MeshVertexLayout::Pos3Color4U8Uv2
+    : lit ? MeshVertexLayout::Pos3Norm3Color4U8Uv2
+    : sky ? MeshVertexLayout::Pos3
+          : MeshVertexLayout::Pos3Color3Uv2;
+  if (mesh.layout != expected || first > mesh.indices.size() / 4 ||
+      count > mesh.indices.size() / 4 - first) {
+    return fail("Guest draw geometry mismatch");
+  }
+  batch.mvp = m_mvp;
+  batch.layer = m_layer;
+  batch.clipped = m_clip.enabled;
+  batch.clip = { static_cast<float>(m_clip.x),
+                 targetHeight() - m_clip.y - m_clip.height,
+                 static_cast<float>(m_clip.width),
+                 static_cast<float>(m_clip.height) };
+  if (mesh.retain && !mesh.failed && !mesh.ready && !mesh.dynamic &&
+      mesh.vertices.size() >= RetainedMeshBytes) {
+    return true; // a large static host copy is still uploading
+  }
+  if (mesh.retain && !mesh.failed && mesh.ready) {
+    batch.mesh = mesh.id;
+    batch.firstIndex = first;
+    batch.indexCount = count;
+    if (mesh.dynamic && !mesh.drawnThisFrame) {
+      mesh.drawnThisFrame = true;
+      m_drawnDynamic.push_back(m_mesh.slot);
+    }
+    targetBatches().push_back(std::move(batch));
+    return true;
+  }
+  // Dynamic and small static meshes draw inline until their host copy exists.
+  if (!extractInline(mesh, batch, first, count)) {
+    return false;
+  }
+  targetBatches().push_back(std::move(batch));
+  return true;
+}
+
+bool
+GuestRecordingBackend::extractInline(const Mesh& mesh,
+                                     GuestBatch& batch,
+                                     std::uint32_t first,
+                                     std::uint32_t count)
+{
+  const bool lit = batch.style == GuestBatchStyle::LitMesh;
+  const bool sky = batch.style == GuestBatchStyle::Skybox;
+  const std::size_t stride = batch.style == GuestBatchStyle::Shape    ? 16
+                             : batch.style == GuestBatchStyle::Sprite ? 24
+                             : lit                                    ? 36
+                             : sky                                    ? 12
+                                                                      : 32;
+  batch.indices.resize(count);
+  std::memcpy(batch.indices.data(),
+              mesh.indices.data() + static_cast<std::size_t>(first) * 4,
+              static_cast<std::size_t>(count) * 4);
+  const std::uint32_t minimum =
+    *std::min_element(batch.indices.begin(), batch.indices.end());
+  const std::uint32_t maximum =
+    *std::max_element(batch.indices.begin(), batch.indices.end());
+  if (maximum >= mesh.vertices.size() / stride) {
+    return fail("Guest draw index outside mesh");
+  }
+  for (std::uint32_t& index : batch.indices) {
+    index -= minimum;
+  }
+  batch.vertices.clear();
+  batch.vertices.reserve(static_cast<std::size_t>(maximum) - minimum + 1);
+  for (std::size_t index = minimum; index <= maximum; ++index) {
+    const std::byte* source = mesh.vertices.data() + index * stride;
+    GuestVertex vertex;
+    for (std::size_t component = 0; component < 3; ++component) {
+      vertex.position[component] = readFloat(source + component * 4);
+    }
+    if (batch.style == GuestBatchStyle::Canvas) {
+      vertex.rgba = 0xff000000;
+      for (unsigned int component = 0; component < 3; ++component) {
+        const float color = readFloat(source + 12 + component * 4);
+        if (!std::isfinite(color)) {
+          return fail("Non-finite guest color");
+        }
+        vertex.rgba |= static_cast<std::uint32_t>(
+                         std::round(std::clamp(color, 0.0f, 1.0f) * 255))
+                       << (component * 8);
+      }
+    } else if (lit) {
+      for (std::size_t component = 0; component < 3; ++component) {
+        vertex.normal[component] = readFloat(source + 12 + component * 4);
+      }
+      std::memcpy(&vertex.rgba, source + 24, 4);
+    } else if (!sky) {
+      std::memcpy(&vertex.rgba, source + 12, 4);
+    }
+    if (batch.style != GuestBatchStyle::Shape && !sky) {
+      vertex.uv = { readFloat(source + stride - 8),
+                    readFloat(source + stride - 4) };
+    }
+    for (float value : vertex.position) {
+      if (!std::isfinite(value)) {
+        return fail("Non-finite guest vertex");
+      }
+    }
+    batch.vertices.push_back(vertex);
+  }
+  return true;
+}
+
+bool
+GuestRecordingBackend::consume(const RenderCommand& command)
+{
+  switch (command.commandType) {
+    case CommandType::SetMesh:
+      m_mesh = command.bindMesh.handle;
+      break;
+    case CommandType::SetShader:
+      m_shader = command.bindShader.handle;
+      break;
+    case CommandType::SetTexture:
+      // Unit 1 is the shared shadow map; the host binds its own.
+      if (command.bindTexture.slot == 1 &&
+          command.bindTexture.handle == m_shadowDepth) {
+        break;
+      }
+      if (command.bindTexture.slot != 0) {
+        return fail("Unsupported guest texture unit");
+      }
+      m_texture = command.bindTexture.handle;
+      break;
+    case CommandType::SetPipelineState:
+      m_pipeline = command.pipelineState;
+      break;
+    case CommandType::SetScissorState:
+      m_clip = command.scissor;
+      break;
+    case CommandType::SetUniformMat4: {
+      const char* name = command.uniformMat4.name;
+      if (command.uniformMat4.value == nullptr) {
+        return fail("Missing guest matrix uniform");
+      }
+      if (std::strcmp(name, "uMVP") == 0 ||
+          std::strcmp(name, "uViewProjection") == 0) {
+        // uViewProjection is the skybox's rotation-only view projection.
+        std::copy_n(command.uniformMat4.value, 16, m_mvp.begin());
+      } else if (std::strcmp(name, "uModel") == 0) {
+        std::copy_n(command.uniformMat4.value, 16, m_lighting.model.begin());
+      } else if (std::strcmp(name, "uLightSpaceMatrix") != 0 &&
+                 std::strcmp(name, "uPrevMVP") != 0) {
+        // Light space comes from the host pass; motion blur is host policy.
+        return fail("Unsupported guest matrix uniform");
+      }
+      break;
+    }
+    case CommandType::SetUniformVec3: {
+      const CmdUniformVec3& value = command.uniformVec3;
+      const std::array<float, 3> vector{ value.x, value.y, value.z };
+      if (std::strcmp(value.name, "uLightDir") == 0) {
+        m_lighting.lightDirection = vector;
+      } else if (std::strcmp(value.name, "uLightColor") == 0) {
+        m_lighting.lightColor = vector;
+      } else if (std::strcmp(value.name, "uAmbientColor") == 0) {
+        m_lighting.ambientColor = vector;
+      } else if (std::strcmp(value.name, "uCanvasFade") == 0) {
+        if (!(value.x >= 0.0f &&
+              value.x <= GuestFrame::MaximumCanvasFadeClock &&
+              value.y >= 0.0f &&
+              value.y <= GuestFrame::MaximumCanvasFadeSpeed)) {
+          return fail("Invalid guest canvas fade");
+        }
+        m_canvasFade = vector;
+      } else {
+        return fail("Unsupported guest vector uniform");
+      }
+      break;
+    }
+    case CommandType::SetUniformVec4:
+      if (std::strcmp(command.uniformVec4.name, "uTint") != 0) {
+        return fail("Unsupported guest vector uniform");
+      }
+      m_lighting.tint = { command.uniformVec4.x,
+                          command.uniformVec4.y,
+                          command.uniformVec4.z,
+                          command.uniformVec4.w };
+      break;
+    case CommandType::SetUniformFloat: {
+      const CmdUniformFloat& value = command.uniformFloat;
+      if (std::strcmp(value.name, "uShadowBias") == 0) {
+        m_lighting.shadowBias = value.value;
+      } else if (std::strcmp(value.name, "uShadowSlopeScale") == 0) {
+        m_lighting.shadowSlopeScale = value.value;
+      } else if (std::strcmp(value.name, "uShadowNormalOffset") == 0) {
+        m_lighting.shadowNormalOffset = value.value;
+      } else if (std::strcmp(value.name, "uMotionBlurAmount") != 0 &&
+                 std::strcmp(value.name, "uMotionBlurMax") != 0) {
+        return fail("Unsupported guest float uniform");
+      }
+      break;
+    }
+    case CommandType::UpdateBuffer:
+    case CommandType::UpdateIndexBuffer: {
+      const bool indices =
+        command.commandType == CommandType::UpdateIndexBuffer;
+      const MeshHandle handle = indices ? command.updateIndexBuffer.handle
+                                        : command.updateBuffer.handle;
+      const std::size_t offset = indices ? command.updateIndexBuffer.offsetBytes
+                                         : command.updateBuffer.offsetBytes;
+      const std::size_t size = indices ? command.updateIndexBuffer.sizeBytes
+                                       : command.updateBuffer.sizeBytes;
+      const void* data =
+        indices ? command.updateIndexBuffer.data : command.updateBuffer.data;
+      if (!IsMeshValid(handle)) {
+        return fail("Stale guest mesh update");
+      }
+      Mesh& mesh = m_meshes.at(handle.slot);
+      std::vector<std::byte>& buffer = indices ? mesh.indices : mesh.vertices;
+      if (offset > buffer.size() || size > buffer.size() - offset ||
+          (size != 0 && data == nullptr)) {
+        return fail("Invalid guest buffer update");
+      }
+      if (mesh.dynamic && mesh.retain) {
+        // Producers often re-upload a whole buffer for a small change; only
+        // the span that actually differs becomes dirty.
+        const std::byte* incoming = static_cast<const std::byte*>(data);
+        std::size_t first = 0;
+        while (first < size && buffer[offset + first] == incoming[first]) {
+          ++first;
+        }
+        if (first == size) {
+          break; // identical bytes: nothing to record or copy
+        }
+        std::size_t last = size;
+        while (last > first &&
+               buffer[offset + last - 1] == incoming[last - 1]) {
+          --last;
+        }
+        if (mesh.drawnThisFrame) {
+          // Changed again after a by-reference draw this frame; one frame's
+          // mesh writes cannot order between draws.
+          demoteDynamic(mesh);
+        } else if (indices) {
+          markDirty(mesh.indexDirtyBegin,
+                    mesh.indexDirtyEnd,
+                    offset + first,
+                    last - first);
+        } else {
+          markDirty(mesh.vertexDirtyBegin,
+                    mesh.vertexDirtyEnd,
+                    offset + first,
+                    last - first);
+        }
+      } else {
+        // A mesh that changes is not static after all: draw it inline.
+        forgetRetained(mesh);
+      }
+      if (size != 0) {
+        std::memcpy(buffer.data() + offset, data, size);
+      }
+      break;
+    }
+    case CommandType::UpdateTexture: {
+      const CmdUpdateTexture& write = command.updateTexture;
+      if (!IsTextureValid(write.handle) ||
+          m_textures.at(write.handle.slot).cubemap) {
+        return fail("Stale guest texture update");
+      }
+      Texture& texture = m_textures.at(write.handle.slot);
+      const TextureInfo& info =
+        texture.replacing() ? texture.pendingInfo : texture.info;
+      std::vector<std::byte>& pixels =
+        texture.replacing() ? texture.pendingPixels : texture.pixels;
+      const int channels = write.channels == 0 ? info.channels : write.channels;
+      const int stride =
+        write.srcRowStride == 0 ? write.width : write.srcRowStride;
+      if (write.x < 0 || write.y < 0 || write.width <= 0 || write.height <= 0 ||
+          write.x > info.width || write.y > info.height ||
+          write.width > info.width - write.x ||
+          write.height > info.height - write.y || channels != info.channels ||
+          stride < write.width || write.data == nullptr) {
+        return fail("Invalid guest texture write");
+      }
+      GuestTextureWrite copied{ texture.id,
+                                static_cast<std::uint32_t>(write.x),
+                                static_cast<std::uint32_t>(write.y),
+                                static_cast<std::uint32_t>(write.width),
+                                static_cast<std::uint32_t>(write.height),
+                                static_cast<std::uint32_t>(channels),
+                                {} };
+      const std::size_t rowBytes =
+        static_cast<std::size_t>(write.width) * channels;
+      copied.pixels = takeSpareBytes();
+      copied.pixels.resize(rowBytes * write.height);
+      for (int row = 0; row < write.height; ++row) {
+        const std::byte* source =
+          static_cast<const std::byte*>(write.data) +
+          static_cast<std::size_t>(row) * stride * channels;
+        std::memcpy(copied.pixels.data() +
+                      static_cast<std::size_t>(row) * rowBytes,
+                    source,
+                    rowBytes);
+        std::memcpy(
+          pixels.data() +
+            (static_cast<std::size_t>(write.y + row) * info.width + write.x) *
+              channels,
+          source,
+          rowBytes);
+      }
+      if (texture.id.owner != 0 && !texture.replacing()) {
+        copied.beforeBatch = static_cast<std::uint32_t>(m_frame.batches.size());
+        m_frame.textureWrites.push_back(std::move(copied));
+        m_writtenTextures.push_back(write.handle.slot);
+      } else {
+        texture.changed = true;
+      }
+      break;
+    }
+    case CommandType::DrawIndexed:
+      if (m_shadowPass) {
+        // Shadow depth draws only identify casters; nothing is recorded.
+        if (IsMeshValid(m_mesh)) {
+          m_shadowMeshes.insert(m_mesh.slot);
+        }
+        break;
+      }
+      return draw(command.drawIndexed.firstIndex,
+                  command.drawIndexed.elementCount);
+    case CommandType::SetFramebuffer:
+      if (command.bindFramebuffer.handle.isValid()) {
+        if (command.bindFramebuffer.handle != m_shadowFramebuffer) {
+          return fail(
+            "Offscreen guest rendering requires an instance contract");
+        }
+        m_shadowPass = true;
+      } else {
+        m_shadowPass = false;
+      }
+      break;
+    case CommandType::SetViewport:
+      if (!m_shadowPass &&
+          (command.viewport.x != 0 || command.viewport.y != 0 ||
+           command.viewport.width != targetWidth() ||
+           command.viewport.height != targetHeight())) {
+        return fail("Unsupported guest viewport");
+      }
+      break;
+    case CommandType::SetUniformInt: {
+      const CmdUniformInt& value = command.uniformInt;
+      if (std::strcmp(value.name, "uShadowsEnabled") == 0) {
+        m_lighting.receivesShadow = value.value != 0;
+      } else if (std::strcmp(value.name, "uShadowPcf") == 0) {
+        m_lighting.shadowPcf = value.value != 0;
+      } else if (std::strcmp(value.name, "uShadowMap") == 0) {
+        if (value.value != 1) {
+          return fail("Unsupported guest shadow map unit");
+        }
+      } else if (std::strcmp(value.name, "uMotionBlurEnabled") != 0 &&
+                 ((std::strcmp(value.name, "uTexture") != 0 &&
+                   std::strcmp(value.name, "uSkybox") != 0) ||
+                  value.value != 0)) {
+        return fail("Unsupported guest integer uniform");
+      }
+      break;
+    }
+    case CommandType::SetUniformVec2:
+      if (std::strcmp(command.uniformVec2.name, "u_resolution") != 0) {
+        return fail("Unsupported guest vector uniform");
+      }
+      break;
+    case CommandType::ClearScreen:
+    case CommandType::ClearDepthBuffer:
+    case CommandType::ClearColorBuffer:
+    case CommandType::ClearStencilBuffer:
+    case CommandType::ClearAll:
+      if (!m_shadowPass && !targetBatches().empty()) {
+        return fail("Mid-frame clears require a render-pass contract");
+      }
+      break;
+    default:
+      return fail("Unsupported guest recording token");
+  }
+  return true;
+}

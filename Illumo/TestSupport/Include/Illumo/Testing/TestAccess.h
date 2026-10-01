@@ -6,6 +6,10 @@
 class InputManagerTestAccess
 {
 public:
+  static void setNextContextId(InputManager& input, long value)
+  {
+    input.nextContextId = value;
+  }
   static void setAction(InputManager& input, KeyCode key, InputAction action)
   {
     input.inputStatesCurrent[key] = action;

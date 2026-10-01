@@ -3,13 +3,20 @@
 #include <Illumo/Testing/TestRegistry.h>
 #include <cctype>
 #include <cstdio>
-#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <string>
 
 void
-registerIlscCodecTests(IllumoTestRegistry& registry);
+registerEditorHistoryTests(IllumoTestRegistry& registry);
+void
+registerEditorClipboardTests(IllumoTestRegistry& registry);
+void
+registerEditorAssetsTests(IllumoTestRegistry& registry);
+void
+registerEditorGizmoTests(IllumoTestRegistry& registry);
+void
+registerEditorInspectorTests(IllumoTestRegistry& registry);
 void
 registerEditorDocumentTests(IllumoTestRegistry& registry);
 void
@@ -17,26 +24,33 @@ registerIllEdConfigTests(IllumoTestRegistry& registry);
 void
 registerEditorToolbarTests(IllumoTestRegistry& registry);
 void
-registerEditorSidebarTests(IllumoTestRegistry& registry);
+registerEditorToolsPanelTests(IllumoTestRegistry& registry);
 void
 registerEditorSceneGraphViewTests(IllumoTestRegistry& registry);
 void
 registerEditorUiAtlasTests(IllumoTestRegistry& registry);
 void
-registerEditorModuleTests(IllumoTestRegistry& registry);
+registerEditorSceneTests(IllumoTestRegistry& registry);
+void
+registerEditorPanelsTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
 {
   IllumoTestRegistry registry;
-  registerIlscCodecTests(registry);
+  registerEditorHistoryTests(registry);
+  registerEditorClipboardTests(registry);
+  registerEditorAssetsTests(registry);
+  registerEditorGizmoTests(registry);
+  registerEditorInspectorTests(registry);
   registerEditorDocumentTests(registry);
   registerIllEdConfigTests(registry);
   registerEditorToolbarTests(registry);
-  registerEditorSidebarTests(registry);
+  registerEditorToolsPanelTests(registry);
   registerEditorSceneGraphViewTests(registry);
   registerEditorUiAtlasTests(registry);
-  registerEditorModuleTests(registry);
+  registerEditorSceneTests(registry);
+  registerEditorPanelsTests(registry);
   return registry;
 }
 
@@ -45,20 +59,12 @@ runTestCase(const IllumoTestCase& testCase)
 {
   std::printf("\n======== %s ========\n", testCase.name.c_str());
 
-  try {
-    const int failures = testCase.function();
-    std::printf("======== %s: %s (%d failure(s)) ========\n",
-                testCase.name.c_str(),
-                failures == 0 ? "PASSED" : "FAILED",
-                failures);
-    return failures == 0 ? 0 : 1;
-  } catch (const std::exception& exception) {
-    std::printf("FAIL: unhandled exception: %s\n", exception.what());
-  } catch (...) {
-    std::printf("FAIL: unhandled non-standard exception\n");
-  }
-
-  return 1;
+  const int failures = testCase.function();
+  std::printf("======== %s: %s (%d failure(s)) ========\n",
+              testCase.name.c_str(),
+              failures == 0 ? "PASSED" : "FAILED",
+              failures);
+  return failures == 0 ? 0 : 1;
 }
 
 static int

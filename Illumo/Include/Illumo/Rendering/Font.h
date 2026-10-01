@@ -3,6 +3,7 @@
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -42,6 +43,18 @@ struct TextBounds
   float minY = 0.0f;
 };
 
+// How loadFile samples a face. A variable face is instanced at `weight` on its
+// 'wght' axis (clamped to the axis; 0 keeps the default instance, and static
+// faces ignore it). Codepoints the face lacks are rasterized from
+// `fallbackPath` when given. `glyphs` restricts the atlas to those printable
+// ASCII characters plus space and '?'; empty rasterizes all of 32..126.
+struct FontFaceOptions
+{
+  float weight = 0.0f;
+  std::string fallbackPath;
+  std::string glyphs;
+};
+
 // TrueType/OpenType font rasterizer and atlas holder backed by FreeType 2.
 class Font : public std::enable_shared_from_this<Font>
 {
@@ -65,10 +78,15 @@ public:
     float pixelSize = kDefaultPixelSize);
 
   static std::shared_ptr<Font> getDefaultFont();
+  static std::shared_ptr<Font> createFallback(
+    float pixelSize = kDefaultPixelSize);
   static void setDefaultFont(std::shared_ptr<Font> font);
   static void clearCache();
 
   bool loadFile(const std::string& path, float pixelSize = kDefaultPixelSize);
+  bool loadFile(const std::string& path,
+                float pixelSize,
+                const FontFaceOptions& options);
   bool loadMemory(const unsigned char* data,
                   size_t size,
                   float pixelSize = kDefaultPixelSize);
@@ -86,6 +104,9 @@ public:
   float getDescender(float sizePt) const;
 
   TextureHandle getTextureHandle(Renderer* renderer);
+  // Uses `handle`, owned by the caller, as this font's atlas on `renderer`
+  // instead of enrolling one from the atlas pixels.
+  void adoptTextureHandle(Renderer* renderer, TextureHandle handle);
   const std::vector<unsigned char>& getAtlasPixels() const
   {
     return atlasPixels;
@@ -96,6 +117,7 @@ public:
   const std::string& getPath() const { return sourcePath; }
 
 private:
+  friend class GuestFontProvider;
   std::string sourcePath;
   FontMetrics metrics;
   std::unordered_map<char32_t, GlyphInfo> glyphs;
@@ -104,9 +126,16 @@ private:
   int atlasHeight = 0;
   bool valid = false;
 
-  Renderer* enrolledRenderer = nullptr;
+  std::map<std::weak_ptr<const void>,
+           TextureHandle,
+           std::owner_less<std::weak_ptr<const void>>>
+    rendererTextures;
+  std::weak_ptr<const void> lastRendererLifetime;
   TextureHandle textureHandle{};
 
   void buildFallbackAtlas(float pixelSize);
-  bool rasterizeFace(void* ftFace, float pixelSize);
+  bool rasterizeFace(void* ftFace,
+                     void* ftFallbackFace,
+                     float pixelSize,
+                     const std::string& glyphSet);
 };

@@ -6,25 +6,35 @@ This file specializes the repository `AGENTS.md` for
 ## Scope and boundaries
 
 Services provides input collection, console editing and command dispatch,
-logging, environment persistence, command-line parsing, allocator utilities,
-and the platform save/load declarations. Services must remain reusable by
+logging, environment persistence, command-line parsing, and allocator utilities. Services must remain reusable by
 Engine and modules without depending on Game, Rulesets, or concrete OpenGL.
 
 - General console commands belong in `CommandLine`; domain commands are
   registered by their owning module through `CommandRegistry`.
-- Native dialogs and filesystem UI belong in `Platform/`; Services owns only
-  the cross-platform declaration and orchestration contract.
+- Native dialogs, filesystem UI, and the public `SaveLoad` contract belong in
+  `Platform/`; product modules own persistence orchestration.
 - Use backend-neutral Rendering types for console drawables.
 
 ## Ownership, lifetime, and concurrency
 
-- Service objects are Engine-owned. Logger sinks, command callbacks, input
+- `WorkerPool` is an owner-controlled generic range dispatcher. Start/stop,
+  submission, and join run on one owner thread; callbacks operate on disjoint
+  caller-owned ranges, do not recursively submit, and their context
+  outlives join. Stop drains work and joins every worker. Keep CA-specific
+  worker policy in IllumoGame; do not import its grid into Services.
+- Long-lived application service objects are Engine-owned. Logger sinks, command callbacks, input
   contexts, and non-owning pointers must be detached before their targets die.
 - Input callbacks enqueue events; consumers drain them on the main thread.
+  Overlay keyboard capture must cover both queued events and polling:
+  `suppressKeyForFrame` masks keyboard queries and bound actions until the next
+  input update without synthesizing releases. Consumers still own queue draining.
   Bound or deliberately coalesce queues so a build without a consumer cannot
   grow memory indefinitely.
 - Validate context identifiers before indexing. Registration failure must be
   observable and must not become an out-of-bounds active context.
+  Input IDs are manager-local and never reused; modules retire registrations on
+  exit. Invalid activation preserves selection; retiring the active context
+  selects neutral input. Exhausted startup must not allocate domain state.
 - Command queuing and execution are main-thread operations. If callbacks may
   queue more commands, execution must not invalidate the container currently
   being iterated.
@@ -42,12 +52,16 @@ Engine and modules without depending on Game, Rulesets, or concrete OpenGL.
 - `envvars.json` lives beside the executable. A malformed or unreadable file
   must not be silently replaced during teardown unless recovery is an explicit
   user action.
-- Logging and diagnostics must not throw through shutdown paths. Report I/O,
+- Logging and diagnostics must not fail shutdown paths. Report I/O,
   parse, queue overflow, and registration failures at the boundary that can
   act on them.
 - Console token payload storage must remain valid through renderer submission.
   Keep the existing token-rendered console; do not introduce an independent
-  retained widget hierarchy.
+  retained widget hierarchy. The console keeps its own plain palette rather
+  than `UiTheme`/`GuiKit` styling (D-UI4).
+- WASM guests compile `CommandLine`/`CommandLineCore`. Reach the clipboard and
+  files only through the `CommandLineCore` hooks and keep those paths behind
+  `ILLUMO_SERIAL_GUEST` guards.
 - Cached console wrap results must stay equivalent to direct wrapping of the
   same history at the same width. Settled composition cache must not skip a
   frame that changed history, scroll, input, or settled layout.

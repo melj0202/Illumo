@@ -1,6 +1,7 @@
 #include "CellContext.h"
-#include "Rulesets/AllSets.h"
 #include "Rulesets/RuleSet.h"
+#include "Rulesets/RuleSetRegistry.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -9,6 +10,18 @@
 #include <Illumo/Services/Logger.h>
 #include <cctype>
 #include <new>
+#include <string>
+
+// "an infinite world" or "a 8 x 8 chunk torus", for diagnostics.
+static std::string
+describeTopology(std::int64_t worldChunkWidth, std::int64_t worldChunkHeight)
+{
+  if (worldChunkWidth <= 0 || worldChunkHeight <= 0) {
+    return "an infinite world";
+  }
+  return "a " + std::to_string(worldChunkWidth) + " x " +
+         std::to_string(worldChunkHeight) + " chunk torus";
+}
 
 CellContext::CellContext(std::string modeString,
                          IEnvVars* envVars,
@@ -48,14 +61,15 @@ CellContext::CellContext(std::string modeString,
   }
   grid = new SparseCellGrid(worldChunkWidth, worldChunkHeight);
   spareGrid = new SparseCellGrid(worldChunkWidth, worldChunkHeight);
-  canvasView = new CanvasView(static_cast<int>(cx),
-                              static_cast<int>(cy),
-                              grid,
-                              window,
-                              camera,
-                              renderer);
+  canvasView = new CanvasView(
+    static_cast<int>(cx), static_cast<int>(cy), grid, window, camera, renderer);
   ruleSet = nullptr;
-  ModeString = "";
+  FamilyString = "";
+  RuleSetString = "";
+  Logger::LogTrace("Cell world created: " +
+                   describeTopology(worldChunkWidth, worldChunkHeight) + ", " +
+                   std::to_string(cx) + " x " + std::to_string(cy) +
+                   " cell view");
   setRuleSet(modeString);
 }
 
@@ -70,35 +84,43 @@ CellContext::~CellContext()
 std::string
 CellContext::NormalizeModeString(std::string modeString)
 {
-  for (size_t i = 0; i < modeString.size(); ++i) {
-    modeString[i] = static_cast<char>(
-      std::toupper(static_cast<unsigned char>(modeString[i])));
-  }
-  return modeString;
+  return RuleSetRegistry::normalizeId(std::move(modeString));
 }
 
 bool
 CellContext::IsKnownModeString(const std::string& modeString)
 {
-  return modeString == "GAME_OF_LIFE" || modeString == "BRIANS_BRAIN" ||
-         modeString == "DAY_AND_NIGHT" || modeString == "HIGHLIFE" ||
-         modeString == "LIFE_WITHOUT_DEATH" || modeString == "SEEDS" ||
-         modeString == "WIREWORLD" || modeString == "RULE_90" ||
-         modeString == "RULE_184";
+  return RuleSetRegistry::instance().isKnownRule(modeString);
 }
 
 std::vector<std::string>
 CellContext::GetKnownModeStrings()
 {
-  return { "GAME_OF_LIFE",
-           "BRIANS_BRAIN",
-           "DAY_AND_NIGHT",
-           "HIGHLIFE",
-           "LIFE_WITHOUT_DEATH",
-           "SEEDS",
-           "WIREWORLD",
-           "RULE_90",
-           "RULE_184" };
+  return RuleSetRegistry::instance().getKnownRules();
+}
+
+std::string
+CellContext::NormalizeFamilyString(std::string familyString)
+{
+  return RuleSetRegistry::normalizeId(std::move(familyString));
+}
+
+bool
+CellContext::IsKnownFamilyString(const std::string& familyString)
+{
+  return RuleSetRegistry::instance().isKnownFamily(familyString);
+}
+
+std::vector<std::string>
+CellContext::GetKnownFamilyStrings()
+{
+  return RuleSetRegistry::instance().getKnownFamilies();
+}
+
+std::vector<std::string>
+CellContext::GetKnownRuleStrings(const std::string& familyString)
+{
+  return RuleSetRegistry::instance().getKnownRules(familyString);
 }
 
 bool
@@ -109,42 +131,78 @@ CellContext::setRuleSet(std::string modeString)
     modeString = "GAME_OF_LIFE";
   }
 
-  // Avoid thrashing if console/env re-asserts the same mode.
-  if (ruleSet != nullptr && modeString == ModeString) {
+  const RuleSetDefinition* definition =
+    RuleSetRegistry::instance().getRuleSetDefinition(modeString);
+  if (definition == nullptr) {
+    Logger::LogError("Invalid rule set name: " + modeString);
+    modeString = "GAME_OF_LIFE";
+    definition = RuleSetRegistry::instance().getRuleSetDefinition(modeString);
+  }
+  if (definition == nullptr) {
+    return false;
+  }
+  return setRuleSet(definition->familyId, modeString);
+}
+
+bool
+CellContext::setRuleSet(std::string familyString, std::string ruleSetString)
+{
+  return setRuleSetInternal(
+    std::move(familyString), std::move(ruleSetString), false);
+}
+
+bool
+CellContext::refreshRuleSet()
+{
+  if (FamilyString.empty() || RuleSetString.empty()) {
+    return false;
+  }
+  return setRuleSetInternal(FamilyString, RuleSetString, true);
+}
+
+bool
+CellContext::setRuleSetInternal(std::string familyString,
+                                std::string ruleSetString,
+                                bool forceRefresh)
+{
+  familyString = NormalizeFamilyString(std::move(familyString));
+  ruleSetString = NormalizeModeString(std::move(ruleSetString));
+  const RuleSetDefinition* definition =
+    RuleSetRegistry::instance().getRuleSetDefinition(ruleSetString);
+  if (familyString.empty() || ruleSetString.empty() || definition == nullptr ||
+      definition->familyId != familyString) {
+    Logger::LogError("The selected ruleset does not belong to that family");
+    return false;
+  }
+
+  // Avoid thrashing if settings reassert the same validated pair.
+  if (!forceRefresh && ruleSet != nullptr && ruleSetString == RuleSetString &&
+      familyString == FamilyString) {
+    return false;
+  }
+
+  ILLUMO_PROFILE_ZONE("CellContext.compileRuleSet");
+  std::unique_ptr<RuleSet> newRuleSet =
+    RuleSetRegistry::instance().createRuleSet(ruleSetString);
+  if (!newRuleSet) {
+    Logger::LogError("Failed to compile ruleset: " + ruleSetString);
     return false;
   }
 
   delete ruleSet;
-  ruleSet = nullptr;
+  ruleSet = newRuleSet.release();
+  ruleSetRevision += 1;
 
-  if (modeString == "GAME_OF_LIFE") {
-    ruleSet = new GameOfLifeRuleSet(nullptr);
-  } else if (modeString == "BRIANS_BRAIN") {
-    ruleSet = new BriansBrainRuleSet(nullptr);
-  } else if (modeString == "DAY_AND_NIGHT") {
-    ruleSet = new DayAndNightRuleSet(nullptr);
-  } else if (modeString == "HIGHLIFE") {
-    ruleSet = new HighlifeRuleSet(nullptr);
-  } else if (modeString == "LIFE_WITHOUT_DEATH") {
-    ruleSet = new LifeWithoutDeathRuleSet(nullptr);
-  } else if (modeString == "SEEDS") {
-    ruleSet = new SeedsRuleSet(nullptr);
-  } else if (modeString == "WIREWORLD") {
-    ruleSet = new WireworldRuleSet(nullptr);
-  } else if (modeString == "RULE_90") {
-    ruleSet = new Rule90RuleSet(nullptr);
-  } else if (modeString == "RULE_184") {
-    ruleSet = new Rule184RuleSet(nullptr);
-  } else {
-    Logger::LogError("Invalid rule set name: " + modeString);
-    ruleSet = new GameOfLifeRuleSet(nullptr);
-    modeString = "GAME_OF_LIFE";
-  }
-
-  ModeString = modeString;
+  FamilyString = familyString;
+  RuleSetString = ruleSetString;
   if (envVars) {
-    envVars->setVar("ModeString", ModeString);
+    envVars->setVar("FamilyString", FamilyString);
+    envVars->setVar("RuleSetString", RuleSetString);
+    envVars->setVar("ModeString", RuleSetString);
   }
+  Logger::LogTrace(
+    std::string(forceRefresh ? "Ruleset recompiled: " : "Ruleset compiled: ") +
+    RuleSetString + " (family " + FamilyString + ")");
   return true;
 }
 
@@ -164,7 +222,11 @@ bool
 CellContext::resetWorld(std::int64_t worldChunkWidth,
                         std::int64_t worldChunkHeight)
 {
+  ILLUMO_PROFILE_ZONE("CellContext.resetWorld");
   if (!SparseCellGrid::isValidTopology(worldChunkWidth, worldChunkHeight)) {
+    Logger::LogWarning("Rejected invalid world topology " +
+                       std::to_string(worldChunkWidth) + " x " +
+                       std::to_string(worldChunkHeight) + " chunks");
     return false;
   }
   SparseCellGrid* replacement =
@@ -174,6 +236,9 @@ CellContext::resetWorld(std::int64_t worldChunkWidth,
   if (replacement == nullptr || replacementSpare == nullptr) {
     delete replacement;
     delete replacementSpare;
+    Logger::LogError("Unable to allocate " +
+                     describeTopology(worldChunkWidth, worldChunkHeight) +
+                     "; the current world is kept");
     return false;
   }
 
@@ -194,12 +259,18 @@ CellContext::resetWorld(std::int64_t worldChunkWidth,
     envVars->setVar("WorldChunksX", static_cast<long>(worldChunkWidth));
     envVars->setVar("WorldChunksY", static_cast<long>(worldChunkHeight));
   }
+  Logger::LogTrace("World reset to " +
+                   describeTopology(worldChunkWidth, worldChunkHeight));
   return true;
 }
 
 void
 CellContext::publishSpareGrid(const SparseGenerationDelta& delta)
 {
+  ILLUMO_PROFILE_ZONE("CellContext.publishSpareGrid");
+  ILLUMO_PROFILE_PLOT("Sim.publishedDeltaChunks", delta.changedChunks.size());
+  ILLUMO_PROFILE_PLOT("Sim.publishedFullReplacement",
+                      delta.fullReplacement ? 1 : 0);
   SparseCellGrid* previous = grid;
   grid = spareGrid;
   spareGrid = previous;

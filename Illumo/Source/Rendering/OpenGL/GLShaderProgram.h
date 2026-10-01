@@ -1,12 +1,16 @@
 #pragma once
 #include <GL/glew.h> // Or your preferred OpenGL loader header
+#include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Services/Logger.h>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 class GLShaderProgram : public IShaderProgram
@@ -30,11 +34,31 @@ public:
     // Do nothing. asset destruction should be explicit
   }
 
-  unsigned long GetID() const override { return _programID; }
+  unsigned long GetID() const { return _programID; }
   bool isValid() const override { return _valid && _programID != 0; }
+
+  GLint GetUniformLocation(const char* name)
+  {
+    if (!isValid() || name == nullptr) {
+      return -1;
+    }
+    const std::string_view nameView(name);
+    std::unordered_map<std::string,
+                       GLint,
+                       TransparentStringHash,
+                       std::equal_to<>>::const_iterator it =
+      _uniformLocations.find(nameView);
+    if (it != _uniformLocations.end()) {
+      return it->second;
+    }
+    const GLint location = glGetUniformLocation(_programID, name);
+    _uniformLocations.emplace(nameView, location);
+    return location;
+  }
 
   void Destroy() override
   {
+    _uniformLocations.clear();
     if (_programID != 0) {
       glDeleteProgram(_programID);
       _programID = 0;
@@ -43,7 +67,22 @@ public:
   }
 
 private:
+  unsigned int _programID;
+  unsigned int _vertexShadeID;
+  unsigned int _fragmentShaderID;
+  struct TransparentStringHash
+  {
+    using is_transparent = void;
+
+    size_t operator()(std::string_view value) const noexcept
+    {
+      return std::hash<std::string_view>{}(value);
+    }
+  };
+
   bool _valid = false;
+  std::unordered_map<std::string, GLint, TransparentStringHash, std::equal_to<>>
+    _uniformLocations;
 
   void CompileAndLink(const ShaderSources& sources) override
   {
@@ -137,15 +176,26 @@ private:
     if (linked == GL_FALSE) {
       int length = 0;
       glGetProgramiv(_programID, GL_INFO_LOG_LENGTH, &length);
-      std::vector<char> message(length);
-      glGetProgramInfoLog(_programID, length, &length, message.data());
-      std::cerr << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n"
-                << message.data() << std::endl;
+      std::vector<char> message(static_cast<size_t>(length > 0 ? length : 1),
+                                '\0');
+      glGetProgramInfoLog(_programID,
+                          static_cast<GLsizei>(message.size()),
+                          nullptr,
+                          message.data());
+      message.back() = '\0';
+      Logger::LogError(std::string("Shader program failed to link: ") +
+                       message.data());
       glDeleteProgram(_programID);
       _programID = 0;
       _valid = false;
     } else {
       _valid = true;
+      // GLSL 330 has no layout(binding): assign the shared block's point here.
+      const GLuint block =
+        glGetUniformBlockIndex(_programID, FrameUniformsBlockName);
+      if (block != GL_INVALID_INDEX) {
+        glUniformBlockBinding(_programID, block, FrameUniformsBindingPoint);
+      }
     }
 
     // Clean up intermediate shader objects
@@ -163,13 +213,16 @@ private:
     int result;
     glGetShaderiv(id, GL_COMPILE_STATUS, &result);
     if (result == GL_FALSE) {
-      int length;
+      int length = 0;
       glGetShaderiv(id, GL_INFO_LOG_LENGTH, &length);
-      std::vector<char> message(length);
-      glGetShaderInfoLog(id, length, &length, message.data());
-      std::cerr << "ERROR::SHADER::COMPILATION_FAILED_FOR_"
-                << (type == GL_VERTEX_SHADER ? "VERTEX" : "FRAGMENT") << "\n"
-                << message.data() << std::endl;
+      std::vector<char> message(static_cast<size_t>(length > 0 ? length : 1),
+                                '\0');
+      glGetShaderInfoLog(
+        id, static_cast<GLsizei>(message.size()), nullptr, message.data());
+      message.back() = '\0';
+      Logger::LogError(
+        std::string(type == GL_VERTEX_SHADER ? "Vertex" : "Fragment") +
+        " shader failed to compile: " + message.data());
       glDeleteShader(id);
       return 0;
     }

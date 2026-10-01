@@ -17,12 +17,23 @@ or persistence parsing.
 - Do not duplicate the main loop, parser, renderer, or save format by platform.
 - Treat dialog cancellation as a normal empty result; selection must not mutate
   game state.
+- `PlatformSessionLocked()` (`SessionState.h`; Windows via WTS session flags,
+  false elsewhere) tells the Vulkan backend to pause presents while the login
+  session is locked (D-R33). It is polled, not event-driven; keep it cheap.
+- `PixelWindow` secondary windows are `GLFW_NO_API` and presented from CPU
+  images by the per-OS presenter; never give them an OpenGL context or share
+  the main context (D-UI5). Create, pump, present, and destroy them on the
+  main thread, before GLFW terminates. Detached tool panels reach them only
+  through `ISurfaceWindow` / `ISurfaceWindowFactory` (`SurfaceWindow.h`).
 
 ## Support status
 
-Windows is the only supported and currently verified platform. Linux and macOS
-are stale scaffolds. Source presence does not establish support; native
-configure, compile, launch, dialog, render, and shutdown evidence is required.
+Windows is the only supported and currently verified platform. Linux sources
+are repaired for Ubuntu 24.04 x86_64 X11/XWayland with gtkmm-3 dialogs; do not
+describe Linux as supported until native configure, compile, launch, dialog,
+render, and shutdown evidence exists on that host. macOS is not targeted; no
+platform scaffold is retained and CMake rejects Apple targets. Source presence
+does not establish support.
 
 ## Documentation and verification
 

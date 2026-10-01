@@ -10,6 +10,10 @@
 static const SysCmdLineOption g_windowOptions[] = {
   { "-ww", "pixels", "WinX", "Render window width" },
   { "-wh", "pixels", "WinY", "Render window height" },
+  { "--graphics-api",
+    "name",
+    "GraphicsAPI",
+    "Rendering backend, opengl or vulkan (saved for later launches)" },
 };
 
 static SysCmdLineResult
@@ -54,7 +58,16 @@ parseStringOption(int argc,
               << "' requires a string argument.\n";
     return { SysCmdLineAction::ExitFailure };
   }
-  environment->setVar(option.environmentVariable, argv[valueIndex]);
+  // A "paths" option repeats: each value is appended on its own line.
+  std::string value = argv[valueIndex];
+  if (option.valueName == "paths") {
+    const std::string previous =
+      environment->getVar(option.environmentVariable).value;
+    if (!previous.empty()) {
+      value = previous + "\n" + value;
+    }
+  }
+  environment->setVar(option.environmentVariable, value);
   *index = valueIndex;
   return {};
 }
@@ -92,8 +105,13 @@ printHelp(const SysCmdLineConfig& config)
   printIdentity(config);
   const std::string applicationName =
     config.applicationName.empty() ? "Illumo" : config.applicationName;
+#ifdef _WIN32
+  const std::string executableName = applicationName + ".exe";
+#else
+  const std::string executableName = applicationName;
+#endif
   std::cout << "Usage: "
-            << (config.usage.empty() ? applicationName + ".exe [OPTION] ..."
+            << (config.usage.empty() ? executableName + " [OPTION] ..."
                                      : config.usage)
             << "\n\nOptions:\n";
   for (const SysCmdLineOption& option : g_windowOptions) {
@@ -143,9 +161,7 @@ SysCmdLine::ParseCommandLine(int argc,
     if (std::strcmp(argv[i], "-v") == 0 ||
         std::strcmp(argv[i], "--version") == 0) {
       printIdentity(config);
-      std::cout << "Version: " << BuildInfo::VersionNumber
-                << "\nBuild Date: " << BuildInfo::BuildDateShort << ' '
-                << BuildInfo::BuildTimestamp << '\n';
+      std::cout << "Version: " << BuildInfo::FullVersion << '\n';
       return { SysCmdLineAction::ExitSuccess };
     }
 
@@ -156,8 +172,9 @@ SysCmdLine::ParseCommandLine(int argc,
                   << "' has no environment target.\n";
         return { SysCmdLineAction::ExitFailure };
       }
-      if (option->valueName == "path" || option->valueName == "string" ||
-          option->valueName == "file") {
+      if (option->valueName == "path" || option->valueName == "paths" ||
+          option->valueName == "string" || option->valueName == "file" ||
+          option->valueName == "name") {
         const SysCmdLineResult result =
           parseStringOption(argc, argv, &i, environment, *option);
         if (result.shouldExit()) {

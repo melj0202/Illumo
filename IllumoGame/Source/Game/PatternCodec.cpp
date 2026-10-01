@@ -1,4 +1,5 @@
 #include "PatternCodec.h"
+#include <Illumo/Foundation/Profile.h>
 
 #include <algorithm>
 #include <cctype>
@@ -16,15 +17,35 @@ PatternCodec::setError(std::string* error, const char* message)
 bool
 PatternCodec::looksLikeRle(const std::string& text)
 {
+  bool lineStart = true;
   for (std::size_t i = 0; i < text.size(); ++i) {
     const char character = text[i];
-    if (character == '!' || character == '$' || character == 'b' ||
-        character == 'o' || character == 'p' || character == 'P') {
+    if (character == '\n') {
+      lineStart = true;
+      continue;
+    }
+    if (std::isspace(static_cast<unsigned char>(character)) != 0) {
+      continue;
+    }
+    if (lineStart && character == '#') {
+      while (i < text.size() && text[i] != '\n') {
+        ++i;
+      }
+      continue;
+    }
+    // A leading ! introduces a Life plaintext comment, not an RLE terminator.
+    if (lineStart && character == '!') {
+      return false;
+    }
+    if (character == '!' || character == '$' ||
+        (character >= '0' && character <= '9') || character == 'p' ||
+        character == 'P') {
       return true;
     }
-    if (character == 'x' && text.find("x =", i) == i) {
+    if (lineStart && character == 'x') {
       return true;
     }
+    lineStart = false;
   }
   return false;
 }
@@ -49,6 +70,7 @@ PatternCodec::parseRle(const std::string& text,
                        CellPattern* pattern,
                        std::string* error)
 {
+  ILLUMO_PROFILE_ZONE("PatternCodec.parseRle");
   if (pattern == nullptr) {
     setError(error, "pattern output is null");
     return false;
@@ -106,11 +128,30 @@ PatternCodec::parseRle(const std::string& text,
     int state = -1;
     if (character == 'p' || character == 'P') {
       ++i;
-      if (i >= text.size() || text[i] < '0' || text[i] > '9') {
+      if (i < text.size() && text[i] == '{') {
+        ++i;
+        state = 0;
+        const std::size_t firstDigit = i;
+        while (i < text.size() && text[i] >= '0' && text[i] <= '9') {
+          const int digit = text[i] - '0';
+          if (state > (255 - digit) / 10) {
+            setError(error, "RLE state exceeds byte range");
+            return false;
+          }
+          state = state * 10 + digit;
+          ++i;
+        }
+        if (i == firstDigit || i >= text.size() || text[i] != '}') {
+          setError(error, "RLE braced state token is incomplete");
+          return false;
+        }
+      } else if (i < text.size() && text[i] >= '0' && text[i] <= '9') {
+        // Legacy pD consumes one digit; subsequent digits are the next run.
+        state = text[i] - '0';
+      } else {
         setError(error, "RLE p-state token is incomplete");
         return false;
       }
-      state = text[i] - '0';
     } else {
       state = decodeStateToken(character);
     }
@@ -147,6 +188,7 @@ PatternCodec::parsePlaintext(const std::string& text,
                              CellPattern* pattern,
                              std::string* error)
 {
+  ILLUMO_PROFILE_ZONE("PatternCodec.parsePlaintext");
   if (pattern == nullptr) {
     setError(error, "pattern output is null");
     return false;
@@ -201,9 +243,11 @@ PatternCodec::parsePlaintext(const std::string& text,
 bool
 PatternCodec::parse(const std::string& text,
                     CellPattern* pattern,
-                    std::string* error)
+                    std::string* error,
+                    PatternFormat format)
 {
-  if (looksLikeRle(text)) {
+  if (format == PatternFormat::Rle ||
+      (format == PatternFormat::Auto && looksLikeRle(text))) {
     return parseRle(text, pattern, error);
   }
   return parsePlaintext(text, pattern, error);
@@ -212,6 +256,7 @@ PatternCodec::parse(const std::string& text,
 std::string
 PatternCodec::encodeRle(const CellPattern& pattern)
 {
+  ILLUMO_PROFILE_ZONE("PatternCodec.encodeRle");
   std::ostringstream output;
   output << "x = " << pattern.getWidth() << ", y = " << pattern.getHeight()
          << "\n";
@@ -252,7 +297,7 @@ PatternCodec::encodeRle(const CellPattern& pattern)
       } else if (runState == 1) {
         output << 'b';
       } else {
-        output << 'p' << static_cast<int>(runState);
+        output << "p{" << static_cast<int>(runState) << '}';
       }
       runState = state;
       run = 1;
@@ -266,7 +311,7 @@ PatternCodec::encodeRle(const CellPattern& pattern)
       } else if (runState == 1) {
         output << 'b';
       } else {
-        output << 'p' << static_cast<int>(runState);
+        output << "p{" << static_cast<int>(runState) << '}';
       }
     }
     if (y + 1 < height) {
@@ -282,6 +327,7 @@ PatternCodec::encodeRle(const CellPattern& pattern)
 std::string
 PatternCodec::encodePlaintext(const CellPattern& pattern)
 {
+  ILLUMO_PROFILE_ZONE("PatternCodec.encodePlaintext");
   const int width = std::max(0, pattern.getWidth());
   const int height = std::max(0, pattern.getHeight());
   std::vector<unsigned char> grid(

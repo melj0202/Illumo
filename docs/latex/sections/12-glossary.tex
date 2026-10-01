@@ -22,29 +22,96 @@
     Inclusive AABB of cells/texels that changed; used for sparse visual work
     and subimage uploads.
   \item[Drawable]
-    Scene list entry that emits tokens via \texttt{AppendCommands} (preferred)
-    or immediate \texttt{Draw} (fallback).
+    \symbolref{DrawList} entry that emits tokens via \texttt{AppendCommands}
+    (preferred) or immediate \texttt{Draw} (fallback).
+  \item[DrawList]
+    Non-owning ordered list of drawables by layer, with the camera and window,
+    for one frame; named \texttt{Scene} until D-E31. It is the
+    render-extraction list, not the persistent node hierarchy, a program
+    scene, or an immediate GL executor.
   \item[Enrollment]
     Creating GPU resources and receiving handles outside the tight frame loop.
+  \item[Fetch set]
+    The virtual paths one scene load needs (\texttt{collectSceneFetches}),
+    fetched into the guest asset cache before the scene instantiates and held
+    there until released, so \texttt{IAssetSource::read} stays synchronous
+    (D-E24).
+  \item[.ilsc format 2]
+    The one UTF-8 JSON scene format every Illumo program reads and writes,
+    owned by \texttt{Illumo::Content} (\texttt{IlscCodec},
+    \texttt{SceneDocument}). Strict core objects, verbatim namespaced data,
+    canonical output; format 1 is refused (D-E19).
   \item[Illumo]
-    Engine/host object: owns services, modules, frame pumping.
+    Engine/host object: owns the services and runs a frame in phases
+    (\texttt{beginUpdate}, \texttt{endUpdate}, \texttt{beginRender},
+    \texttt{endRender}); it owns no program.
   \item[IllumoContext]
-    Frozen non-owning public service bag supplied to registered modules
-    (D-E5/D-E6).
+    Frozen non-owning public service bag supplied to the program, its scenes
+    and the debug overlay when they start (D-E5/D-E6, D-E31).
+  \item[illumo.json]
+    The one manifest at the root of every package: id, version, title, kind
+    (\texttt{app}, \texttt{content}, or \texttt{mod}), targets, dependencies,
+    overlays, and an \texttt{app} or \texttt{mod} section. It replaced
+    \texttt{app.json} (D-E22).
   \item[Module]
-    \symbolref{IModule} subsystem (game, debug, \ldots).
+    A WebAssembly binary (\texttt{.wasm}) that a package's program or a
+    compute worker runs. The engine's former \texttt{IModule} registration of
+    product screens was removed by D-E31; screens are now program scenes.
+  \item[Mount]
+    One entry of the host's virtual file tree: a mount point
+    (\texttt{/engine}, \texttt{/app}, \texttt{/packages/<id>}, or
+    \texttt{/project}) and the layers that supply it. Only \texttt{/project}
+    is writable (D-E21).
+  \item[Overlay]
+    A package layer merged onto \texttt{/app} when the package targets the
+    launched application. Layers stack by priority, then dependency order,
+    then id; directories union and the topmost file wins. There are no
+    whiteouts.
+  \item[Package (.ilpk)]
+    A unit of content with \texttt{illumo.json} at its root: a loose directory
+    or an \texttt{.ilpk} archive, a bounded ZIP subset with stored and deflate
+    entries (D-E20). Both forms resolve identically.
+  \item[Package root]
+    The mount a scene's package-relative references resolve against:
+    \texttt{/packages/<id>} under \texttt{/packages}, otherwise the first path
+    component (\texttt{/app}, \texttt{/project}, \texttt{/engine},
+    \texttt{/local}); see \texttt{scenePackageRoot}.
   \item[Palette]
     CPU table mapping all 256 possible cell-state bytes to RGB target colors.
   \item[PBO]
     Pixel buffer object; async unpack path for texture uploads.
+  \item[Program]
+    The one WASM program a package runs (D-E31). On the host it is a
+    \symbolref{WasmProgram} that \symbolref{RuntimeShell} starts, updates,
+    dispatches and asks before the window closes; in the guest a
+    \symbolref{GuestProgram} owns what every scene shares and a
+    \symbolref{SceneDirector}.
   \item[RuleSet]
     Cellular automaton transition rules (\texttt{nextState} + \texttt{evalCell}).
-  \item[Scene]
-    Non-owning ordered list of drawables + camera + window for one frame. It is
-    the render-extraction list, not the persistent node hierarchy or an
-    immediate GL executor.
+  \item[Scene (program scene)]
+    A \symbolref{ProgramScene}: one screen of a program with its own logic, UI
+    and console commands, backed by a \symbolref{SceneInstance} (its content)
+    and, with \texttt{HostRender}, its own host render world (D-R30). It
+    starts once, enters and leaves any number of times, and stops once; a
+    scene left is kept, frozen, until the program releases it (D-E31). The
+    per-frame drawable list is \symbolref{DrawList}.
+  \item[SceneDirector]
+    Owns a program's scenes by name and switches between them at frame
+    boundaries (a cut, or a cover once the program's transition cover is
+    drawn). Only the active scene updates, receives input and draws; each
+    scene keeps its own camera.
   \item[SceneGraph]
     Persistent scene-owned hierarchy addressed by graph-local generational
     handles. It caches world transforms and emits visible, enabled borrowed
-    render attachments as one Scene drawable.
+    render attachments as one \symbolref{DrawList} drawable.
+  \item[SceneInstance]
+    \texttt{Illumo::Content}'s live scene: it owns one document state, a
+    SceneGraph, the attachments that draw each node and their asset
+    references. Per-node edits change only what they touch; stable ids are
+    graph node names.
+  \item[VFS]
+    Virtual file system: the host's \texttt{VirtualFileSystem}, an immutable
+    mount table of absolute, case-sensitive \texttt{/}-separated paths over
+    directory and archive backends. Guests list, stat and read it through
+    file protocol v2; nothing it returns is a host path.
 \end{description}

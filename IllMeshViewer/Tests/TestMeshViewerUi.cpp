@@ -36,18 +36,63 @@ struct UiFixture
 static void
 testUiLayoutAndHits()
 {
-  testSection("MeshViewerUi: layout, hit-testing, and buttons");
+  testSection("MeshViewerUi: plain menu bar, status bar and empty card");
   UiFixture fixture;
 
-  testTrue(g, fixture.ui.containsScreenPoint(100.0f, 15.0f), "header hit");
+  testTrue(g, fixture.ui.containsScreenPoint(100.0f, 10.0f), "menu bar hit");
   testTrue(g, fixture.ui.containsScreenPoint(100.0f, 710.0f), "status bar hit");
   testTrue(g,
            !fixture.ui.containsScreenPoint(640.0f, 150.0f),
-           "empty 3D center passes");
+           "the empty viewport passes");
+  testTrue(g,
+           fixture.ui.containsScreenPoint(640.0f, 330.0f),
+           "the empty-state card blocks the viewport under it");
 
   fixture.ui.update(&fixture.input, 0.016f);
+  testEqSize(g, fixture.ui.menuCountForTesting(), 2u, "File and View menus");
+  testTrue(g,
+           fixture.ui.getVisual().spriteCount() == 0u &&
+             fixture.ui.getVisual().shapeCount() > 0u,
+           "the plain chrome is flat shapes and text");
+}
+
+static void
+testUiMenus()
+{
+  testSection("MeshViewerUi: menus issue actions");
+  UiFixture fixture;
+  float x = 0.0f;
+  float y = 0.0f;
   testTrue(
-    g, fixture.ui.buttonCountForTesting() >= 5u, "header buttons created");
+    g,
+    fixture.ui.menuItemCenterForTesting(MeshViewerAction::OpenMesh, &x, &y) &&
+      fixture.ui.clickAtForTesting(x, y) == MeshViewerAction::OpenMesh,
+    "File > Open");
+  testTrue(
+    g,
+    fixture.ui.menuItemCenterForTesting(MeshViewerAction::ToggleGrid, &x, &y) &&
+      fixture.ui.clickAtForTesting(x, y) == MeshViewerAction::ToggleGrid,
+    "View > Grid");
+  std::vector<MeshViewerPanelMenuEntry> panels;
+  MeshViewerPanelMenuEntry display;
+  display.title = "Display";
+  display.toggle = MeshViewerAction::ToggleDisplayPanel;
+  display.popOut = MeshViewerAction::PopOutDisplayPanel;
+  panels.push_back(display);
+  fixture.ui.setPanels(panels, false);
+  testTrue(g,
+           fixture.ui.menuItemCenterForTesting(
+             MeshViewerAction::PopOutDisplayPanel, &x, &y) &&
+             fixture.ui.clickAtForTesting(x, y) == MeshViewerAction::None,
+           "pop-out is disabled without window support");
+  fixture.ui.closeMenus();
+  fixture.ui.setPanels(panels, true);
+  testTrue(g,
+           fixture.ui.menuItemCenterForTesting(
+             MeshViewerAction::PopOutDisplayPanel, &x, &y) &&
+             fixture.ui.clickAtForTesting(x, y) ==
+               MeshViewerAction::PopOutDisplayPanel,
+           "pop-out fires with window support");
 }
 
 static void
@@ -64,37 +109,26 @@ testUiMetadataAndToast()
   meta.dimensions = glm::vec3(2.0f, 1.5f, 1.8f);
   fixture.ui.setMeshMetadata(meta);
 
-  fixture.ui.showToast("Loaded mesh successfully",
-                       ColorRgba{ 60, 220, 120, 255 });
+  fixture.ui.showToast("Loaded mesh successfully");
   fixture.ui.update(&fixture.input, 0.016f);
 
   testTrue(g, fixture.ui.meshMetadata().hasMesh, "metadata registered hasMesh");
   testTrue(g,
            fixture.ui.meshMetadata().filename == "suzanne.obj",
            "metadata filename preserved");
-}
-
-static void
-testUiFontSizeScaling()
-{
-  testSection("MeshViewerUi: font size scaling and dynamic button widths");
-  UiFixture fixture;
-
-  fixture.ui.setFontSize(18.0f);
-  fixture.ui.update(&fixture.input, 0.016f);
-  testTrue(
-    g, fixture.ui.buttonCountForTesting() >= 5u, "buttons with large font");
-
-  // Empty state card bounds should scale properly
   testTrue(g,
-           fixture.ui.containsScreenPoint(640.0f, 320.0f),
-           "center empty card hit-test with scaled font");
+           !fixture.ui.containsScreenPoint(640.0f, 330.0f),
+           "with a mesh open the card is gone");
+  testEqStr(g,
+            fixture.ui.toastForTesting(),
+            "Loaded mesh successfully",
+            "the toast is shown");
 }
 
 static void
 testUiSmallWindowLayout()
 {
-  testSection("MeshViewerUi: responsive small window layout and hit testing");
+  testSection("MeshViewerUi: small window layout and hit testing");
   NullRenderWindow smallWindow(640, 360);
   EnvVars env;
   Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
@@ -103,16 +137,15 @@ testUiSmallWindowLayout()
   Renderer renderer(&smallWindow, &env, &camera, &mock, false);
   InputManager input(nullptr);
   MeshViewerUi ui(&smallWindow, &renderer);
+  ui.setViewport(GuiToolRect{ 0.0f, 24.0f, 640.0f, 314.0f });
 
   ui.update(&input, 0.016f);
-  testTrue(g, ui.buttonCountForTesting() >= 5u, "buttons on small window");
   testTrue(g,
            ui.containsScreenPoint(320.0f, 160.0f),
            "center empty card hit-test on 640x360 window");
-  testTrue(g, ui.containsScreenPoint(50.0f, 10.0f), "header hit-test");
+  testTrue(g, ui.containsScreenPoint(50.0f, 10.0f), "menu bar hit-test");
   testTrue(g, ui.containsScreenPoint(50.0f, 350.0f), "status bar hit-test");
 }
-
 static int
 runUiCase(void (*testFunction)())
 {
@@ -128,8 +161,8 @@ registerMeshViewerUiTests(IllumoTestRegistry& registry)
                []() { return runUiCase(testUiLayoutAndHits); });
   registry.add("IllMeshViewer.Ui.MetadataAndToast",
                []() { return runUiCase(testUiMetadataAndToast); });
-  registry.add("IllMeshViewer.Ui.FontSizeScaling",
-               []() { return runUiCase(testUiFontSizeScaling); });
+  registry.add("IllMeshViewer.Ui.Menus",
+               []() { return runUiCase(testUiMenus); });
   registry.add("IllMeshViewer.Ui.SmallWindowLayout",
                []() { return runUiCase(testUiSmallWindowLayout); });
 }

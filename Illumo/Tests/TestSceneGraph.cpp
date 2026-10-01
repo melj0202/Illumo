@@ -1,10 +1,16 @@
 #include <Illumo/Rendering/Primitives/PrimitiveTypes.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Scene/SceneGraph.h>
+#include <Illumo/Scene/SceneGraphDrawable.h>
 #include <Illumo/Scene/Transform3D.h>
+#include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <glm/gtc/matrix_transform.hpp>
+#include <limits>
 #include <vector>
 
 static TestCounters g;
@@ -68,12 +74,84 @@ private:
   SceneNodeHandle node;
 };
 
+class BoundedRecordingSceneAttachment : public ISceneRenderAttachment
+{
+public:
+  BoundedRecordingSceneAttachment(int attachmentId,
+                                  std::vector<int>* appendOrder,
+                                  const AxisAlignedBounds3& attachmentBounds,
+                                  bool reportsBounds = true)
+    : id(attachmentId)
+    , order(appendOrder)
+    , bounds(attachmentBounds)
+    , bounded(reportsBounds)
+  {
+  }
+
+  bool getSceneLocalBounds(AxisAlignedBounds3* output) const override
+  {
+    if (!bounded || output == nullptr) {
+      return false;
+    }
+    *output = bounds;
+    return true;
+  }
+
+  void appendSceneCommands(Renderer* renderer,
+                           const Matrix4& worldTransform) override
+  {
+    (void)renderer;
+    (void)worldTransform;
+    if (order != nullptr) {
+      order->push_back(id);
+    }
+  }
+
+private:
+  int id;
+  std::vector<int>* order;
+  AxisAlignedBounds3 bounds;
+  bool bounded;
+};
+
+class CountingSceneAttachment : public ISceneRenderAttachment
+{
+public:
+  CountingSceneAttachment(size_t* callbackCount, bool reportsBounds)
+    : callbacks(callbackCount)
+    , bounded(reportsBounds)
+  {
+  }
+
+  bool getSceneLocalBounds(AxisAlignedBounds3* output) const override
+  {
+    if (!bounded || output == nullptr) {
+      return false;
+    }
+    *output = AxisAlignedBounds3{ Vector3(-0.5f), Vector3(0.5f) };
+    return true;
+  }
+
+  void appendSceneCommands(Renderer* renderer,
+                           const Matrix4& worldTransform) override
+  {
+    (void)worldTransform;
+    *callbacks += 1;
+    renderer->pushUniformInt("uCullingProbe", 1);
+  }
+
+private:
+  size_t* callbacks;
+  bool bounded;
+};
+
 static void
 testSceneGraphHandlesAndLifetime()
 {
   testSection("SceneGraph: handles, ownership, and subtree destruction");
 
   SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
   const SceneNodeHandle root = graph.createNode();
   const SceneNodeHandle child = graph.createNode(root);
   const SceneNodeHandle otherRoot = graph.createNode();
@@ -94,6 +172,7 @@ testSceneGraphHandlesAndLifetime()
   testTrue(g, graph.getChild(root, 0) == child, "child order resolves");
 
   SceneGraph foreignGraph;
+  SceneGraphDrawable foreignGraphDrawable(foreignGraph);
   const SceneNodeHandle foreign = foreignGraph.createNode();
   testTrue(g, !graph.isNodeValid(foreign), "foreign handle is rejected");
   testTrue(g,
@@ -132,6 +211,7 @@ testSceneGraphHierarchyAndTransforms()
   testSection("SceneGraph: hierarchy, transforms, and cycle rejection");
 
   SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
   const SceneNodeHandle root = graph.createNode();
   const SceneNodeHandle child = graph.createNode(root);
   const SceneNodeHandle grandchild = graph.createNode(child);
@@ -196,7 +276,7 @@ testSceneGraphHierarchyAndTransforms()
            !graph.getWorldTransform(SceneNodeHandle{}, &unchanged),
            "null world-transform query fails safely");
   testTrue(g,
-           !graph.getLocalTransform(root, nullptr),
+           !graph.getLocalTransform(root, static_cast<Matrix4*>(nullptr)),
            "null local-transform output fails safely");
 
   const Transform3D trs = Transform3D::fromPosition(Vector3(7.0f, 8.0f, 9.0f));
@@ -207,6 +287,52 @@ testSceneGraphHierarchyAndTransforms()
   testTrue(g,
            translationEquals(world, 7.0f, 8.0f, 9.0f),
            "Transform3D local transform propagates to world transform");
+
+  SceneGraph branchGraph;
+  SceneGraphDrawable branchGraphDrawable(branchGraph);
+  const SceneNodeHandle branchRoot = branchGraph.createNode();
+  const SceneNodeHandle leftParent = branchGraph.createNode(branchRoot);
+  const SceneNodeHandle leftLeaf = branchGraph.createNode(leftParent);
+  const SceneNodeHandle rightParent = branchGraph.createNode(branchRoot);
+  const SceneNodeHandle rightLeaf = branchGraph.createNode(rightParent);
+
+  branchGraph.setLocalTransform(
+    branchRoot, glm::translate(Matrix4(1.0f), Vector3(1.0f, 0.0f, 0.0f)));
+  branchGraph.setLocalTransform(
+    leftParent, glm::translate(Matrix4(1.0f), Vector3(0.0f, 2.0f, 0.0f)));
+  branchGraph.setLocalTransform(
+    leftLeaf, glm::translate(Matrix4(1.0f), Vector3(0.0f, 0.0f, 3.0f)));
+  branchGraph.setLocalTransform(
+    rightParent, glm::translate(Matrix4(1.0f), Vector3(0.0f, 4.0f, 0.0f)));
+  branchGraph.setLocalTransform(
+    rightLeaf, glm::translate(Matrix4(1.0f), Vector3(0.0f, 0.0f, 5.0f)));
+  branchGraph.updateWorldTransforms();
+
+  branchGraph.setLocalTransform(
+    leftParent, glm::translate(Matrix4(1.0f), Vector3(0.0f, 6.0f, 0.0f)));
+  branchGraph.setLocalTransform(
+    rightParent, glm::translate(Matrix4(1.0f), Vector3(0.0f, 8.0f, 0.0f)));
+
+  Matrix4 leftWorld(1.0f);
+  testTrue(g,
+           branchGraph.getWorldTransform(leftLeaf, &leftWorld),
+           "dirty branch world transform resolves on demand");
+  testTrue(g,
+           translationEquals(leftWorld, 1.0f, 6.0f, 3.0f),
+           "on-demand query composes the complete dirty ancestor chain");
+
+  Matrix4 cachedLeftWorld(1.0f);
+  branchGraph.getWorldTransform(leftLeaf, &cachedLeftWorld);
+  testTrue(g,
+           translationEquals(cachedLeftWorld, 1.0f, 6.0f, 3.0f),
+           "repeated cached query preserves the resolved world transform");
+
+  Matrix4 rightWorld(1.0f);
+  branchGraph.getWorldTransform(rightLeaf, &rightWorld);
+  testTrue(
+    g,
+    translationEquals(rightWorld, 1.0f, 8.0f, 5.0f),
+    "querying one branch leaves another dirty branch independently resolvable");
 }
 
 static void
@@ -215,6 +341,7 @@ testSceneGraphRenderExtraction()
   testSection("SceneGraph: render order and subtree state");
 
   SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
   const SceneNodeHandle rootA = graph.createNode();
   const SceneNodeHandle childA = graph.createNode(rootA);
   const SceneNodeHandle grandchildA = graph.createNode(childA);
@@ -242,7 +369,8 @@ testSceneGraphRenderExtraction()
   graph.setRenderAttachment(childB, &attachmentChildB);
   graph.setRenderAttachment(rootB, &attachmentRootB);
 
-  testTrue(g, graph.AppendCommands(nullptr), "graph owns the token path");
+  testTrue(
+    g, graphDrawable.AppendCommands(nullptr), "graph owns the token path");
   const std::vector<int> expectedOrder{ 1, 2, 3, 4, 5 };
   testTrue(
     g, order == expectedOrder, "attachments emit in hierarchy pre-order");
@@ -254,7 +382,7 @@ testSceneGraphRenderExtraction()
   order.clear();
   transforms.clear();
   graph.setVisible(childA, false);
-  graph.AppendCommands(nullptr);
+  graphDrawable.AppendCommands(nullptr);
   const std::vector<int> hiddenOrder{ 1, 4, 5 };
   testTrue(
     g, order == hiddenOrder, "invisible node suppresses its complete subtree");
@@ -263,7 +391,7 @@ testSceneGraphRenderExtraction()
   transforms.clear();
   graph.setVisible(childA, true);
   graph.setEnabled(rootA, false);
-  graph.AppendCommands(nullptr);
+  graphDrawable.AppendCommands(nullptr);
   const std::vector<int> disabledOrder{ 5 };
   testTrue(
     g, order == disabledOrder, "disabled node suppresses its complete subtree");
@@ -271,11 +399,11 @@ testSceneGraphRenderExtraction()
   order.clear();
   transforms.clear();
   graph.setEnabled(rootA, true);
-  graph.setVisible(false);
-  graph.AppendCommands(nullptr);
+  graphDrawable.setVisible(false);
+  graphDrawable.AppendCommands(nullptr);
   testEqSize(g, order.size(), 0u, "hidden graph emits no attachments");
 
-  graph.setVisible(true);
+  graphDrawable.setVisible(true);
   graph.setRenderAttachment(childB, nullptr);
   testTrue(g,
            graph.getRenderAttachment(childB) == nullptr,
@@ -283,10 +411,228 @@ testSceneGraphRenderExtraction()
 
   MutatingSceneAttachment mutatingAttachment(&graph, childB);
   graph.setRenderAttachment(childB, &mutatingAttachment);
-  graph.AppendCommands(nullptr);
+  graphDrawable.AppendCommands(nullptr);
+  testTrue(
+    g,
+    mutatingAttachment.mutationAccepted && !graph.isNodeValid(childB),
+    "v2 callback mutation retires the snapshot without walking live storage");
+}
+
+static void
+testSceneGraphBoundsAndCulling()
+{
+  testSection("SceneGraph: world bounds and conservative frustum culling");
+
+  const AxisAlignedBounds3 localBounds{ Vector3(-1.0f), Vector3(1.0f) };
+  AxisAlignedBounds3 transformedBounds;
+  Matrix4 boundsTransform =
+    glm::translate(Matrix4(1.0f), Vector3(10.0f, 0.0f, 0.0f));
+  boundsTransform = glm::scale(boundsTransform, Vector3(-2.0f, 3.0f, 0.5f));
+  const AxisAlignedBounds3 asymmetricBounds{ Vector3(-1.0f, -2.0f, -3.0f),
+                                             Vector3(2.0f, 4.0f, 5.0f) };
   testTrue(g,
-           !mutatingAttachment.mutationAccepted && graph.isNodeValid(childB),
-           "render callbacks cannot mutate graph storage during traversal");
+           asymmetricBounds.transformed(boundsTransform, &transformedBounds),
+           "finite bounds transform succeeds");
+  testTrue(g,
+           std::abs(transformedBounds.minimum.x - 6.0f) < 0.0001f &&
+             std::abs(transformedBounds.maximum.x - 12.0f) < 0.0001f &&
+             std::abs(transformedBounds.minimum.y - (-6.0f)) < 0.0001f &&
+             std::abs(transformedBounds.maximum.y - 12.0f) < 0.0001f,
+           "negative and non-uniform scales produce ordered world bounds");
+  const AxisAlignedBounds3 pointBounds{ Vector3(2.0f), Vector3(2.0f) };
+  const AxisAlignedBounds3 flatBounds{ Vector3(-2.0f, -1.0f, 0.0f),
+                                       Vector3(2.0f, 1.0f, 0.0f) };
+  testTrue(g,
+           pointBounds.isValid() && flatBounds.isValid(),
+           "point and flat bounds are valid");
+  const Matrix4 rotation =
+    glm::rotate(Matrix4(1.0f), glm::radians(90.0f), Vector3(0.0f, 0.0f, 1.0f));
+  testTrue(g,
+           flatBounds.transformed(rotation, &transformedBounds) &&
+             std::abs(transformedBounds.minimum.x - (-1.0f)) < 0.0001f &&
+             std::abs(transformedBounds.maximum.x - 1.0f) < 0.0001f &&
+             std::abs(transformedBounds.minimum.y - (-2.0f)) < 0.0001f &&
+             std::abs(transformedBounds.maximum.y - 2.0f) < 0.0001f,
+           "rotated flat bounds conservatively enclose all corners");
+  Matrix4 malformedTransform(1.0f);
+  malformedTransform[0][0] = std::numeric_limits<float>::quiet_NaN();
+  testTrue(g,
+           !flatBounds.transformed(malformedTransform, &transformedBounds),
+           "malformed transforms disable bounds");
+
+  HeadlessRenderFixture fixture(640, 480);
+  SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
+  const SceneNodeHandle offscreenParent = graph.createNode();
+  const SceneNodeHandle onscreenChild = graph.createNode(offscreenParent);
+  const SceneNodeHandle unknownRoot = graph.createNode();
+  const SceneNodeHandle onscreenRoot = graph.createNode();
+  const SceneNodeHandle intersectingRoot = graph.createNode();
+  graph.setLocalTransform(
+    offscreenParent,
+    glm::translate(Matrix4(1.0f), Vector3(10000.0f, 0.0f, 0.0f)));
+  graph.setLocalTransform(
+    onscreenChild,
+    glm::translate(Matrix4(1.0f), Vector3(-10000.0f, 0.0f, 0.0f)));
+  graph.setLocalTransform(
+    unknownRoot, glm::translate(Matrix4(1.0f), Vector3(10000.0f, 0.0f, 0.0f)));
+  graph.setLocalTransform(
+    intersectingRoot,
+    glm::translate(Matrix4(1.0f), Vector3(10000.0f, 0.0f, 0.0f)));
+
+  std::vector<int> order;
+  BoundedRecordingSceneAttachment parentAttachment(1, &order, localBounds);
+  BoundedRecordingSceneAttachment childAttachment(2, &order, localBounds);
+  BoundedRecordingSceneAttachment unknownAttachment(
+    3, &order, localBounds, false);
+  BoundedRecordingSceneAttachment rootAttachment(4, &order, localBounds);
+  const AxisAlignedBounds3 intersectingBounds{ Vector3(-10001.0f, -1.0f, -1.0f),
+                                               Vector3(0.0f, 1.0f, 1.0f) };
+  BoundedRecordingSceneAttachment intersectingAttachment(
+    5, &order, intersectingBounds);
+  graph.setRenderAttachment(offscreenParent, &parentAttachment);
+  graph.setRenderAttachment(onscreenChild, &childAttachment);
+  graph.setRenderAttachment(unknownRoot, &unknownAttachment);
+  graph.setRenderAttachment(onscreenRoot, &rootAttachment);
+  graph.setRenderAttachment(intersectingRoot, &intersectingAttachment);
+
+  AxisAlignedBounds3 parentWorldBounds;
+  AxisAlignedBounds3 childWorldBounds;
+  testTrue(g,
+           graph.getWorldBounds(offscreenParent, &parentWorldBounds) &&
+             parentWorldBounds.minimum.x > 9000.0f,
+           "world-bounds query composes the node transform");
+  testTrue(g,
+           graph.getWorldBounds(onscreenChild, &childWorldBounds) &&
+             childWorldBounds.minimum.x < 0.0f &&
+             childWorldBounds.maximum.x > 0.0f,
+           "child world bounds include the complete parent chain");
+  testTrue(g,
+           !graph.getWorldBounds(unknownRoot, &childWorldBounds) &&
+             !graph.getWorldBounds(SceneNodeHandle{}, &childWorldBounds),
+           "unknown bounds and invalid handles fail without guessed boxes");
+  const SceneNodeHandle stale = graph.createNode();
+  testTrue(g,
+           graph.destroyNode(stale) &&
+             !graph.getWorldBounds(stale, &childWorldBounds),
+           "stale handles cannot query bounds");
+  SceneGraph foreignGraph;
+  SceneGraphDrawable foreignGraphDrawable(foreignGraph);
+  const SceneNodeHandle foreign = foreignGraph.createNode();
+  testTrue(g,
+           !graph.getWorldBounds(foreign, &childWorldBounds),
+           "foreign handles cannot query bounds");
+
+  DrawList scene(&fixture.window, &fixture.camera);
+  scene.AddDrawable(&graphDrawable, RenderLayerId::World);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  const std::vector<int> expectedOrder{ 2, 3, 4, 5 };
+  testTrue(g,
+           order == expectedOrder,
+           "children, unbounded, inside, and intersecting attachments survive");
+
+  fixture.camera.setProjectionType(ProjectionType::Perspective);
+  fixture.camera.lookAt(
+    Vector3(0.0f, 0.0f, 10.0f), Vector3(0.0f), Vector3(0.0f, 1.0f, 0.0f));
+  SceneGraph perspectiveGraph;
+  SceneGraphDrawable perspectiveGraphDrawable(perspectiveGraph);
+  const SceneNodeHandle perspectiveVisible = perspectiveGraph.createNode();
+  const SceneNodeHandle perspectiveHidden = perspectiveGraph.createNode();
+  perspectiveGraph.setLocalTransform(
+    perspectiveHidden,
+    glm::translate(Matrix4(1.0f), Vector3(1000.0f, 0.0f, 0.0f)));
+  std::vector<int> perspectiveOrder;
+  BoundedRecordingSceneAttachment visibleAttachment(
+    5, &perspectiveOrder, localBounds);
+  BoundedRecordingSceneAttachment hiddenAttachment(
+    6, &perspectiveOrder, localBounds);
+  perspectiveGraph.setRenderAttachment(perspectiveVisible, &visibleAttachment);
+  perspectiveGraph.setRenderAttachment(perspectiveHidden, &hiddenAttachment);
+  DrawList perspectiveScene(&fixture.window, &fixture.camera);
+  perspectiveScene.AddDrawable(&perspectiveGraphDrawable, RenderLayerId::World);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&perspectiveScene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  testTrue(g,
+           perspectiveOrder == std::vector<int>{ 5 },
+           "perspective frustum culls a wholly excluded attachment");
+}
+
+static void
+runSceneGraphCullingPass(HeadlessRenderFixture* fixture,
+                         bool bounded,
+                         size_t nodeCount,
+                         size_t visibleCount,
+                         size_t* callbacks,
+                         long long* elapsedMicros)
+{
+  SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
+  std::vector<CountingSceneAttachment> attachments;
+  attachments.reserve(nodeCount);
+  for (size_t index = 0; index < nodeCount; ++index) {
+    const SceneNodeHandle node = graph.createNode();
+    if (index >= visibleCount) {
+      graph.setLocalTransform(
+        node, glm::translate(Matrix4(1.0f), Vector3(10000.0f, 0.0f, 0.0f)));
+    }
+    attachments.emplace_back(callbacks, bounded);
+    graph.setRenderAttachment(node, &attachments.back());
+  }
+  DrawList scene(&fixture->window, &fixture->camera);
+  scene.AddDrawable(&graphDrawable, RenderLayerId::World);
+  const std::chrono::steady_clock::time_point start =
+    std::chrono::steady_clock::now();
+  fixture->renderer.BeginFrame();
+  fixture->renderer.RenderScene(&scene, &fixture->camera);
+  fixture->renderer.EndFrame();
+  const std::chrono::steady_clock::time_point end =
+    std::chrono::steady_clock::now();
+  *elapsedMicros =
+    std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+}
+
+static void
+testSceneGraphCullingMicroBench()
+{
+  testSection("SceneGraph: 5,000-node culling microbenchmark");
+  constexpr size_t nodeCount = 5000;
+  constexpr size_t visibleCount = 500;
+  HeadlessRenderFixture fixture(640, 480);
+
+  size_t boundedCallbacks = 0;
+  long long boundedMicros = 0;
+  runSceneGraphCullingPass(
+    &fixture, true, nodeCount, visibleCount, &boundedCallbacks, &boundedMicros);
+  size_t unboundedCallbacks = 0;
+  long long unboundedMicros = 0;
+  runSceneGraphCullingPass(&fixture,
+                           false,
+                           nodeCount,
+                           visibleCount,
+                           &unboundedCallbacks,
+                           &unboundedMicros);
+  std::printf("SceneGraph culling microbench: nodes=%zu visible=%zu "
+              "bounded=%lldus callbacks=%zu commands=%zu "
+              "unbounded=%lldus callbacks=%zu commands=%zu\n",
+              nodeCount,
+              visibleCount,
+              boundedMicros,
+              boundedCallbacks,
+              boundedCallbacks,
+              unboundedMicros,
+              unboundedCallbacks,
+              unboundedCallbacks);
+  testEqSize(g,
+             boundedCallbacks,
+             visibleCount,
+             "bounded traversal invokes only visible attachments");
+  testEqSize(g,
+             unboundedCallbacks,
+             nodeCount,
+             "unknown bounds preserve fail-open attachment callbacks");
 }
 
 static void
@@ -387,6 +733,12 @@ registerSceneGraphTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.SceneGraph.RenderExtraction", []() {
     return runSceneGraphCase(testSceneGraphRenderExtraction);
+  });
+  registry.add("Illumo.SceneGraph.BoundsAndCulling", []() {
+    return runSceneGraphCase(testSceneGraphBoundsAndCulling);
+  });
+  registry.add("Illumo.SceneGraph.CullingMicroBench", []() {
+    return runSceneGraphCase(testSceneGraphCullingMicroBench);
   });
   registry.add("Illumo.SceneGraph.TransformConversions",
                []() { return runSceneGraphCase(testTransformConversions); });

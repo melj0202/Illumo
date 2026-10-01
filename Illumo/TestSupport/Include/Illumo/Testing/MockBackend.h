@@ -1,8 +1,12 @@
 #pragma once
 #include <Illumo/Rendering/CommandQueue.h>
 #include <Illumo/Rendering/IBackend.h>
+#include <Illumo/Rendering/RecordedCommandList.h>
 #include <Illumo/Rendering/ResourceHandlePool.h>
+#include <array>
 #include <cstdint>
+#include <cstring>
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -21,12 +25,16 @@ public:
       ShaderPaths,
       ShaderSources,
       TextureData,
+      CubemapData,
       ReplaceMesh,
       ReplaceShader,
       ReplaceTexture,
+      ReplaceCubemap,
       DestroyMesh,
       DestroyShader,
-      DestroyTexture
+      DestroyTexture,
+      CreateBuffer,
+      DestroyBuffer
     };
     Kind kind = Kind::Mesh;
     uint32_t slot = 0;
@@ -49,10 +57,13 @@ private:
   // Clear).
   std::vector<RenderCommand> lastNonEmptySubmitted;
   std::vector<std::vector<RenderCommand>> submittedFrames;
+  std::deque<std::array<float, 16>> submittedUniformMatrices;
+  std::deque<std::vector<unsigned char>> submittedBufferWrites;
   std::vector<CreateRecord> creates;
   int beginFrameCount = 0;
   int endFrameCount = 0;
   int submitCount = 0;
+  size_t executedListCount = 0;
   int fps = 0;
   bool initialized = false;
   bool shutDown = false;
@@ -63,12 +74,53 @@ private:
   ResourceHandlePool<ShaderHandle> shaderHandles;
   ResourceHandlePool<TextureHandle> textureHandles;
   ResourceHandlePool<FramebufferHandle> framebufferHandles;
+  ResourceHandlePool<BufferHandle> bufferHandles;
+  struct BufferRecord
+  {
+    uint32_t generation = 0;
+    BufferUsage usage = BufferUsage::Instance;
+    size_t capacity = 0;
+  };
+  std::unordered_map<uint32_t, BufferRecord> liveBuffers;
   std::unordered_map<uint32_t, uint32_t> liveMeshes;
   std::unordered_map<uint32_t, uint32_t> liveShaders;
   std::unordered_map<uint32_t, uint32_t> liveTextures;
   std::unordered_map<uint32_t, uint32_t> liveFramebuffers;
   std::unordered_map<uint32_t, TextureInfo> textureInfos;
+  std::unordered_map<uint32_t, bool> cubemapKinds;
+  // Readback simulation: the colour each framebuffer was last cleared to by
+  // submitted commands, and up to two pending copies per stream.
+  struct PendingReadback
+  {
+    int width = 0;
+    int height = 0;
+    std::array<unsigned char, 4> color{ 0, 0, 0, 0 };
+  };
+  uint32_t boundFramebufferSlot = 0;
+  std::unordered_map<uint32_t, std::array<unsigned char, 4>> clearColors;
+  std::unordered_map<uint32_t, std::deque<PendingReadback>> readbacks;
+  int readbackRequestCount = 0;
 
+  static unsigned char colorByte(float value)
+  {
+    const float clamped = value < 0.0f ? 0.0f : (value > 1.0f ? 1.0f : value);
+    return static_cast<unsigned char>(clamped * 255.0f + 0.5f);
+  }
+  void trackSubmitted(const RenderCommand& command)
+  {
+    if (command.commandType == CommandType::SetFramebuffer) {
+      boundFramebufferSlot = command.bindFramebuffer.handle.isValid()
+                               ? command.bindFramebuffer.handle.slot
+                               : 0;
+    } else if (command.commandType == CommandType::ClearColorBuffer ||
+               command.commandType == CommandType::ClearScreen ||
+               command.commandType == CommandType::ClearAll) {
+      clearColors[boundFramebufferSlot] = { colorByte(command.clear.r),
+                                            colorByte(command.clear.g),
+                                            colorByte(command.clear.b),
+                                            colorByte(command.clear.a) };
+    }
+  }
   bool isCommandResourceValid(const RenderCommand& command) const
   {
     switch (command.commandType) {
@@ -83,11 +135,66 @@ private:
         return IsTextureValid(command.bindTexture.handle);
       case CommandType::UpdateBuffer:
         return IsMeshValid(command.updateBuffer.handle);
+      case CommandType::UpdateIndexBuffer:
+        return IsMeshValid(command.updateIndexBuffer.handle);
       case CommandType::UpdateTexture:
         return IsTextureValid(command.updateTexture.handle);
+      case CommandType::WriteBuffer: {
+        const BufferRecord* buffer = findBuffer(command.writeBuffer.handle);
+        const CmdWriteBuffer& write = command.writeBuffer;
+        return buffer != nullptr && write.data != nullptr &&
+               write.sizeBytes != 0 && write.offsetBytes <= buffer->capacity &&
+               write.sizeBytes <= buffer->capacity - write.offsetBytes;
+      }
+      case CommandType::BindUniformBuffer: {
+        const BufferRecord* buffer =
+          findBuffer(command.bindUniformBuffer.handle);
+        return buffer != nullptr && buffer->usage == BufferUsage::Uniform;
+      }
+      case CommandType::SetInstanceStream: {
+        const BufferRecord* buffer = findBuffer(command.instanceStream.handle);
+        return buffer != nullptr && buffer->usage == BufferUsage::Instance &&
+               instanceLayoutStride(command.instanceStream.layout) != 0 &&
+               command.instanceStream.offsetBytes < buffer->capacity;
+      }
       default:
         return true;
     }
+  }
+  void recordSubmitted(const RenderCommand& command)
+  {
+    if (!isCommandResourceValid(command)) {
+      rejectedStaleCommands++;
+      return;
+    }
+    RenderCommand snapshot = command;
+    if (snapshot.commandType == CommandType::SetUniformMat4 &&
+        snapshot.uniformMat4.value != nullptr) {
+      submittedUniformMatrices.emplace_back();
+      std::array<float, 16>& retained = submittedUniformMatrices.back();
+      std::memcpy(retained.data(),
+                  snapshot.uniformMat4.value,
+                  retained.size() * sizeof(float));
+      snapshot.uniformMat4.value = retained.data();
+    } else if (snapshot.commandType == CommandType::WriteBuffer) {
+      const unsigned char* bytes =
+        static_cast<const unsigned char*>(snapshot.writeBuffer.data);
+      submittedBufferWrites.emplace_back(
+        bytes, bytes + snapshot.writeBuffer.sizeBytes);
+      snapshot.writeBuffer.data = submittedBufferWrites.back().data();
+    }
+    lastSubmitted.push_back(snapshot);
+    trackSubmitted(snapshot);
+  }
+  const BufferRecord* findBuffer(BufferHandle handle) const
+  {
+    std::unordered_map<uint32_t, BufferRecord>::const_iterator it =
+      liveBuffers.find(handle.slot);
+    if (!bufferHandles.isCurrent(handle) || it == liveBuffers.end() ||
+        it->second.generation != handle.generation) {
+      return nullptr;
+    }
+    return &it->second;
   }
 
 public:
@@ -105,11 +212,18 @@ public:
   {
     commandQueue.Reset();
     lastSubmitted.clear();
+    lastNonEmptySubmitted.clear();
+    submittedFrames.clear();
+    submittedUniformMatrices.clear();
+    submittedBufferWrites.clear();
     creates.clear();
+    liveBuffers.clear();
+    bufferHandles.clear();
     liveMeshes.clear();
     liveShaders.clear();
     liveTextures.clear();
     textureInfos.clear();
+    cubemapKinds.clear();
     meshHandles.clear();
     shaderHandles.clear();
     textureHandles.clear();
@@ -126,10 +240,20 @@ public:
     const size_t n = commandQueue.GetCommandCount();
     for (size_t i = 0; i < n; ++i) {
       const RenderCommand& command = commandQueue.GetCommand(i);
-      if (isCommandResourceValid(command)) {
-        lastSubmitted.push_back(command);
-      } else {
+      if (command.commandType != CommandType::ExecuteList) {
+        recordSubmitted(command);
+        continue;
+      }
+      // The list token itself, then its tokens flattened as the GPU runs them.
+      const RecordedCommandList* list = command.executeList.list;
+      if (list == nullptr || list->failed()) {
         rejectedStaleCommands++;
+        continue;
+      }
+      lastSubmitted.push_back(command);
+      ++executedListCount;
+      for (size_t index = 0; index < list->size(); ++index) {
+        recordSubmitted(list->at(index));
       }
     }
     if (!lastSubmitted.empty()) {
@@ -145,6 +269,14 @@ public:
   }
 
   void ClearCommandQueue() override { commandQueue.Reset(); }
+  size_t rejectedCommandCount() const override
+  {
+    return commandQueue.GetTotalRejected();
+  }
+  size_t commandHighWaterMark() const override
+  {
+    return commandQueue.GetHighWaterMark();
+  }
 
   int getFPS() const override { return fps; }
 
@@ -332,6 +464,33 @@ public:
     return handle;
   }
 
+  TextureHandle CreateCubemap(
+    const std::array<const unsigned char*, 6>& facesData,
+    int width,
+    int height,
+    int channels = 3) override
+  {
+    (void)facesData;
+    TextureHandle handle = textureHandles.allocate();
+    CreateRecord rec;
+    rec.kind = CreateRecord::Kind::CubemapData;
+    cubemapKinds[handle.slot] = true;
+    rec.slot = handle.slot;
+    rec.generation = handle.generation;
+    rec.width = width;
+    rec.height = height;
+    rec.channels = channels;
+    rec.filter = TextureFilter::Linear;
+    creates.push_back(rec);
+    liveTextures[handle.slot] = handle.generation;
+    TextureInfo info;
+    info.width = width;
+    info.height = height;
+    info.channels = channels;
+    textureInfos[handle.slot] = info;
+    return handle;
+  }
+
   bool ReplaceTexture(TextureHandle handle,
                       const unsigned char* data,
                       int width,
@@ -340,7 +499,8 @@ public:
                       const TextureOptions& options) override
   {
     (void)data;
-    if (!IsTextureValid(handle) || rejectNextTextureReplacement) {
+    if (!IsTextureValid(handle) || cubemapKinds.contains(handle.slot) ||
+        rejectNextTextureReplacement) {
       rejectNextTextureReplacement = false;
       return false;
     }
@@ -352,6 +512,41 @@ public:
     rec.height = height;
     rec.channels = channels;
     rec.filter = options.filter;
+    creates.push_back(rec);
+    TextureInfo info;
+    info.width = width;
+    info.height = height;
+    info.channels = channels;
+    textureInfos[handle.slot] = info;
+    return true;
+  }
+
+  bool ReplaceCubemap(TextureHandle handle,
+                      const std::array<const unsigned char*, 6>& faces,
+                      int width,
+                      int height,
+                      int channels) override
+  {
+    if (!IsTextureValid(handle) || !cubemapKinds.contains(handle.slot) ||
+        width <= 0 || width != height ||
+        (channels != 1 && channels != 3 && channels != 4) ||
+        rejectNextTextureReplacement) {
+      rejectNextTextureReplacement = false;
+      return false;
+    }
+    for (const unsigned char* face : faces) {
+      if (face == nullptr) {
+        return false;
+      }
+    }
+    CreateRecord rec;
+    rec.kind = CreateRecord::Kind::ReplaceCubemap;
+    rec.slot = handle.slot;
+    rec.generation = handle.generation;
+    rec.width = width;
+    rec.height = height;
+    rec.channels = channels;
+    rec.filter = TextureFilter::Linear;
     creates.push_back(rec);
     TextureInfo info;
     info.width = width;
@@ -373,6 +568,7 @@ public:
     creates.push_back(rec);
     liveTextures.erase(handle.slot);
     textureInfos.erase(handle.slot);
+    cubemapKinds.erase(handle.slot);
     return textureHandles.release(handle);
   }
 
@@ -477,11 +673,112 @@ public:
            it != liveFramebuffers.end() && it->second == handle.generation;
   }
 
+  BufferHandle CreateBuffer(BufferUsage usage, size_t capacityBytes) override
+  {
+    if (capacityBytes == 0) {
+      return {};
+    }
+    const BufferHandle handle = bufferHandles.allocate();
+    CreateRecord rec;
+    rec.kind = CreateRecord::Kind::CreateBuffer;
+    rec.slot = handle.slot;
+    rec.generation = handle.generation;
+    rec.vertexSize = capacityBytes;
+    rec.pathOrNote = usage == BufferUsage::Uniform ? "uniform" : "instance";
+    creates.push_back(rec);
+    BufferRecord buffer;
+    buffer.generation = handle.generation;
+    buffer.usage = usage;
+    buffer.capacity = capacityBytes;
+    liveBuffers[handle.slot] = buffer;
+    return handle;
+  }
+
+  bool DestroyBuffer(BufferHandle handle) override
+  {
+    if (findBuffer(handle) == nullptr) {
+      return false;
+    }
+    CreateRecord rec;
+    rec.kind = CreateRecord::Kind::DestroyBuffer;
+    rec.slot = handle.slot;
+    rec.generation = handle.generation;
+    creates.push_back(rec);
+    liveBuffers.erase(handle.slot);
+    return bufferHandles.release(handle);
+  }
+
+  bool IsBufferValid(BufferHandle handle) const override
+  {
+    return findBuffer(handle) != nullptr;
+  }
+
+  bool requestFramebufferReadback(std::uint32_t stream,
+                                  FramebufferHandle framebuffer,
+                                  int width,
+                                  int height) override
+  {
+    std::deque<PendingReadback>& pending = readbacks[stream];
+    if (!IsFramebufferValid(framebuffer) || width < 1 || height < 1 ||
+        pending.size() >= 2) {
+      return false;
+    }
+    PendingReadback copy;
+    copy.width = width;
+    copy.height = height;
+    std::unordered_map<uint32_t, std::array<unsigned char, 4>>::const_iterator
+      color = clearColors.find(framebuffer.slot);
+    if (color != clearColors.end()) {
+      copy.color = color->second;
+    }
+    pending.push_back(copy);
+    ++readbackRequestCount;
+    return true;
+  }
+
+  bool takeFramebufferReadback(std::uint32_t stream,
+                               bool wait,
+                               FrameReadback& out) override
+  {
+    (void)wait;
+    out = FrameReadback{};
+    std::unordered_map<uint32_t, std::deque<PendingReadback>>::iterator found =
+      readbacks.find(stream);
+    if (found == readbacks.end() || found->second.empty()) {
+      out.error = "No readback is pending";
+      return false;
+    }
+    const PendingReadback copy = found->second.front();
+    found->second.pop_front();
+    out.width = copy.width;
+    out.height = copy.height;
+    out.pixels.resize(static_cast<size_t>(copy.width) *
+                      static_cast<size_t>(copy.height) * 4);
+    for (size_t index = 0; index < out.pixels.size(); index += 4) {
+      std::memcpy(out.pixels.data() + index, copy.color.data(), 4);
+    }
+    return true;
+  }
+
+  void releaseReadbackStream(std::uint32_t stream) override
+  {
+    readbacks.erase(stream);
+  }
+
+  int getReadbackRequestCount() const { return readbackRequestCount; }
+  size_t getPendingReadbackCount(std::uint32_t stream) const
+  {
+    std::unordered_map<uint32_t, std::deque<PendingReadback>>::const_iterator
+      found = readbacks.find(stream);
+    return found == readbacks.end() ? 0 : found->second.size();
+  }
+
   bool wasInitialized() const { return initialized; }
   bool wasShutdown() const { return shutDown; }
   int getBeginFrameCount() const { return beginFrameCount; }
   int getEndFrameCount() const { return endFrameCount; }
   int getSubmitCount() const { return submitCount; }
+  size_t getExecutedListCount() const { return executedListCount; }
   size_t getRejectedStaleCommandCount() const { return rejectedStaleCommands; }
 
   void setRejectNextShaderReplacement(bool reject)
@@ -590,9 +887,12 @@ public:
     beginFrameCount = 0;
     endFrameCount = 0;
     submitCount = 0;
+    executedListCount = 0;
     lastSubmitted.clear();
     lastNonEmptySubmitted.clear();
     submittedFrames.clear();
+    submittedUniformMatrices.clear();
+    submittedBufferWrites.clear();
     commandQueue.Reset();
     creates.clear();
     rejectedStaleCommands = 0;

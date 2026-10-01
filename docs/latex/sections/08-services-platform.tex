@@ -14,25 +14,73 @@ The library owns reusable cross-cutting facilities:
         and \symbolref{KeyCode}; no Game types.
   \item \textbf{Console} --- parameterized \symbolref{CommandLine} branding,
         generic editing/history/alias/help behavior, generic host commands, and
-        \symbolref{CommandRegistry} metadata/completion.
+        \symbolref{CommandRegistry} metadata/completion. Output entries carry a
+        level, timestamp, and repeat count; view filters, scripts, log export,
+        clipboard editing, reverse search, watched variables, and F-key
+        bindings are generic console tools
+        (D-UI4). The console draws with its own plain palette, not
+        \texttt{UiTheme}.
   \item \textbf{System command line} --- \symbolref{SysCmdLine} owns
         help/version, window-dimension parsing, validation, and exit-code
         mechanics while accepting declarative application options.
   \item \textbf{Allocators} --- pool, arena, chain, and Debug allocation tools.
 \end{itemize}
 
+Arena and stack allocations align actual addresses. Empty backing storage may
+gain stronger alignment; live allocations never move. New chunks and typed
+pool storage honor over-aligned requests. The four-chunk cap, bulk clear and
+stack LIFO behavior remain unchanged. Byte alignment zero means one; other
+non-power-of-two alignments and overflowing sizes are rejected before use.
+An underlying allocation failure ends the process (D-F3).
+
+Command dispatch detaches one batch. Newly queued callbacks wait until the next
+top-level dispatch; nested dispatch is ignored. Retiring or replacing a
+registration cancels its unstarted callbacks. Clearing cancels pending work and
+the detached remainder while preserving the active callback. Exceptions
+propagate and discard the remainder, but dispatch can subsequently resume.
+The registry and input manager are non-copyable and non-movable owners.
+
+Configuration loads are transactional. Invalid or unreadable input disables
+saving, including destruction-time saving, without overwriting the original
+file. Repair or remove the file and successfully reload to restore persistence.
+A missing file permits first-run creation. Failure diagnostics go through the
+logger while it exists and fall back to standard error otherwise, so they do
+not depend on logger lifetime.
+
+Input callbacks retain at most 256 pending characters and 256 key events, counting
+dropped new events. Release polling reports frame edges. Console execution and
+public parsing preserve drive and UNC paths, quoted trailing separators, and
+empty arguments. Console-owned command callbacks retire before destruction.
+Logger retains a unique process instance with explicit runner shutdown and an
+executable-adjacent default file; tests can select an explicit path. Each
+session header records its start time and build, and file lines carry
+wall-clock timestamps. Messages logged before the first console attaches are
+kept (bounded, with an omitted count) and replayed into it once. Background
+threads may log: file and terminal writes are serialized, while only the
+owner thread forwards to the main-thread-affine console. Startup logs a build
+and machine report from the platform \symbolref{SystemInfo} query, followed by
+display, GPU, audio, package and guest-budget descriptions; subsystems log
+lifecycle milestones at info and behind-the-scenes detail at trace.
+
 \subsection{IllumoGame policy}
-IllumoGame owns \pathref{IllumoGame/envvars.json}, CA defaults (canvas,
-topology, ruleset, TPS, speed, and fade), CA option/help descriptors, and its
-required-module factory. \symbolref{CellGameModule} registers simulation,
-canvas, camera, ruleset, persistence, TPS, speed, and fade commands. The
-Release-visible F1 settings surface updates the same product variables. Generic
-Illumo services neither validate rulesets nor assume a game module exists.
+IllumoGame owns \pathref{IllumoGame/envvars.json} and its CA defaults (canvas,
+topology, ruleset, TPS, speed, and fade; \texttt{IllumoGameConfig::ApplyDefaults},
+which its program applies once settings load). \symbolref{CanvasScene}
+registers simulation, canvas, camera, ruleset, persistence, TPS, speed, and
+fade commands while it is active. The Release-visible F1 settings surface (one
+menu per scene, sharing \symbolref{SimulatorSettings}) updates the same product
+variables. Generic Illumo services neither validate rulesets nor assume a game
+program exists.
 
 \subsection{Foundation}
 Supported lightweight headers include macros, \pathref{MathTypes.h},
 \pathref{ArrayQueue.h}, \pathref{RollingMetric.h}, and engine-owned
-\pathref{BuildInfo.h}.
+\pathref{BuildInfo.h}. Its values are defined by a source that
+\pathref{cmake/IllumoVersion.cmake} regenerates on every build (D-F2): the
+release from \pathref{VERSION.txt}, the first-parent commits since that file
+last changed, the commit and a dirty flag, giving \texttt{v26.09\_12} for
+display and \texttt{v26.09\_12 (1f709073, dirty)} for logs and
+\texttt{--version}.
 
 \begin{statusbox}
 \pathref{MacroDefs.h} still pulls Windows headers on \texttt{\_WIN32} for
@@ -45,7 +93,9 @@ measured include cost, collisions, or portability work justifies it.
 dialogs behind the public \symbolref{SaveLoad} contract:
 \begin{itemize}
   \item Windows \pathref{WinMain.cpp}/\pathref{WinSaveLoad.cpp} is supported.
-  \item Linux and macOS sources remain unsupported stale scaffolding.
+  \item Linux sources target Ubuntu 24.04 x86\_64 X11/XWayland with gtkmm-3
+        dialogs and clipboard; they are not supported until native smoke.
+        macOS is not targeted; its scaffold has been removed.
 \end{itemize}
 Platform bootstrap calls \symbolref{CreateIllumoApplication} and then the
 engine-owned \symbolref{RunIllumoApplication}. Each platform implements the
@@ -54,6 +104,196 @@ and filename defaults through \symbolref{SaveLoadDialogSpec}. Source presence
 and CMake selection do not establish support: a port still requires native
 configure, build, launch, tests, rendering/input, dialogs, and shutdown
 validation.
+
+An engine-internal \texttt{PixelWindow} provides secondary GLFW windows
+without a client API for CPU-drawn tools (the detached console, D-UI5). GLFW
+handles creation, input, and native move/resize/close; a per-OS presenter blits
+the image (Windows GDI; Linux reports it unsupported). No second OpenGL
+context is created.
+
+SaveLoad strings and returned paths use UTF-8. Windows adapts them to wide common
+dialogs with a 32,768-character path buffer. Codecs convert UTF-8 paths explicitly
+and contain encoding failures. CMake rejects Apple targets because no macOS
+platform implementation is retained.
+
+Product save codecs use \texttt{AtomicFile::write}: exclusively create a sibling
+staging file, encode, check write/flush/close, then replace the destination.
+Reported failures preserve prior bytes and clean only owned staging files.
+Windows replacement uses \texttt{MoveFileExW} without cross-volume copy fallback;
+POSIX \texttt{rename} replaces on the same filesystem and fails with
+\texttt{EXDEV} across devices, with no copy fallback. Formats stay
+product-owned and unchanged. This is not a power-loss durability guarantee.
+
+The shared \texttt{.ilsc} format 2 parser (\texttt{IlscCodec} in
+\texttt{Illumo::Content}) validates numeric destination ranges before
+narrowing: float fields reject non-finite values and finite doubles outside the
+float range; integer fields check their JSON type and range before conversion.
+Version and color validation therefore cannot be bypassed by integer wrapping.
+Parsing is transactional: rejected input leaves the destination document
+untouched. Format 1 files are refused with an explicit message. Accepted float
+values are written back with the shortest round-trip form of the stored
+\texttt{float}, so encoding the same document twice is byte-identical.
+
+Node identifiers are opaque strings of at most 128 bytes, unique within the
+document; existing ids and parent references are preserved, including long
+numeric-looking ids. New nodes take the first unused \texttt{n} plus decimal
+counter from \texttt{SceneInstance::uniqueId}, checked against every existing
+id. The node table is bounded (\texttt{SceneDocument::kMaximumNodes}), so the
+search always ends.
+
+\subsection{Packages and the virtual file tree (D-E20 to D-E23)}
+\texttt{IllumoRuntime} launches a package, not a loose module:
+\begin{itemize}
+  \item \texttt{--app <name>} resolves \pathref{apps/<name>/} (a directory)
+        or \pathref{apps/<name>.ilpk} beside the runtime; the game is the
+        default. \texttt{--package <dir|file.ilpk>} runs any other package.
+        The package must be of kind \texttt{app}; its \texttt{illumo.json}
+        title names the window, and its module and worker \texttt{.wasm}
+        bytes are read through the file tree.
+  \item Every package in \pathref{packages/} beside the runtime (directories
+        holding \texttt{illumo.json}, and \texttt{*.ilpk} files) is discovered
+        in file-name order; unreadable packages and duplicate ids are skipped
+        with warnings.
+  \item \texttt{--mount <dir|file.ilpk>} (repeatable) mounts one more package;
+        a missing path or an id already mounted refuses to start.
+  \item \texttt{--project <dir>} mounts a loose directory writable at
+        \texttt{/project}; a missing directory refuses to start.
+        \texttt{--mount} and \texttt{--project} are rejected with
+        \texttt{--game}.
+\end{itemize}
+\texttt{PackageMounts::mountAll} assembles the tree: \texttt{/engine} from the
+runtime \pathref{Assets/}, \texttt{/app} from the launched package under the
+overlays of every package that targets it (stacked by priority, dependency
+order, then id), \texttt{/packages/<id>} for every package whose dependencies
+resolve, and the optional \texttt{/project}. The mount table is an immutable
+snapshot swapped under a mutex; open files keep their backend alive after an
+unmount. Directory backends compare exact on-disk names, so lookups are
+case-sensitive everywhere and a link that leaves the root does not resolve.
+Writes reach only \texttt{/project}, through \texttt{AtomicFile}, and
+\texttt{*.wasm} and \texttt{illumo.json} are refused there.
+
+The host console command \texttt{vfs} (registered beside \texttt{wasm\_stats}
+when a tree exists) runs \texttt{VfsConsole}:
+\texttt{vfs mounts}, \texttt{vfs ls <path>}, \texttt{vfs tree <path> [depth]}
+(capped at 400 lines), \texttt{vfs stat <path>} (kind, size, supplying
+package), and \texttt{vfs cat <path> [bytes]} (text, or a hex dump for binary
+data, at most 64\,KiB). None of them prints a host path.
+
+The host also publishes the tree to engine tools as the core, read-only
+\symbolref{IFileTreeSource} \texttt{IllumoContext::fileTree}
+(\texttt{VfsTreeSource}, at most 4,096 entries per listing). In debug-tools
+builds, \symbolref{DebugOverlay}'s \texttt{files [path|off]} command opens a browser over
+it (\texttt{FileTreeOverlay}, drawn with \texttt{GuiFileTree}). It is driven by
+the keyboard and wheel only, and consumes that input before the product sees
+it; the footer shows the selection's size and supplying package.
+
+\subsection{Guest file protocol v2 (D-E23, D-E24)}
+\texttt{GuestFileRequest} version 2 adds the \texttt{Mounted} area (absolute
+virtual paths; \texttt{Package} remains an alias for \texttt{/app}) and the
+actions \texttt{List} (a cursor and a page of at most 256 entries),
+\texttt{Stat} (kind, size, package id), \texttt{Import} (copy a Selected grant
+into \texttt{/project/<path>}), and \texttt{Pack} (\texttt{/project} into an
+\texttt{.ilpk} at a writable Selected grant, on a dedicated host pack worker).
+Version 1 requests are refused; the host and guest SDK ship together. Mounted
+transfers use blocks up to 1\,MiB; Package, Storage and Selected files keep
+64\,KiB. \texttt{GuestFiles} holds 16 tasks in flight.
+
+Reading and listing mounted paths need the \texttt{Assets} capability. The new
+\texttt{ProjectFiles} capability (bit 9; \texttt{KnownCapabilities} is
+\texttt{(1 <{}< 10) - 1}) is offered only while \texttt{/project} is mounted;
+project writes, Import and Pack need it, and Import and Pack also need
+\texttt{SelectedFiles}. Project writes stage in memory and commit through the
+file tree under an incrementally maintained quota
+(\texttt{WasmFileLimits::projectBytes}). Pack requires a valid
+\texttt{illumo.json} at the project root; a replace that fails, for example
+because the target archive is mounted, reports \texttt{IoError}.
+
+The guest SDK wraps this as \texttt{GuestFileTree} (list, stat, read, write,
+import, pack with completion callbacks). \texttt{GuestVfsAssets} replaces
+\texttt{GuestPackageAssets} as AssetManager's guest byte source: pinned
+\texttt{packageAssets()} preloads, fetch sets held until released, a
+least-recently-used byte budget (256\,MiB by default), and app-supplied bytes
+under \texttt{/local/<name>}. \texttt{GuestSceneFetches} (in
+\texttt{IllumoGuestContent}) fetches a scene's references, then the MTL
+libraries its OBJ files declare, tolerating missing libraries.
+
+\subsection{Text entry and file-tree helpers (D-UI6)}
+\texttt{Illumo/Gui} gains two value-state helpers for native and guest code.
+\texttt{GuiTextEdit} is single-line UTF-8 editing: caret and selection at
+code-point boundaries, word jumps, a byte limit clipped at a code point, Enter
+or Tab commit, Escape cancel, and clipboard hand-off (copy and cut return text;
+paste raises a request the caller completes). While active it consumes the
+key and character queues it reads (\texttt{InputManager::getCharQueue}), so
+product shortcuts do not fire. \texttt{GuiKit::drawTextField} draws it.
+\texttt{GuiFileTree} holds expansion state and the listings received so far,
+names directories still to list (\texttt{takePendingListings}), and flattens
+rows depth first with an explicit stack (directories first, at most 20,000
+rows); \texttt{GuiKit::drawTreeRow} draws each row. Neither is a retained
+widget tree.
+
+\subsection{Engine brand (D-UI14)}
+\texttt{GuiEngineBrand} draws the Illumo brand from images in
+\path{Illumo/Assets/Branding}, which a guest reads as \texttt{/engine/Branding}.
+Guest textures have no mipmaps, so \path{tools/make_brand_assets.py} crops the
+kit's logos and pre-sizes them near the size they are drawn at.
+\texttt{GuiEngineSplash} owns its two layers, its clock and its skip input, and
+\texttt{RuntimeShell} plays it on every interactive launch
+(section~\ref{sec:runtime} describes how it holds the program).
+\texttt{GuiEngineBadge} holds only its image and draws a `Powered by'' label
+over the flat wordmark into the caller's visual; every \texttt{GuestProgram}
+preloads that image, and CSim's title screen draws the badge in its lower left
+corner. A missing image ends the splash at once and leaves the badge undrawn.
+
+\subsection{Plain tool look and detachable panels (D-UI7, D-E27)}
+IllEd and IllMeshViewer draw with \texttt{GuiToolStyle}: a neutral palette in
+the spirit of the console's, flat rectangles, lines and text, fixed tool
+metrics and no animation. Their panels live in one \texttt{GuiPanelDock} per
+app window, which stacks them in left and right columns with draggable
+splitters and gives each a title bar that hides it or pops it out; dragging a
+title past the window edge tears it off, and a detached panel docks back from
+its title bar, its close box or View \textgreater{} Reset Layout. The dock
+never draws content. Each panel draws into a \texttt{GuiPanelPlacement}
+(content rectangle and surface) and reads its pointer through
+\texttt{GuiPanelPointer}, which samples the main window or the panel's own
+window and ignores presses the menu bar or dock chrome took. The layout is
+saved in the \texttt{panelLayout} setting.
+
+Extra windows come from \texttt{IllumoContext::panelSurfaces}
+(\texttt{IPanelSurfaces}): surface 0 is the main window, other surfaces are
+opened by id and report size, screen origin, pointer and window events, and
+keys stay in the one input queue. Guests reach it through the
+\texttt{Windows} capability; the host renders a changed surface offscreen,
+reads it back asynchronously and presents it in a \texttt{GLFW\_NO\_API}
+window one frame late (D-R27). Hosts without windows omit it, and every panel
+stays docked.
+
+\subsection{Sound effects and music (D-E28, D-E32)}
+\texttt{IllumoContext::audio} (\texttt{IAudio}) plays sound effects and music:
+a product registers a decoded \texttt{AudioClip} once and plays it by
+\texttt{SoundHandle}, each play an independent voice with its own volume, pan
+and pitch. A play may loop and fade in; \texttt{stop} ends one sound's voices,
+optionally fading them out, and \texttt{setVolume} changes their gain, so a
+music track can loop behind a screen and follow a volume setting. Looping
+voices are the last replaced when every voice is busy.
+\texttt{AudioDecoder} turns WAV, FLAC or MP3 bytes into float
+samples at the source rate; \texttt{AudioDevice}, the native implementation,
+mixes voices on the default output device and converts each to the device's
+rate. Both wrap vendored miniaudio, which no public header exposes, and the
+decoder reaches only miniaudio's memory entry points.
+
+Guests decode their own package files and send the samples through the
+\texttt{Audio} capability's service, so the host never parses a guest's
+encoded audio. \texttt{GuestAudio} implements \texttt{IAudio} over that
+service with guest-local handles; its requests complete at once and their
+completions are discarded. A clip larger than one service record (a music
+track) travels in chunks over several exchanges, held in order in a guest
+backlog, and the host registers it when the last chunk lands. The runtime
+opens one output device, except for captures and benchmarks, and releases a
+guest's sounds when the guest retires. Without an output, \texttt{audio} is
+null and products run silently. CSim's cues (\texttt{CSimSounds}) scale with
+its \texttt{soundVolume} setting; its title screen loops the main-menu
+music, and its canvas loops an edit track only while it is in EDIT, both at
+the separate \texttt{musicVolume} setting.
 
 \subsection{Third-party and runtime data}
 Dependencies remain vendored under \pathref{Illumo/thirdparty/}. Illumo owns

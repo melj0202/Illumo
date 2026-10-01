@@ -1,23 +1,24 @@
 # Source-package maps
 
-These files summarize current ownership across the sibling Illumo and
-IllumoGame projects. They are documentation, not build inputs.
+These files summarize current ownership across the Illumo library and its
+three in-tree applications: IllumoGame, IllEd, and IllMeshViewer. They are
+documentation, not build inputs.
 
 | File | Area |
 |---|---|
 | `source-layout.md` | Workspace, library, product, and test trees |
 | `app.md` | Illumo application definition, generic runner, and process loop |
-| `engine.md` | Illumo host, context, modules, and failure semantics |
+| `engine.md` | Illumo host, context, frame phases, the debug overlay, and failure semantics |
 | `scene.md` | Persistent nodes, hierarchy, transforms, and render attachments |
+| `content.md` | Packages, `illumo.json`, `.ilpk`, the virtual file tree, `.ilsc` format 2, and `SceneInstance` |
 | `game.md` | IllumoGame canvas, simulation, editing, and persistence |
-| `illed.md` | IllEd world editor, SceneGraph documents, and `.ilsc` |
+| `illed.md` | IllEd world editor and its scene documents |
 | `rendering.md` | Public renderer boundary and private OpenGL implementation |
 | `services.md` | Generic Illumo services versus IllumoGame policy |
 | `foundation.md` | Dependency-light public utilities |
 | `assets.md` | Illumo runtime files and product configuration staging |
 | `platform.md` | Illumo platform contract and port map |
-| `platform-linux.md` | Linux scaffold status |
-| `platform-macos.md` | macOS scaffold status |
+| `platform-linux.md` | Linux port status, packages, build, and smoke |
 | `tests.md` | Split test ownership and aggregate workflow |
 
 The canonical architecture remains `../architecture-consensus.md`. Operational

@@ -15,6 +15,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <iterator>
 #include <string>
+#include <thread>
 #include <vector>
 
 static TestCounters g;
@@ -255,6 +256,7 @@ testEnvVarsTypesAndPersistence()
     env.setVar("integer", 7);
     env.setVar("long", 8L);
     env.setVar("boolean", true);
+    env.setVar("showMemory", true);
     env.setVar("unsignedInt", static_cast<unsigned int>(9));
     env.setVar("unsignedLong", static_cast<unsigned long>(10));
     env.setVar("unsignedLongLong", static_cast<unsigned long long>(11));
@@ -292,6 +294,9 @@ testEnvVarsTypesAndPersistence()
 
   {
     EnvVars reloaded(configPath);
+    testTrue(g,
+             reloaded.getVar("showMemory").valueAsBool,
+             "memory visibility persists across reload");
     testEqInt(g,
               static_cast<int>(reloaded.getVar("unsignedLong").valueAsLong),
               10,
@@ -316,10 +321,83 @@ testEnvVarsTypesAndPersistence()
 }
 
 static void
+testEnvVarsFailedLoadPreservation()
+{
+  testSection("EnvVars: failed loads preserve disk and live state");
+  const std::filesystem::path path = "test-envvars-recovery.json";
+  const std::string invalid[] = { "{broken",
+                                  "[]",
+                                  "null",
+                                  "{\"a\":\"new\",\"z\":{\"value\":7}}",
+                                  "{\"a\":\"new\"}garbage",
+                                  "{\"a\":\"new\"}{}" };
+  for (const std::string& contents : invalid) {
+    {
+      std::ofstream fixture(path);
+      fixture << contents;
+    }
+    {
+      EnvVars env(path);
+      testTrue(
+        g, env.getVars().empty(), "failed initial load publishes no values");
+      env.setVar("a", "old");
+      env.load();
+      testTrue(
+        g, env.getVar("a").value == "old", "failed reload is transactional");
+      env.save();
+    }
+    std::ifstream preserved(path);
+    const std::string bytes((std::istreambuf_iterator<char>(preserved)),
+                            std::istreambuf_iterator<char>());
+    testTrue(g,
+             bytes == contents,
+             "explicit save and destruction preserve rejected bytes");
+  }
+  {
+    EnvVars env(path);
+    {
+      std::ofstream repaired(path);
+      repaired << "{\"a\":\"repaired\"}";
+    }
+    env.load();
+    testTrue(g, env.getVar("a").value == "repaired", "corrected file reloads");
+    env.setVar("a", "saved");
+  }
+  {
+    EnvVars env(path);
+    testTrue(g,
+             env.getVar("a").value == "saved",
+             "successful reload re-enables persistence");
+  }
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  {
+    EnvVars env(path);
+    env.setVar("created", "yes");
+  }
+  {
+    EnvVars env(path);
+    testTrue(g,
+             env.getVar("created").value == "yes",
+             "missing file supports first-run persistence");
+  }
+  std::filesystem::remove(path, error);
+  std::filesystem::create_directory(path, error);
+  {
+    EnvVars env(path);
+    env.setVar("a", "ignored");
+    env.save();
+  }
+  testTrue(
+    g, std::filesystem::is_directory(path), "unreadable path remains intact");
+  std::filesystem::remove(path, error);
+}
+
+static void
 testEnvVarsApplicationPath()
 {
   testSection("EnvVars: application configuration ignores working directory");
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
   const std::filesystem::path originalDirectory =
     std::filesystem::current_path();
   const std::filesystem::path configPath = EnvVars::ApplicationConfigPath();
@@ -340,7 +418,7 @@ testEnvVarsApplicationPath()
     configPath == changedConfigPath,
     "application configuration path is independent of working directory");
 #else
-  testTrue(g, true, "Windows production path is covered on Windows");
+  testTrue(g, true, "Windows/Linux production path is covered on those hosts");
 #endif
 }
 
@@ -420,6 +498,75 @@ testCommandRegistryQueueLifecycle()
 }
 
 static void
+testCommandRegistryReentrancy()
+{
+  testSection("CommandRegistry: detached batches and callback retirement");
+  CommandRegistry registry;
+  int calls = 0;
+  registry.RegisterCommand(
+    "later", [&calls](const std::vector<std::string>&) { ++calls; });
+  registry.RegisterCommand(
+    "enqueue", [&](const std::vector<std::string>& args) {
+      for (int index = 0; index < 256; ++index) {
+        registry.QueueCommand("later");
+      }
+      registry.ExecuteQueue();
+      testEqInt(g, calls, 0, "nested execution defers newly queued work");
+      testTrue(g,
+               args.size() == 1u && args[0] == "stable",
+               "enqueue preserves active arguments");
+      registry.UnregisterCommand("enqueue");
+      testTrue(
+        g, args[0] == "stable", "self retirement preserves active callback");
+    });
+  registry.QueueCommand("enqueue", { "stable" });
+  registry.ExecuteQueue();
+  testEqInt(g, calls, 0, "new commands wait for next dispatch");
+  registry.ExecuteQueue();
+  testEqInt(g, calls, 256, "next dispatch executes new commands exactly once");
+
+  registry.QueueCommand("later");
+  registry.UnregisterCommand("later");
+  registry.RegisterCommand(
+    "later", [&calls](const std::vector<std::string>&) { ++calls; });
+  registry.QueueCommand("later");
+  registry.ExecuteQueue();
+  testEqInt(g, calls, 257, "replacement does not revive retired queued work");
+
+  registry.RegisterCommand("retire", [&](const std::vector<std::string>&) {
+    registry.UnregisterCommand("later");
+  });
+  registry.QueueCommand("retire");
+  registry.QueueCommand("later");
+  registry.ExecuteQueue();
+  testEqInt(g, calls, 257, "retirement cancels remaining detached work");
+
+  registry.RegisterCommand(
+    "later", [&calls](const std::vector<std::string>&) { ++calls; });
+  registry.RegisterCommand("clear", [&](const std::vector<std::string>& args) {
+    registry.QueueCommand("later");
+    registry.ClearQueue();
+    testTrue(
+      g, args[0] == "stable", "clear preserves active callback arguments");
+  });
+  registry.QueueCommand("clear", { "stable" });
+  registry.QueueCommand("later");
+  registry.ExecuteQueue();
+  registry.ExecuteQueue();
+  testEqInt(g, calls, 257, "clear cancels pending work and batch remainder");
+
+  registry.RegisterCommand("requeue", [&](const std::vector<std::string>&) {
+    registry.QueueCommand("later");
+  });
+  registry.QueueCommand("requeue");
+  registry.ExecuteQueue();
+  testEqInt(
+    g, calls, 257, "work queued by a callback waits for the next batch");
+  registry.ExecuteQueue();
+  testEqInt(g, calls, 258, "the next dispatch runs the queued work");
+}
+
+static void
 testLoggerLevelsAndSinks()
 {
   testSection("Logger: levels, console sink, file sink, lifecycle");
@@ -442,7 +589,9 @@ testLoggerLevelsAndSinks()
   CommandRegistry registry;
   CommandLine console(&env, &registry, &window, &renderer);
 
-  testTrue(g, Logger::initLogger(&env, &console), "logger initializes");
+  testTrue(g,
+           Logger::initLogger(&env, &console, "log.txt"),
+           "logger initializes at explicit test path");
   testTrue(g, Logger::initLogger(), "second initialization is harmless");
   testTrue(g,
            Logger::getCommandLine() == &console,
@@ -505,9 +654,90 @@ testLoggerLevelsAndSinks()
 }
 
 static void
+testLoggerStartupBacklog()
+{
+  testSection("Logger: startup backlog replays into the first console");
+  Logger::shutdownLogger();
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  env.setVar("logLevel", 3);
+  Camera camera(glm::vec2(1.0f, 1.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  CommandRegistry registry;
+  CommandLine console(&env, &registry, &window, &renderer);
+
+  testTrue(g,
+           Logger::initLogger(&env, nullptr, "log.txt"),
+           "logger starts without a console");
+  testTrue(g,
+           Logger::getLogFilePath() == std::filesystem::path("log.txt"),
+           "logger reports its file");
+  Logger::LogInfo("early-info");
+  Logger::LogWarning("early-warning");
+  Logger::LogTrace("early-trace-filtered");
+  std::thread worker([]() { Logger::LogInfo("early-worker-info"); });
+  worker.join();
+  Logger::setContext(&env, &console);
+  testTrue(g,
+           historyContains(console, "early-info"),
+           "info logged before the console is replayed");
+  testTrue(g,
+           historyContains(console, "early-warning"),
+           "warning logged before the console is replayed");
+  testTrue(g,
+           historyContains(console, "early-worker-info"),
+           "a background thread's early message is replayed");
+  testTrue(g,
+           !historyContains(console, "early-trace-filtered"),
+           "the log level still filters the backlog");
+
+  std::thread lateWorker([]() { Logger::LogInfo("late-worker-info"); });
+  lateWorker.join();
+  testTrue(g,
+           !historyContains(console, "late-worker-info"),
+           "background threads never write to the attached console");
+
+  const size_t attachedHistory = console.getHistory().size();
+  Logger::setContext(&env, nullptr);
+  Logger::LogInfo("detached-info");
+  Logger::setContext(&env, &console);
+  testEqSize(g,
+             console.getHistory().size(),
+             attachedHistory,
+             "re-attaching a console does not replay again");
+  Logger::shutdownLogger();
+
+  Logger::initLogger(&env, nullptr, "log.txt");
+  for (size_t index = 0; index < Logger::kStartupBacklogLimit + 5; ++index) {
+    Logger::LogInfo("overflow-" + std::to_string(index));
+  }
+  CommandLine second(&env, &registry, &window, &renderer);
+  Logger::setContext(&env, &second);
+  testTrue(g,
+           historyContains(second, "5 earlier startup messages"),
+           "overflowing the backlog reports the omitted count");
+  Logger::shutdownLogger();
+
+  std::ifstream logFile("log.txt");
+  const std::string logContents((std::istreambuf_iterator<char>(logFile)),
+                                std::istreambuf_iterator<char>());
+  testTrue(g,
+           logContents.find("late-worker-info") != std::string::npos,
+           "background thread messages reach the file");
+  testTrue(g,
+           logContents.find("Session ") != std::string::npos,
+           "the file starts each session with a header");
+}
+
+static void
 testCommandLineCoreHeadless()
 {
-  testSection("CommandLineCore: headless parsing, editing, aliases, and execution");
+  testSection(
+    "CommandLineCore: headless parsing, editing, aliases, and execution");
   EnvVars env;
   CommandRegistry registry;
   CommandLineCore core(&env, &registry, "HeadlessTest");
@@ -537,29 +767,81 @@ testCommandLineCoreHeadless()
   // Command execution
   core.ExecuteCommand();
   testTrue(g, core.getCurrentInput().empty(), "input cleared after execution");
-  testEqInt(g, static_cast<int>(core.getHistory().size()) >= 3, 1, "history has new items");
+  testEqInt(g,
+            static_cast<int>(core.getHistory().size()) >= 3,
+            1,
+            "history has new items");
 
   // Aliases
   core.SetAlias("greet", "set greeting welcome");
   testTrue(g, core.HasAlias("greet"), "alias registered");
-  testTrue(g, core.GetAlias("greet") == "set greeting welcome", "alias expansion retrieved");
+  testTrue(g,
+           core.GetAlias("greet") == "set greeting welcome",
+           "alias expansion retrieved");
 
   for (char c : std::string("greet")) {
     core.AddCharacter(static_cast<unsigned int>(c));
   }
   core.ExecuteCommand();
-  testTrue(g, env.getVar("greeting").value == "welcome", "alias executed and set env var");
+  testTrue(g,
+           env.getVar("greeting").value == "welcome",
+           "alias executed and set env var");
 
   core.RemoveAlias("greet");
   testTrue(g, !core.HasAlias("greet"), "alias removed");
 
   // Parsing helpers
-  std::vector<std::string> args = core.ParseCommandArgs("foo \"bar baz\" qux", " ");
+  std::vector<std::string> args =
+    core.ParseCommandArgs("foo \"bar baz\" qux", " ");
   testEqInt(g, static_cast<int>(args.size()), 3, "parsed 3 quoted args");
   testTrue(g, args[1] == "bar baz", "quoted arg preserved");
 
+  std::vector<std::string> received;
+  registry.RegisterCommand(
+    "pathprobe",
+    [&received](const std::vector<std::string>& values) { received = values; });
+  const std::string pathCommand =
+    R"(pathprobe C:\Users\file "C:\two words\" \\server\share\ "" escaped\ value)";
+  core.ExecuteSingleCommand(pathCommand);
+  registry.ExecuteQueue();
+  testEqSize(g, received.size(), 5, "execution preserves all path arguments");
+  if (received.size() == 5) {
+    testTrue(
+      g, received[0] == R"(C:\Users\file)", "unquoted Windows path survives");
+    testTrue(g,
+             received[1] == "C:\\two words\\",
+             "quoted trailing separator survives");
+    testTrue(g,
+             received[2] == "\\\\server\\share\\",
+             "UNC prefix and trailing separator survive");
+    testTrue(g, received[3].empty(), "empty quoted argument survives");
+    testTrue(g, received[4] == "escaped value", "escaped separator survives");
+  }
+  const std::vector<std::string> parsedPaths =
+    core.ParseCommandArgs(pathCommand, " \t");
+  testTrue(
+    g,
+    parsedPaths.size() == received.size() + 1 &&
+      std::equal(received.begin(), received.end(), parsedPaths.begin() + 1),
+    "public parsing and command execution use the same grammar");
+
   std::vector<std::string> chains = core.SplitCommandChain("cmd1; cmd2; cmd3");
   testEqInt(g, static_cast<int>(chains.size()), 3, "split 3 chained commands");
+  for (const char* path : { "C:\\", "\\\\server\\share\\" }) {
+    const std::string command =
+      std::string("pathprobe ") + path + "; set chain_result yes";
+    for (char character : command) {
+      core.AddCharacter(static_cast<unsigned int>(character));
+    }
+    core.ExecuteCommand();
+    registry.ExecuteQueue();
+    testTrue(g,
+             received == std::vector<std::string>{ path },
+             "Windows path separator does not swallow command-chain separator");
+    testTrue(g,
+             env.getVar("chain_result").value == "yes",
+             "command after Windows path executes");
+  }
 
   // Deep/recursive alias depth limit
   core.SetAlias("loopA", "loopB");
@@ -573,6 +855,106 @@ testCommandLineCoreHeadless()
     }
   }
   testTrue(g, foundRecursionLimit, "recursive alias depth limit safely caught");
+}
+
+// Captures clipboard traffic so tests never touch the real OS clipboard.
+class ClipboardProbeConsole final : public CommandLineCore
+{
+public:
+  ClipboardProbeConsole(IEnvVars* vars, CommandRegistry* registry)
+    : CommandLineCore(vars, registry, "ClipboardTest")
+  {
+  }
+  bool writeClipboard(const std::string& text) override
+  {
+    stored = text;
+    ++writes;
+    return true;
+  }
+  std::string readClipboard() const override { return stored; }
+  std::string stored;
+  int writes = 0;
+};
+
+static void
+typeInto(CommandLineCore& core, const std::string& text)
+{
+  for (char character : text) {
+    core.AddCharacter(static_cast<unsigned int>(character));
+  }
+}
+
+static void
+testCommandLineCoreClipboard()
+{
+  testSection("CommandLineCore: copy, cut, paste, and copy command");
+  EnvVars env;
+  CommandRegistry registry;
+  ClipboardProbeConsole core(&env, &registry);
+
+  testTrue(g, !core.CopySelection(), "copying empty input does nothing");
+  typeInto(core, "echo alpha beta");
+  testTrue(g,
+           core.CopySelection() && core.stored == "echo alpha beta",
+           "copy without selection takes the whole input");
+  core.MoveCursorLeft(true, true);
+  testTrue(g,
+           core.CopySelection() && core.stored == "beta",
+           "copy with a selection takes only the selection");
+  testTrue(g, core.CutSelection(), "cut succeeds with a selection");
+  testTrue(g,
+           core.getCurrentInput() == "echo alpha " && core.stored == "beta",
+           "cut removes the selected text");
+  testTrue(g, core.Paste(), "paste inserts clipboard text");
+  testTrue(g,
+           core.getCurrentInput() == "echo alpha beta",
+           "paste restores the cut text at the caret");
+
+  core.ClearInput();
+  core.stored = "echo one\r\n\r\necho two\n\techo\x01three\n";
+  core.Paste();
+  testTrue(g,
+           core.getCurrentInput() == "echo one; echo two;  echothree",
+           "pasted line breaks become command separators");
+  core.ExecuteCommand();
+  testTrue(g,
+           core.getCommandHistory().back() == "echo one; echo two;  echothree",
+           "pasted chain executes as one history entry");
+
+  core.ClearInput();
+  core.stored = std::string(MAX_CHARS_PER_LINE * 2, 'x');
+  core.Paste();
+  testEqSize(g,
+             core.getCurrentInput().size(),
+             MAX_CHARS_PER_LINE - 1u,
+             "paste respects the input capacity");
+  core.ClearInput();
+
+  core.logNormal("copy-me-1");
+  core.logNormal("copy-me-2");
+  const int writesBefore = core.writes;
+  core.ExecuteSingleCommand("copy 2");
+  testTrue(g,
+           core.writes == writesBefore + 1 &&
+             core.stored == "copy-me-2\n> copy 2",
+           "copy <n> copies the newest visible lines");
+  core.ExecuteSingleCommand("copy all");
+  testTrue(g,
+           core.stored.find("ClipboardTest Developer Console") == 0,
+           "copy all starts at the oldest line");
+  core.ExecuteSingleCommand("copy zero");
+  bool sawUsage = false;
+  for (const CommandLineCore::historyBuffer& line : core.getHistory()) {
+    sawUsage =
+      sawUsage || line.content.find("Usage: copy") != std::string::npos;
+  }
+  testTrue(g, sawUsage, "copy validates its argument");
+
+  CommandLineCore plain(&env, &registry, "NoClipboard");
+  typeInto(plain, "text");
+  testTrue(g,
+           !plain.CopySelection() && !plain.Paste(),
+           "base core reports no clipboard");
 }
 
 static int
@@ -597,15 +979,24 @@ registerServiceTests(IllumoTestRegistry& registry)
                []() { return runServiceCase(testCameraPerspectiveLookAt); });
   registry.add("Illumo.EnvVars.TypesAndPersistence",
                []() { return runServiceCase(testEnvVarsTypesAndPersistence); });
+  registry.add("Illumo.EnvVars.FailedLoadPreservation", []() {
+    return runServiceCase(testEnvVarsFailedLoadPreservation);
+  });
   registry.add("Illumo.EnvVars.ApplicationPath",
                []() { return runServiceCase(testEnvVarsApplicationPath); });
   registry.add("Illumo.CommandRegistry.Metadata",
                []() { return runServiceCase(testCommandRegistryMetadata); });
+  registry.add("Illumo.CommandRegistry.Reentrancy",
+               []() { return runServiceCase(testCommandRegistryReentrancy); });
   registry.add("Illumo.CommandRegistry.QueueLifecycle", []() {
     return runServiceCase(testCommandRegistryQueueLifecycle);
   });
   registry.add("Illumo.Logger.LevelsAndSinks",
                []() { return runServiceCase(testLoggerLevelsAndSinks); });
+  registry.add("Illumo.Logger.StartupBacklog",
+               []() { return runServiceCase(testLoggerStartupBacklog); });
   registry.add("Illumo.CommandLineCore.Headless",
                []() { return runServiceCase(testCommandLineCoreHeadless); });
+  registry.add("Illumo.CommandLineCore.Clipboard",
+               []() { return runServiceCase(testCommandLineCoreClipboard); });
 }

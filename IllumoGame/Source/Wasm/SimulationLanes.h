@@ -1,0 +1,443 @@
+#pragma once
+
+#include "Game/SimulationLaneTransport.h"
+#include "Game/SimulationRunner.h"
+#include "Game/SparseCellGrid.h"
+#include "Rulesets/RuleSetRegistry.h"
+#include <Illumo/Foundation/RollingMetric.h>
+#include <IllumoGuest/Wire.h>
+#include <algorithm>
+#include <chrono>
+#include <memory>
+#include <span>
+#include <string>
+#include <vector>
+
+class RuleSet;
+
+// Contiguous partition of the chunk plane across simulation lanes
+// (docs/simulation-lanes-v2-design.md). A lane owns one run of chunk lines
+// (rows, or columns for elementary 1D rules, whose single active row spans
+// columns) and keeps a halo of `haloLines` lines on each side of it. Wrong data
+// enters the halo from its outer edge at the rule radius per generation, so
+// the owned lines stay exact for `16 * haloLines / radius` generations; what
+// the lane computes outside them is discarded.
+struct SimulationLanePartition
+{
+  enum class Axis : std::uint32_t
+  {
+    Rows = 0,
+    Columns = 1
+  };
+  static constexpr std::uint32_t DefaultHaloLines = 2u;
+  static constexpr std::uint32_t MaximumHaloLines = 4u;
+  std::uint32_t lane = 0;
+  std::uint32_t laneCount = 1;
+  std::uint32_t haloLines = DefaultHaloLines;
+  // The owned run [ownedBegin, ownedEnd) of canonical chunk lines. An
+  // unbounded side extends without limit; an empty bounded run owns nothing.
+  std::int64_t ownedBegin = 0;
+  std::int64_t ownedEnd = 0;
+  bool beginUnbounded = true;
+  bool endUnbounded = true;
+  std::int64_t worldChunkWidth = 0;
+  std::int64_t worldChunkHeight = 0;
+  Axis axis = Axis::Rows;
+
+  // The chunk line a chunk address lies on along the partition axis.
+  std::int64_t lineOf(const ChunkAddress& address) const
+  {
+    return axis == Axis::Columns ? address.x : address.y;
+  }
+  std::int64_t canonicalRow(std::int64_t row) const;
+  bool owns(std::int64_t row) const;
+  bool isHalo(std::int64_t row) const;
+  bool isRelevant(std::int64_t row) const { return owns(row) || isHalo(row); }
+  bool ownsChunk(const ChunkAddress& address) const
+  {
+    return owns(lineOf(address));
+  }
+  bool isHaloChunk(const ChunkAddress& address) const
+  {
+    return isHalo(lineOf(address));
+  }
+  bool isRelevantChunk(const ChunkAddress& address) const
+  {
+    return isRelevant(lineOf(address));
+  }
+  bool valid() const;
+};
+
+// Lane protocol "CSL1". Every message carries the coordinator session and
+// epoch; a reply whose epoch no longer matches is discarded unread.
+enum class SimulationLaneMessage : std::uint32_t
+{
+  SyncBegin = 1,
+  SyncChunks = 2,
+  Advance = 3,
+  Ack = 4,
+  Advanced = 5,
+  Overflow = 6
+};
+
+struct SimulationLaneRequest
+{
+  static constexpr std::uint32_t Magic = 0x314C5343u; // CSL1
+  // 2: SyncBegin carries the partition axis; Advance and Advanced carry the
+  // elementary 1D source row. 3: contiguous owned runs with a halo depth, and
+  // Advance carries its generation count (a block).
+  static constexpr std::uint32_t Version = 3u;
+  static constexpr std::uint32_t MaximumPatches = 60000u;
+  static constexpr std::uint32_t MaximumSteps = 64u;
+  SimulationLaneMessage kind = SimulationLaneMessage::Advance;
+  std::uint64_t session = 0;
+  std::uint64_t epoch = 0;
+  std::uint64_t generation = 0;
+  // SyncBegin only.
+  SimulationLanePartition partition;
+  std::string ruleId;
+  std::string rulePackage;
+  // SyncChunks and Advance: owned or halo chunks to replace.
+  std::vector<SparseChunkPatch> patches;
+  // Advance: generations the block runs (1..MaximumSteps, within the halo).
+  std::uint32_t steps = 1u;
+  // Advance of an elementary 1D rule: the global source row. A lane sees only
+  // its columns, so the coordinator supplies it.
+  bool hasElementaryRow = false;
+  SparseElementaryRow elementaryRow;
+
+  void write(GuestWireWriter& output) const;
+  static bool read(std::span<const std::byte> bytes,
+                   SimulationLaneRequest& output);
+  // As read, but decodes in place into retained scratch (its containers keep
+  // their capacity); `output` is unspecified on failure.
+  static bool decode(std::span<const std::byte> bytes,
+                     SimulationLaneRequest& output);
+};
+
+struct SimulationLaneReply
+{
+  SimulationLaneMessage kind = SimulationLaneMessage::Ack;
+  std::uint64_t session = 0;
+  std::uint64_t epoch = 0;
+  std::uint64_t generation = 0;
+  double advanceMilliseconds = 0.0;
+  // Diagnostics: applying patches and collecting owned changes.
+  double patchMilliseconds = 0.0;
+  double collectMilliseconds = 0.0;
+  // Advanced: every owned chunk any generation of the block changed, with its
+  // contents after the block.
+  std::vector<SparseChunkPatch> changes;
+  // Advanced, elementary 1D: the source row found in this lane's owned
+  // columns after the generation; the coordinator merges every lane's.
+  bool hasElementaryRow = false;
+  SparseElementaryRow elementaryRow;
+
+  void write(GuestWireWriter& output) const;
+  static bool read(std::span<const std::byte> bytes,
+                   SimulationLaneReply& output);
+  // As read, but decodes in place; `output` is unspecified on failure.
+  static bool decode(std::span<const std::byte> bytes,
+                     SimulationLaneReply& output);
+};
+
+// One lane's state, compiled into the worker store. The grid holds exactly
+// the owned and halo rows at the generation the coordinator last sent.
+class SimulationLaneWorker
+{
+public:
+  SimulationLaneWorker() = default;
+  ~SimulationLaneWorker() = default;
+  SimulationLaneWorker(const SimulationLaneWorker&) = delete;
+  SimulationLaneWorker& operator=(const SimulationLaneWorker&) = delete;
+  SimulationLaneWorker(SimulationLaneWorker&&) = delete;
+  SimulationLaneWorker& operator=(SimulationLaneWorker&&) = delete;
+
+  bool execute(std::span<const std::byte> request,
+               std::vector<std::byte>& reply,
+               std::string& error);
+
+private:
+  bool advance(const SimulationLaneRequest& request,
+               SimulationLaneReply& reply,
+               std::string& error);
+
+  RuleSetRegistry m_registry;
+  std::unique_ptr<RuleSet> m_rule;
+  std::unique_ptr<SparseCellGrid> m_grid;
+  SimulationLanePartition m_partition;
+  std::uint64_t m_session = 0;
+  std::uint64_t m_epoch = 0;
+  std::uint64_t m_generation = 0;
+  bool m_synced = false;
+  // Halo and outside chunks the last block changed, with the contents they
+  // must return to (their values before the block, or removal).
+  std::vector<SparseChunkPatch> m_restore;
+  // Chunks any generation of the current block changed (sorted, unique once
+  // the block ends).
+  std::vector<ChunkAddress> m_changed;
+  // Per-generation scratch, retained so steady generations reuse capacity.
+  // Sorted address lists stand in for per-generation hash sets and maps.
+  struct HaloChunk
+  {
+    ChunkAddress address;
+    SparseCellGrid::ChunkCells cells;
+  };
+  SimulationLaneRequest m_request;
+  SimulationLaneReply m_reply;
+  GuestWireWriter m_writer;
+  std::vector<SparseChunkPatch> m_patches;
+  std::vector<ChunkAddress> m_sent;
+  std::vector<HaloChunk> m_halo;
+  SparseGenerationDelta m_generationDelta;
+};
+
+// Control-side scheduler: keeps lanes synchronized with the published grid,
+// fans a block of generations out, and merges the owned-line replies into the
+// spare grid as one exact one-revision delta. Never blocks; unavailable,
+// failed or oversized work reports so the runner can fall back to serial
+// generations.
+class SimulationLaneCoordinator
+{
+public:
+  explicit SimulationLaneCoordinator(SimulationLaneTransport& transport);
+  ~SimulationLaneCoordinator() = default;
+  SimulationLaneCoordinator(const SimulationLaneCoordinator&) = delete;
+  SimulationLaneCoordinator& operator=(const SimulationLaneCoordinator&) =
+    delete;
+  SimulationLaneCoordinator(SimulationLaneCoordinator&&) = delete;
+  SimulationLaneCoordinator& operator=(SimulationLaneCoordinator&&) = delete;
+
+  enum class Availability
+  {
+    Pending,
+    Available,
+    Unavailable
+  };
+  // Lanes can take this generation (rule family, topology and grant).
+  Availability availability(const RuleSet& rule);
+  // Most generations one block may run for `rule` with this halo depth.
+  std::uint32_t maximumBlockSteps(const RuleSet& rule) const;
+  // Starts a block of up to `requestedSteps` generations of `published` into
+  // `working`; `acceptedSteps` receives how many it will publish (a block
+  // already running ahead keeps its own count). `working` is first brought to
+  // the published state (mirror delta or copy). False leaves no work
+  // outstanding; the caller then runs the generations itself.
+  bool start(SparseCellGrid* working,
+             const SparseCellGrid* published,
+             const RuleSet* rule,
+             SparseGenerationDelta&& mirrorDelta,
+             bool useMirrorDelta,
+             std::uint32_t requestedSteps = 1u,
+             std::uint32_t* acceptedSteps = nullptr);
+  // True once the outstanding block completed; the working grid then holds
+  // its last generation, `delta` is its exact one-revision change and
+  // `timings->generations` its generation count.
+  bool poll(SparseCellGrid** completedGrid,
+            SparseGenerationDelta* delta,
+            double* elapsedMilliseconds,
+            bool* advanceSucceeded,
+            SimulationRunnerTimings* timings);
+  // Lane requests are still outstanding (current or retired work).
+  bool busy() const;
+  // Discards the outstanding generation; its replies are dropped on arrival
+  // and every lane resynchronizes before the next generation.
+  void retire();
+  // A lane failed or a generation overflowed: lanes stay off.
+  bool failed() const { return m_failed; }
+  const std::string& failure() const { return m_failure; }
+  std::uint32_t lanes() const { return m_laneCount; }
+  const RollingMetric& roundTripMetric() const { return m_roundTrip; }
+  const RollingMetric& laneAdvanceMetric() const { return m_laneAdvance; }
+  const RollingMetric& lanePatchMetric() const { return m_lanePatch; }
+  const RollingMetric& laneCollectMetric() const { return m_laneCollect; }
+  const RollingMetric& mergeMetric() const { return m_merge; }
+  const RollingMetric& mergeBuildMetric() const { return m_mergeBuild; }
+  // Sum of every lane's patch and advance time per generation: the work a
+  // serial generation would roughly have done in this store.
+  const RollingMetric& laneWorkMetric() const { return m_laneWork; }
+  // Forgets measured lane work, so a return to lanes is judged afresh.
+  void resetWorkMetrics()
+  {
+    m_laneWork = RollingMetric{};
+    m_generationCost = RollingMetric{};
+  }
+  // Round trip per published generation (a block's round trip over its
+  // generations): what lanes cost the caller per generation.
+  const RollingMetric& generationCostMetric() const { return m_generationCost; }
+  // Slowest lane's advance over the mean lane's, per block.
+  const RollingMetric& imbalanceMetric() const { return m_imbalance; }
+  std::uint64_t resynchronizations() const { return m_resyncs; }
+  std::uint64_t retirements() const { return m_retirements; }
+  std::uint64_t rebalances() const { return m_rebalances; }
+  // Halo depth in chunk lines (default 2); takes effect at the next resync.
+  void setHaloLinesForTesting(std::uint32_t lines)
+  {
+    m_haloLines = lines;
+    m_synced = false;
+  }
+  // Recuts once imbalance persisted for `blocks` blocks at least `seconds`
+  // after the last sync, counting blocks whose slowest lane worked at least
+  // `minimumMilliseconds`. Tests force frequent recuts or disable them
+  // (UINT32_MAX blocks).
+  void setRebalanceForTesting(std::uint32_t blocks,
+                              double seconds,
+                              double minimumMilliseconds)
+  {
+    m_rebalanceBlocks = blocks;
+    m_rebalanceIntervalSeconds = seconds;
+    m_rebalanceMinimumMilliseconds = minimumMilliseconds;
+  }
+
+private:
+  // FIFO of encoded requests whose slots keep their buffers, so a steady
+  // generation's message reuses an earlier one's capacity. Bounded by the
+  // most requests ever queued at once.
+  struct RequestQueue
+  {
+    std::vector<std::vector<std::byte>> slots;
+    std::size_t head = 0;
+    std::size_t tail = 0;
+    bool empty() const { return head == tail; }
+    std::vector<std::byte>& front() { return slots[head]; }
+    void clear()
+    {
+      head = 0;
+      tail = 0;
+    }
+    void pop_front()
+    {
+      head += 1;
+      if (head == tail) {
+        clear();
+      }
+    }
+    void push_back(std::span<const std::byte> bytes)
+    {
+      if (tail == slots.size() && head != 0) {
+        // Move the pending slots to the front; swaps, no allocation.
+        std::rotate(slots.begin(), slots.begin() + head, slots.begin() + tail);
+        tail -= head;
+        head = 0;
+      }
+      if (tail == slots.size()) {
+        slots.emplace_back();
+      }
+      slots[tail].assign(bytes.begin(), bytes.end());
+      tail += 1;
+    }
+  };
+  struct Lane
+  {
+    RequestQueue queue;
+    bool awaitingAdvance = false;
+    bool outstanding = false;
+    std::vector<SparseChunkPatch> haloUpdates;
+    SimulationLaneReply reply;
+    bool replied = false;
+  };
+  static constexpr std::uint32_t kDefaultRebalanceBlocks = 30u;
+  static constexpr double kRebalanceSeconds = 2.0;
+  // Slowest lane over the mean above which a block counts as imbalanced.
+  static constexpr double kImbalanceRatio = 1.5;
+  void fail(std::string reason);
+  bool queueSync(const SparseCellGrid& published, const RuleSet& rule);
+  // Cuts the published world's lines into equal-chunk runs, one per lane.
+  void computeCuts(const SparseCellGrid& published);
+  // Queues the next Advance block of `steps` generations on every lane with
+  // its pending halo updates.
+  void queueAdvance(std::uint32_t steps);
+  // Records a block's lane balance; true when the lanes should be recut.
+  bool noteImbalance();
+  bool elementary() const
+  {
+    return m_axis == SimulationLanePartition::Axis::Columns;
+  }
+  // Once every lane answered the in-flight generation: keeps the owned
+  // changes for the merge, derives halos and launches the next generation.
+  void collectReplies();
+  bool lanesOutstanding() const;
+  void pump();
+  SimulationLanePartition partitionFor(std::uint32_t lane) const;
+
+  SimulationLaneTransport& m_transport;
+  std::vector<Lane> m_lanes;
+  std::uint32_t m_laneCount = 0;
+  std::uint32_t m_haloLines = SimulationLanePartition::DefaultHaloLines;
+  // Lane i owns lines [cut i-1, cut i); the first and last runs are unbounded
+  // on an infinite world and end at the world's edges on a torus.
+  std::vector<std::int64_t> m_cuts;
+  std::vector<std::int64_t> m_lineScratch;
+  SimulationLanePartition::Axis m_axis = SimulationLanePartition::Axis::Rows;
+  // Generations of the block in flight (or running ahead), and the last count
+  // the caller accepted, which sizes the next speculative block.
+  std::uint32_t m_blockSteps = 1u;
+  // Generations of the collected block the next merge publishes.
+  std::uint32_t m_mergeSteps = 1u;
+  std::uint32_t m_lastSteps = 1u;
+  std::uint32_t m_stepCap = 1u;
+  // Rebalancing: consecutive imbalanced blocks and the last resync time.
+  std::uint32_t m_imbalancedBlocks = 0u;
+  std::uint32_t m_rebalanceBlocks = kDefaultRebalanceBlocks;
+  double m_rebalanceIntervalSeconds = kRebalanceSeconds;
+  // Tiny blocks are dominated by per-lane overhead; only real work counts.
+  double m_rebalanceMinimumMilliseconds = 0.5;
+  std::chrono::steady_clock::time_point m_lastSync{};
+  bool m_recut = false;
+  std::uint64_t m_rebalances = 0;
+  // Elementary 1D: the source row of the generation queued next.
+  SparseElementaryRow m_nextRow;
+  std::uint64_t m_session = 0;
+  std::uint64_t m_epoch = 0;
+  std::uint64_t m_generation = 0;
+  // The published state lanes mirror: revision, rule and topology.
+  bool m_synced = false;
+  std::uint64_t m_syncedRevision = 0;
+  std::string m_syncedRule;
+  std::int64_t m_syncedWidth = 0;
+  std::int64_t m_syncedHeight = 0;
+  bool m_inFlight = false;
+  // Pipelining: lanes already compute the generation after the one last
+  // returned, from the halo updates alone, while the control store merges
+  // and publishes. start() adopts it when the published world still matches.
+  bool m_ahead = false;
+  // All replies of the in-flight generation arrived and the next one was
+  // launched; the merge runs on the next poll, after those jobs have left
+  // this single-threaded store.
+  bool m_mergeReady = false;
+  std::vector<SparseChunkPatch> m_merged;
+  // Per-generation scratch, retained and swapped so steady generations
+  // reuse capacity: the Advance request and its writer, a polled reply, the
+  // merged changes being applied and the delta they build.
+  SimulationLaneRequest m_advance;
+  GuestWireWriter m_writer;
+  std::vector<std::byte> m_pollBytes;
+  SimulationLaneReply m_replyScratch;
+  std::vector<SparseChunkPatch> m_mergedDrain;
+  SparseGenerationDelta m_resultDelta;
+  double m_slowestAdvance = 0.0;
+  double m_meanAdvance = 0.0;
+  double m_slowestPatch = 0.0;
+  double m_slowestCollect = 0.0;
+  std::chrono::steady_clock::time_point m_lastPoll{};
+  SparseCellGrid* m_working = nullptr;
+  const SparseCellGrid* m_published = nullptr;
+  std::uint64_t m_startMicroseconds = 0;
+  double m_mirrorMilliseconds = 0.0;
+  bool m_usedMirror = false;
+  bool m_usedCopy = false;
+  bool m_failed = false;
+  std::string m_failure;
+  RollingMetric m_roundTrip;
+  RollingMetric m_laneAdvance;
+  RollingMetric m_lanePatch;
+  RollingMetric m_laneCollect;
+  RollingMetric m_merge;
+  RollingMetric m_mergeBuild;
+  RollingMetric m_laneWork;
+  RollingMetric m_generationCost;
+  RollingMetric m_imbalance;
+  double m_totalLaneWork = 0.0;
+  std::uint64_t m_resyncs = 0;
+  std::uint64_t m_retirements = 0;
+};

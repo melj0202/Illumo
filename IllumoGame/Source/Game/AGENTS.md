@@ -9,11 +9,58 @@ simulation timing, ruleset selection, and save/load orchestration. It may use
 Rulesets, Services interfaces, Foundation values, and backend-neutral Rendering
 types. It must not depend on OpenGL or native platform APIs.
 
-IllumoGame's only application seam is a declarative engine-facing definition:
-CA defaults, CA-specific CLI metadata, and the required `CellGameModule`
-factory. Do not add a process entry point, frame loop, logger lifetime,
-SysCmdLine implementation, BuildInfo, native SDK code, or platform
-implementation under IllumoGame.
+IllumoGame ships only as the `IllumoGame.wasm` package hosted by
+`IllumoRuntime`. Its application seam is `IllumoGame/Source/Wasm/
+GameApplication.cpp`, a `GuestProgram` that bootstraps settings and
+catalogs, installs the guest `CSimPlatform`, and opens the title screen. CSim is
+one program whose scenes are `TitleScene` and `CanvasScene`; `CSimScenes`
+switches between them through the program's `SceneDirector` (reached as
+`IllumoContext::scenes`), and a canvas opens on its home view (zoom 0.5). The
+same Game sources also build natively into `IllumoGameCore`, which is only the
+test oracle. Do not add a
+process entry point, frame loop, logger lifetime, SysCmdLine implementation,
+BuildInfo, native SDK code, or platform implementation under IllumoGame, and
+do not reintroduce a native game executable.
+
+Game code performs dialogs, file transfers, clipboard access and user-catalog
+writes only through `CSimPlatform`. Completions may run before the request
+returns (native oracle, `CSimPlatformNative.cpp`) or on a later update (guest,
+`Wasm/GuestPlatform.cpp`); guard callbacks with the scene lifetime token and
+never assume either timing. Locations are opaque: a path natively, a storage
+name or `selected:` capability in the guest. Do not call `SaveLoad`,
+`Clipboard`, `AtomicFile`, `std::filesystem`, or `std::ifstream` from shared
+Game sources, and do not use entropy sources (`std::random_device`); the
+sandbox grants bounded clocks only.
+
+Natively, `RuleCatalogLoader` owns catalog file reads, first-valid base-pair
+lookup across executable/current/product directories, and the
+working-directory `families.user.json` and `rulesets.user.json` overlays. In
+the package, `CSimCatalogBootstrap` reads the packaged pair, then merges every
+`/packages/<id>/csim/*.json` (packages in id order, files in name order;
+`families*.json` add families, other names add rules; an invalid one is
+skipped with a warning), then the storage overlays, so a player's own edits
+still win. Both stage overlays through the portable `RuleCatalogOverlay`.
+
+The `render3dTest` diagnostic is data: `Scenes/render3d-test.ilsc` read through
+the AssetManager's source and instantiated with `SceneInstance`. Code only
+animates the `orbit` and `child` nodes by id; add geometry to the scene file,
+not to `CanvasScene`.
+`RuleSetRegistry` starts empty and owns text validation and data-backed
+factories; Rulesets has no filesystem or native platform dependencies.
+
+`SimulationRunner` has a native worker-thread implementation and a guest
+implementation (`Wasm/SimulationRunnerGuest.cpp`, `ILLUMO_SERIAL_GUEST`) that
+runs the shared generation body serially or fans it out to simulation lanes
+through `CSimPlatform::simulationLanes()` (`Wasm/SimulationLanes.*`). Keep
+publication and mirror-delta semantics identical across both. A start may
+publish several generations as one delta (`SimulationRunnerTimings::generations`,
+D-E34): its `fromRevision` is the published grid's and its `toRevision` the
+working grid's, which can differ by more than one. A drain consumes the
+outstanding start when `canBlock()` is true and retires it (discarding its
+unpublished block) when lanes make it false; never wait for a lane inside one
+frame. Lanes must produce exactly the serial generations: change partitioning,
+halo depth, block limits or `SparseCellGrid::applyChunkPatches` only with
+`IllumoGame.Wasm.LaneParity` green.
 
 ## Domain and presentation invariants
 
@@ -33,6 +80,13 @@ implementation under IllumoGame.
   allocation failure invalidates the journal. Journals of at least 2,048
   presentation chunks capture a lightweight replacement marker instead of
   per-chunk payloads.
+- Full-state, extended-range, directional von Neumann, and weighted-kernel
+  (Lenia) models use isolated correctness kernels that share one
+  chunk-parallel driver: targets evaluate on the worker pool from per-slot
+  halo windows only, and the change journal and inactive-map publication run
+  serially in target order. Never write shared grid state from a pool job.
+  `IllumoGame.Rules.WorkerPoolParity` must stay green. Directional neighbors
+  are ordered north, east, south, west.
 - Worker pools are grid-owned implementation details. Bound work, join before
   destruction, and do not expose partially written state to the frame thread.
 - `CanvasView` is a bounded world-space view over the sparse domain. It owns a
@@ -55,8 +109,8 @@ implementation under IllumoGame.
 ## Ownership, input, and errors
 
 - `CellContext` owns its game objects. Make copy/move behavior explicit and
-  keep module callback registrations within the context/module lifetime.
-- Editing, camera mutation, view sampling, and module callbacks are main-thread
+  keep scene callback registrations within the context/scene lifetime.
+- Editing, camera mutation, view sampling, and scene callbacks are main-thread
   affine. Validate coordinate conversions before narrowing floating-point or
   arithmetic results to signed world coordinates.
 - Treat allocation, worker, parse, and I/O failure as observable failure.
@@ -66,26 +120,59 @@ implementation under IllumoGame.
   `CommandRegistry`; usage, descriptions, validation, and completion data move
   with the command.
 - Product input (menu, settings, confirm dialogs, camera, editor) yields while
-  `CommandLine` is open. Do not drain `KeyCode::Grave`; `DebugModule` owns the
+  `CommandLine` is open. Do not drain `KeyCode::Grave`; `DebugOverlay` owns the
   global console toggle.
+- F1 settings and F2 Ruleset Workshop remain separate. F1 and New Simulation
+  select an explicit family/ruleset pair; each ruleset is bound to exactly one
+  family. The family owns state count, names, and colors; the rule owns
+  transition behavior. F2 stages these definitions separately, validates the
+  pair, drains the simulation, persists a custom family before its referencing
+  rule, then replaces the active pair and refreshes presentation. Reject family
+  schema changes that invalidate live cells. Both menus honor
+  `reducedUiMotion`; F2 wheel input scrolls visible rows without moving
+  keyboard selection.
+- Menu screens take their motion, fitted virtual space, row windows, and
+  pointer edges from `Illumo/Gui/GuiMenuShell` (`GuiEasing`, `GuiSpring`,
+  `GuiSpringArray`, `GuiMotion`, `GuiMenuAnimator`, `GuiPanelLayout`,
+  `GuiPointerTracker`) and their chrome from `GuiKit`'s glass helpers,
+  including `drawLiquidSelection` for the travelling selection. Do not restate
+  easing curves, spring integration or tunings, animation timings, UI-scale
+  fitting, scroll clamping, or
+  press-edge bookkeeping in a screen; add a new one by composing the shell and
+  supplying only that screen's rows, layout constants, and drawing. Feedback
+  animation never delays an action, and animated offsets never move a hit
+  area: rows lean in horizontally only and lift at most a couple of pixels.
+  The one pointer-driven exception is every glass panel's tilt toward the
+  pointer (`GuiPanelTilt`): a screen shifts its layout origin by the body
+  shift so its hit testing follows the drawing, and offsets only its glass
+  and decorative layers relative to that, so a row is always hit where it is
+  drawn.
+- The title screen's ambient world is presentation only. It must never write
+  the player's ruleset preference (restore `FamilyString`, `RuleSetString` and
+  `ModeString` around its `CellContext`), and it must refresh its canvas
+  targets after each advance (`rebuildTargetsFromGrid`).
 - Editor patterns (RLE/plaintext/stamps/clipboard) are a side path. World saves
-  stay sparse version 3. Finite worlds skip out-of-bounds stamp cells.
+  stay sparse; version 4 records family and ruleset IDs, version 3 derives family
+  from its rule ID, and version 2/dense legacy readers remain compatible. Finite
+  worlds skip out-of-bounds stamp cells.
 
 ## Persistence and compatibility
 
-Writes use sparse format version 3; reads accept versions 3 and 2 plus the prior
-dense format. Validate headers, topology, dimensions, rulesets, coordinates,
-counts, and cell states before replacing live state. Loading must be
-transactional. Format,
-endianness, numeric-range, or replacement-policy changes require an explicit
-compatibility plan and tests with fixtures.
+Writes use sparse format version 4; reads accept versions 4, 3, and 2 plus the
+prior dense format. Validate headers, topology, dimensions, the family/ruleset
+pair, coordinates, counts, and family-defined cell states before replacing
+live state. Loading must be transactional. Format, endianness, numeric-range,
+or replacement-policy changes require an explicit compatibility plan and tests
+with fixtures. Custom families and rules remain external catalog entries
+referenced by stable IDs; their catalogs must load before a world that uses
+them can be restored.
 
 ## Documentation and verification
 
 - `docs/packages/game.md`
 - `docs/latex/sections/07-game-and-rules.tex`
 - `docs/architecture-consensus.md`
-- Domain, boundary, simulation, canvas, and CellGameModule exact tests
+- Domain, boundary, simulation, canvas, and CanvasScene exact tests
 - `IllumoGame.Sim.MicroBench` and `IllumoGame.Sim.SparseMicroBench` for measured
   performance claims
 

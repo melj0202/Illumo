@@ -1,9 +1,11 @@
+#include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Scene/SceneGraph.h>
+#include <Illumo/Scene/SceneGraphDrawable.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHarness.h>
@@ -13,6 +15,7 @@
 #include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <limits>
 
 static TestCounters g;
 
@@ -82,6 +85,13 @@ submittedUsePixelsOne(const MockBackend& mock)
   }
   return false;
 }
+
+static bool
+uniformVec3Near(const RenderCommand& command,
+                const char* name,
+                float x,
+                float y,
+                float z);
 
 static int
 runMeshVisualCase(void (*testFunction)())
@@ -156,6 +166,333 @@ testMeshVisualDynamicMeshReuse()
              "expanded geometry updates the retained buffer");
 }
 
+static MeshData
+makeSharedQuadMesh(bool alternateDiagonal)
+{
+  MeshData mesh;
+  MeshVertex vertex;
+  vertex.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+  vertex.position = glm::vec3(-1.0f, -1.0f, 0.0f);
+  mesh.vertices.push_back(vertex);
+  vertex.position = glm::vec3(1.0f, -1.0f, 0.0f);
+  mesh.vertices.push_back(vertex);
+  vertex.position = glm::vec3(1.0f, 1.0f, 0.0f);
+  mesh.vertices.push_back(vertex);
+  vertex.position = glm::vec3(-1.0f, 1.0f, 0.0f);
+  mesh.vertices.push_back(vertex);
+  if (alternateDiagonal) {
+    mesh.indices = { 0, 1, 3, 1, 2, 3 };
+  } else {
+    mesh.indices = { 0, 1, 2, 0, 2, 3 };
+  }
+  return mesh;
+}
+
+static void
+testMeshVisualIndexedTriangles()
+{
+  testSection("MeshVisual: triangles preserve shared indexed geometry");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  visual.addMesh(makeSharedQuadMesh(false));
+
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "indexed quad emits tokens");
+  renderer.EndFrame();
+
+  const RenderCommand* vertexUpdate =
+    findSubmittedCommand(mock, CommandType::UpdateBuffer, 0);
+  const RenderCommand* indexUpdate =
+    findSubmittedCommand(mock, CommandType::UpdateIndexBuffer, 0);
+  testTrue(g, vertexUpdate != nullptr, "indexed quad uploads vertices");
+  testTrue(g, indexUpdate != nullptr, "indexed quad uploads indices");
+  if (vertexUpdate != nullptr) {
+    testEqSize(g,
+               vertexUpdate->updateBuffer.sizeBytes,
+               4u * 36u,
+               "four unique LitVertex values are uploaded");
+  }
+  if (indexUpdate != nullptr) {
+    testEqSize(g,
+               indexUpdate->updateIndexBuffer.sizeBytes,
+               6u * sizeof(unsigned int),
+               "six source indices are uploaded");
+    const unsigned int expected[6] = { 0, 1, 2, 0, 2, 3 };
+    const unsigned int* uploaded =
+      static_cast<const unsigned int*>(indexUpdate->updateIndexBuffer.data);
+    testTrue(g,
+             uploaded != nullptr &&
+               std::memcmp(uploaded, expected, sizeof(expected)) == 0,
+             "source index topology is preserved byte-for-byte");
+  }
+
+  MeshHandle retainedHandle{};
+  size_t indexedDrawCount = 0;
+  bool allDrawCountsMatch = true;
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetMesh &&
+        !retainedHandle.isValid()) {
+      retainedHandle = command.bindMesh.handle;
+    }
+    if (command.commandType == CommandType::DrawIndexed) {
+      indexedDrawCount += 1;
+      allDrawCountsMatch =
+        allDrawCountsMatch && command.drawIndexed.elementCount == 6u;
+    }
+  }
+  testTrue(g, retainedHandle.isValid(), "indexed triangle mesh is retained");
+  testTrue(g,
+           indexedDrawCount >= 1u && allDrawCountsMatch,
+           "every triangle pass draws the six source indices");
+
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "unchanged quad still draws");
+  renderer.EndFrame();
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             0u,
+             "unchanged triangle vertices skip upload");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateIndexBuffer),
+             0u,
+             "unchanged triangle indices skip upload");
+
+  visual.clearPrimitives();
+  visual.addMesh(makeSharedQuadMesh(true));
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g,
+           visual.AppendCommands(&renderer),
+           "changed topology inside capacity emits tokens");
+  renderer.EndFrame();
+  const RenderCommand* changedMesh =
+    findSubmittedCommand(mock, CommandType::SetMesh, 0);
+  testTrue(g,
+           changedMesh != nullptr &&
+             changedMesh->bindMesh.handle == retainedHandle,
+           "changed topology inside capacity reuses the mesh handle");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             1u,
+             "changed topology refreshes unique vertices once");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateIndexBuffer),
+             1u,
+             "changed topology refreshes indices once");
+
+  visual.clearPrimitives();
+  for (size_t i = 0; i < 17u; ++i) {
+    visual.addMesh(makeSharedQuadMesh(false));
+  }
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g, visual.AppendCommands(&renderer), "capacity growth emits tokens");
+  renderer.EndFrame();
+  const RenderCommand* grownMesh =
+    findSubmittedCommand(mock, CommandType::SetMesh, 0);
+  testTrue(g,
+           grownMesh != nullptr && grownMesh->bindMesh.handle == retainedHandle,
+           "capacity growth replaces storage without changing the handle");
+
+  MeshData invalid = makeSharedQuadMesh(false);
+  invalid.indices[5] = 4;
+  MeshVisual invalidVisual;
+  invalidVisual.prepare(&renderer);
+  invalidVisual.addMesh(invalid);
+  mock.resetCounters();
+  renderer.BeginFrame();
+  testTrue(g,
+           invalidVisual.AppendCommands(&renderer),
+           "invalid mesh is rejected without failing extraction");
+  renderer.EndFrame();
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+             0u,
+             "invalid mesh uploads no vertices");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::UpdateIndexBuffer),
+             0u,
+             "invalid mesh uploads no indices");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             0u,
+             "invalid mesh emits no draw");
+}
+
+static void
+testMeshVisualSharedMeshAsset()
+{
+  testSection("MeshVisual: instances share one managed mesh upload");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  AssetManager assets(&renderer, false);
+
+  MeshData mesh;
+  MeshVertex a;
+  a.position = glm::vec3(0.0f, 0.0f, 0.0f);
+  MeshVertex b;
+  b.position = glm::vec3(1.0f, 0.0f, 0.0f);
+  MeshVertex c;
+  c.position = glm::vec3(0.0f, 1.0f, 0.0f);
+  mesh.vertices = { a, b, c };
+  mesh.indices = { 0, 1, 2 };
+  const MeshHandle handle = assets.acquireMesh(mesh);
+  const MeshAssetInfo info = assets.getMeshInfo(handle);
+  testTrue(g, info.isValid(), "mesh asset enrollment succeeds");
+
+  {
+    MeshVisual first;
+    first.prepare(&renderer);
+    first.setShadowsEnabled(false);
+    first.setLightingEnabled(false);
+    first.setMeshAsset(info, ColorRgba{ 255, 128, 64, 255 });
+
+    MeshVisual second;
+    second.prepare(&renderer);
+    second.setShadowsEnabled(false);
+    second.setLightingEnabled(false);
+    second.setModelMatrix(
+      glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)));
+    second.setMeshAsset(info, ColorRgba{ 64, 128, 255, 255 });
+
+    mock.resetCounters();
+    renderer.BeginFrame();
+    testTrue(g, first.AppendCommands(&renderer), "first instance emits tokens");
+    testTrue(
+      g, second.AppendCommands(&renderer), "second instance emits tokens");
+    renderer.EndFrame();
+
+    const RenderCommand* firstMesh =
+      findSubmittedCommand(mock, CommandType::SetMesh, 0);
+    const RenderCommand* secondMesh =
+      findSubmittedCommand(mock, CommandType::SetMesh, 1);
+    testTrue(g,
+             firstMesh != nullptr && secondMesh != nullptr &&
+               firstMesh->bindMesh.handle == handle &&
+               secondMesh->bindMesh.handle == handle,
+             "both instances bind the same managed mesh handle");
+    testEqSize(g,
+               mock.getCreateCount(),
+               0u,
+               "drawing instances performs no additional mesh enrollment");
+    testEqSize(g,
+               mock.countNonEmptyOfType(CommandType::UpdateBuffer),
+               0u,
+               "immutable managed mesh skips per-instance buffer uploads");
+
+    const RenderCommand* firstMvp =
+      findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 0);
+    const RenderCommand* secondMvp =
+      findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 1);
+    testTrue(g,
+             firstMvp != nullptr && secondMvp != nullptr,
+             "both instances emit their own transform");
+    if (firstMvp != nullptr && secondMvp != nullptr) {
+      glm::mat4 firstMatrix(1.0f);
+      std::memcpy(glm::value_ptr(firstMatrix),
+                  firstMvp->uniformMat4.value,
+                  16 * sizeof(float));
+      testTrue(g,
+               !matricesNear(secondMvp->uniformMat4.value, firstMatrix),
+               "shared geometry keeps per-instance transforms distinct");
+    }
+  }
+
+  testTrue(g,
+           mock.IsMeshValid(handle),
+           "destroying visuals does not destroy manager-owned mesh");
+  testTrue(g, assets.releaseMesh(handle), "asset owner releases shared mesh");
+  testTrue(
+    g, !mock.IsMeshValid(handle), "final asset release destroys shared mesh");
+}
+
+static void
+testMeshVisualManagedAssetParticipatesInSceneShadowPass()
+{
+  testSection("MeshVisual: managed asset participates in scene shadow pass");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  AssetManager assets(&renderer, false);
+
+  MeshData mesh;
+  MeshVertex a;
+  a.position = glm::vec3(-1.0f, -1.0f, 0.0f);
+  MeshVertex b;
+  b.position = glm::vec3(1.0f, -1.0f, 0.0f);
+  MeshVertex c;
+  c.position = glm::vec3(0.0f, 1.0f, 0.0f);
+  mesh.vertices = { a, b, c };
+  mesh.indices = { 0, 1, 2 };
+  const MeshHandle handle = assets.acquireMesh(mesh);
+  const MeshAssetInfo info = assets.getMeshInfo(handle);
+  testTrue(g, info.isValid(), "managed mesh enrollment succeeds");
+
+  {
+    MeshVisual visual;
+    visual.prepare(&renderer);
+    visual.setMeshAsset(info);
+
+    DrawList scene(&window, &camera);
+    scene.AddDrawable(&visual, RenderLayerId::World);
+
+    mock.resetCounters();
+    renderer.BeginFrame();
+    renderer.RenderScene(&scene, &camera);
+    renderer.EndFrame();
+
+    bool insideShadowTarget = false;
+    MeshHandle boundMesh{};
+    size_t managedShadowDraws = 0;
+    size_t managedShadowTextureBinds = 0;
+    for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+      const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+      if (command.commandType == CommandType::SetFramebuffer) {
+        insideShadowTarget = command.bindFramebuffer.handle.isValid();
+      } else if (command.commandType == CommandType::SetMesh) {
+        boundMesh = command.bindMesh.handle;
+      } else if (command.commandType == CommandType::DrawIndexed &&
+                 insideShadowTarget && boundMesh == handle) {
+        managedShadowDraws += 1;
+      } else if (command.commandType == CommandType::SetTexture &&
+                 !insideShadowTarget &&
+                 command.bindTexture.slot == WorldLook::kShadowTextureUnit) {
+        managedShadowTextureBinds += 1;
+      }
+    }
+
+    testEqSize(g,
+               managedShadowDraws,
+               1u,
+               "managed mesh contributes one draw to the shared depth pass");
+    testEqSize(g,
+               managedShadowTextureBinds,
+               1u,
+               "managed mesh samples the shared scene shadow texture");
+  }
+
+  testTrue(g, assets.releaseMesh(handle), "asset owner releases managed mesh");
+}
+
 static void
 testMeshVisualSpriteAndCube()
 {
@@ -181,7 +518,7 @@ testMeshVisualSpriteAndCube()
                    ColorRgba{ 255, 255, 255, 255 },
                    MeshFacing::World);
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&visual, RenderLayerId::World);
   mock.resetCounters();
   renderer.BeginFrame();
@@ -241,7 +578,7 @@ testMeshVisualBillboard()
                       ColorRgba{},
                       MeshFacing::Billboard);
 
-  Scene scene(&window, &camera);
+  DrawList scene(&window, &camera);
   scene.AddDrawable(&worldAligned, RenderLayerId::World);
   renderer.BeginFrame();
   renderer.RenderScene(&scene, &camera);
@@ -251,11 +588,11 @@ testMeshVisualBillboard()
   testTrue(g, worldMvpCmd != nullptr, "world-aligned sprite submits uMVP");
   float worldMvp[16] = {};
   if (worldMvpCmd != nullptr) {
-    std::memcpy(worldMvp, worldMvpCmd->uniformMat4.m, sizeof(worldMvp));
+    std::memcpy(worldMvp, worldMvpCmd->uniformMat4.value, sizeof(worldMvp));
   }
 
   mock.resetCounters();
-  Scene billboardScene(&window, &camera);
+  DrawList billboardScene(&window, &camera);
   billboardScene.AddDrawable(&billboard, RenderLayerId::World);
   renderer.BeginFrame();
   renderer.RenderScene(&billboardScene, &camera);
@@ -266,7 +603,7 @@ testMeshVisualBillboard()
   float billboardMvp[16] = {};
   if (billboardMvpCmd != nullptr) {
     std::memcpy(
-      billboardMvp, billboardMvpCmd->uniformMat4.m, sizeof(billboardMvp));
+      billboardMvp, billboardMvpCmd->uniformMat4.value, sizeof(billboardMvp));
   }
 
   const float aspect = 640.0f / 480.0f;
@@ -309,6 +646,7 @@ testMeshVisualSceneAttachment()
     glm::vec3(0.0f), glm::vec3(0.25f), ColorRgba{ 255, 255, 255, 255 });
 
   SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
   const SceneNodeHandle node = graph.createNode();
   Matrix4 translation =
     glm::translate(Matrix4(1.0f), Vector3(2.0f, 0.0f, 0.0f));
@@ -319,8 +657,8 @@ testMeshVisualSceneAttachment()
            graph.setRenderAttachment(node, &visual),
            "MeshVisual attaches to the node");
 
-  Scene scene(&window, &camera);
-  scene.AddDrawable(&graph, RenderLayerId::World);
+  DrawList scene(&window, &camera);
+  scene.AddDrawable(&graphDrawable, RenderLayerId::World);
   mock.resetCounters();
   renderer.BeginFrame();
   renderer.RenderScene(&scene, &camera);
@@ -342,7 +680,7 @@ testMeshVisualSceneAttachment()
   const glm::mat4 expected = camera.GetMVPMatrix(aspect) * translation;
   testTrue(g, mvp != nullptr, "attachment submits uMVP");
   testTrue(g,
-           mvp != nullptr && matricesNear(mvp->uniformMat4.m, expected),
+           mvp != nullptr && matricesNear(mvp->uniformMat4.value, expected),
            "uMVP equals camera MVP times node world");
   testTrue(
     g, !submittedUsePixelsOne(mock), "attachment does not use pixel mode");
@@ -425,9 +763,9 @@ testMeshVisualNewPrimitivesEmitTokens()
 }
 
 static void
-testMeshVisualLitShadowPassClearsDepth()
+testMeshVisualSceneShadowPassCoversVisibleSet()
 {
-  testSection("MeshVisual: lit shadow pass clears depth before drawing");
+  testSection("MeshVisual: one scene shadow pass covers every visible caster");
   NullRenderWindow window(640, 480);
   EnvVars env;
   env.setVar("WinX", 640);
@@ -437,61 +775,436 @@ testMeshVisualLitShadowPassClearsDepth()
   mock.Initialize();
   Renderer renderer(&window, &env, &camera, &mock, false);
 
-  MeshVisual visual;
-  visual.prepare(&renderer);
-  visual.addSolidCube(
+  MeshVisual directVisual;
+  directVisual.prepare(&renderer);
+  directVisual.addSolidCube(
     glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 200, 200, 200, 255 });
+  directVisual.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(-4.0f, 0.0f, 0.0f)));
+
+  MeshVisual attachedVisual;
+  attachedVisual.prepare(&renderer);
+  attachedVisual.addSolidCube(
+    glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 160, 180, 220, 255 });
+
+  SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
+  const SceneNodeHandle attachedNode = graph.createNode();
+  graph.setLocalTransform(
+    attachedNode, glm::translate(glm::mat4(1.0f), glm::vec3(4.0f, 0.0f, 0.0f)));
+  graph.setRenderAttachment(attachedNode, &attachedVisual);
+
+  DrawList scene(&window, &camera);
+  scene.AddDrawable(&directVisual, RenderLayerId::World);
+  scene.AddDrawable(&graphDrawable, RenderLayerId::World);
 
   mock.resetCounters();
   renderer.BeginFrame();
-  testTrue(g, visual.AppendCommands(&renderer), "cube appends lit tokens");
+  renderer.RenderScene(&scene, &camera);
   renderer.EndFrame();
 
-  bool sawShadowFramebuffer = false;
+  size_t shadowFramebufferBinds = 0;
+  size_t shadowDepthClears = 0;
+  size_t shadowDraws = 0;
   bool clearedDepthBeforeShadowDraw = false;
   bool sawColorClearOnShadowTarget = false;
-  bool shadowDrawIssued = false;
   bool lightingUniformsPresent = false;
+  bool insideShadowTarget = false;
+  TextureHandle sharedShadowTexture{};
+  size_t shadowTextureBinds = 0;
 
   for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
     const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
     if (command.commandType == CommandType::SetFramebuffer &&
         command.bindFramebuffer.handle.isValid()) {
-      sawShadowFramebuffer = true;
+      shadowFramebufferBinds += 1;
+      insideShadowTarget = true;
       clearedDepthBeforeShadowDraw = false;
-      shadowDrawIssued = false;
       continue;
     }
-    if (!sawShadowFramebuffer || shadowDrawIssued) {
+    if (command.commandType == CommandType::SetFramebuffer &&
+        !command.bindFramebuffer.handle.isValid()) {
+      insideShadowTarget = false;
+      continue;
+    }
+    if (!insideShadowTarget) {
       if (command.commandType == CommandType::SetUniformVec3 &&
           std::strcmp(command.uniformVec3.name, WorldLook::kLightDirUniform) ==
             0) {
         lightingUniformsPresent = true;
       }
+      if (command.commandType == CommandType::SetTexture &&
+          command.bindTexture.slot == WorldLook::kShadowTextureUnit) {
+        if (!sharedShadowTexture.isValid()) {
+          sharedShadowTexture = command.bindTexture.handle;
+        }
+        testTrue(g,
+                 command.bindTexture.handle == sharedShadowTexture,
+                 "every receiver binds the same scene shadow texture");
+        shadowTextureBinds += 1;
+      }
       continue;
     }
-    if (command.commandType == CommandType::ClearColorBuffer) {
+    if (command.commandType == CommandType::ClearColorBuffer ||
+        command.commandType == CommandType::ClearScreen) {
       sawColorClearOnShadowTarget = true;
     }
     if (command.commandType == CommandType::ClearDepthBuffer) {
+      shadowDepthClears += 1;
       clearedDepthBeforeShadowDraw = true;
     }
     if (command.commandType == CommandType::DrawIndexed) {
-      shadowDrawIssued = true;
+      testTrue(g,
+               clearedDepthBeforeShadowDraw,
+               "scene depth is cleared before every shadow draw");
+      shadowDraws += 1;
     }
   }
 
-  testTrue(g, sawShadowFramebuffer, "lit cube binds a shadow framebuffer");
-  testTrue(g, shadowDrawIssued, "shadow pass issues an indexed depth draw");
-  testTrue(g,
-           clearedDepthBeforeShadowDraw,
-           "shadow pass clears depth before drawing into the depth FBO");
+  testEqSize(g,
+             shadowFramebufferBinds,
+             1u,
+             "the scene binds one shared shadow framebuffer");
+  testEqSize(g, shadowDepthClears, 1u, "the scene shadow map is cleared once");
+  testEqSize(g,
+             shadowDraws,
+             2u,
+             "direct and SceneGraph meshes both enter the shared depth pass");
   testTrue(g,
            !sawColorClearOnShadowTarget,
            "shadow pass does not color-clear a depth-only target");
   testTrue(g,
            lightingUniformsPresent,
            "main pass still pushes directional lighting uniforms");
+  testEqSize(g,
+             shadowTextureBinds,
+             2u,
+             "both receivers sample the shared scene shadow map");
+  size_t shadowDepthTextureCreates = 0;
+  for (size_t i = 0; i < mock.getCreateCount(); ++i) {
+    const MockBackend::CreateRecord& create = mock.getCreate(i);
+    if (create.kind == MockBackend::CreateRecord::Kind::TextureData &&
+        create.width == 1024 && create.height == 1024 && create.channels == 1) {
+      shadowDepthTextureCreates += 1;
+    }
+  }
+  testEqSize(g,
+             shadowDepthTextureCreates,
+             1u,
+             "multiple casters allocate one scene depth texture");
+
+  const RenderCommand* firstLightMatrix =
+    findSubmittedUniformMat4(mock, WorldLook::kLightSpaceMatrixUniform, 0);
+  const RenderCommand* secondLightMatrix =
+    findSubmittedUniformMat4(mock, WorldLook::kLightSpaceMatrixUniform, 1);
+  testTrue(g,
+           firstLightMatrix != nullptr && secondLightMatrix != nullptr,
+           "both receivers receive a light-space matrix");
+  if (firstLightMatrix != nullptr && secondLightMatrix != nullptr) {
+    bool matricesMatch = true;
+    for (int i = 0; i < 16; ++i) {
+      matricesMatch =
+        matricesMatch &&
+        std::abs(firstLightMatrix->uniformMat4.value[i] -
+                 secondLightMatrix->uniformMat4.value[i]) < 0.0001f;
+    }
+    testTrue(g, matricesMatch, "all receivers use one light-space matrix");
+
+    glm::mat4 lightSpace(1.0f);
+    std::memcpy(glm::value_ptr(lightSpace),
+                firstLightMatrix->uniformMat4.value,
+                16 * sizeof(float));
+    const glm::vec4 leftClip = lightSpace * glm::vec4(-4.0f, 0.0f, 0.0f, 1.0f);
+    const glm::vec4 rightClip = lightSpace * glm::vec4(4.0f, 0.0f, 0.0f, 1.0f);
+    const glm::vec3 leftNdc = glm::vec3(leftClip) / leftClip.w;
+    const glm::vec3 rightNdc = glm::vec3(rightClip) / rightClip.w;
+    testTrue(g,
+             std::abs(leftNdc.x) <= 1.0f && std::abs(leftNdc.y) <= 1.0f &&
+               std::abs(rightNdc.x) <= 1.0f && std::abs(rightNdc.y) <= 1.0f,
+             "combined caster bounds fit inside the shadow projection");
+  }
+}
+
+static void
+testMeshVisualBoundsCoverEveryGeometrySource()
+{
+  testSection("MeshVisual: attachment bounds cover every geometry source");
+
+  MeshVisual visual;
+  visual.addLine(
+    glm::vec3(-4.0f, 0.0f, 0.0f), glm::vec3(-2.0f, 0.0f, 0.0f), ColorRgba{});
+  visual.addSolidCube(
+    glm::vec3(2.0f, 0.0f, 0.0f), glm::vec3(1.0f), ColorRgba{});
+  visual.addSprite(TextureHandle{},
+                   glm::vec3(0.0f, 5.0f, 0.0f),
+                   glm::vec2(6.0f, 8.0f),
+                   ColorRgba{},
+                   MeshFacing::Billboard);
+  MeshAssetInfo asset;
+  asset.handle = MeshHandle{ 1, 1 };
+  asset.indexCount = 6;
+  asset.minBounds = glm::vec3(-10.0f, -1.0f, -1.0f);
+  asset.maxBounds = glm::vec3(-8.0f, 1.0f, 1.0f);
+  visual.setMeshAsset(asset);
+  visual.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(100.0f, 0.0f, 0.0f)) *
+    glm::scale(glm::mat4(1.0f), glm::vec3(-1.0f, 2.0f, 1.0f)));
+
+  AxisAlignedBounds3 bounds;
+  testTrue(g,
+           visual.getSceneLocalBounds(&bounds),
+           "mixed visual reports conservative node-local bounds");
+  testTrue(g,
+           std::abs(bounds.minimum.x - 95.0f) < 0.0001f &&
+             std::abs(bounds.maximum.x - 110.0f) < 0.0001f &&
+             std::abs(bounds.minimum.y - (-2.0f)) < 0.0001f &&
+             std::abs(bounds.maximum.y - 20.0f) < 0.0001f &&
+             std::abs(bounds.minimum.z - (-5.0f)) < 0.0001f &&
+             std::abs(bounds.maximum.z - 5.0f) < 0.0001f,
+           "lines, triangles, assets, and billboard envelopes are included");
+
+  visual.clearPrimitives();
+  testTrue(g,
+           visual.getSceneLocalBounds(&bounds) &&
+             std::abs(bounds.minimum.x - 108.0f) < 0.0001f &&
+             std::abs(bounds.maximum.x - 110.0f) < 0.0001f,
+           "clearing procedural geometry preserves managed-asset bounds");
+  visual.clearMeshAsset();
+  testTrue(g,
+           !visual.getSceneLocalBounds(&bounds),
+           "empty visual remains unbounded instead of inventing a point box");
+
+  MeshData mesh = makeSharedQuadMesh(false);
+  for (MeshVertex& vertex : mesh.vertices) {
+    vertex.position.x += 20.0f;
+  }
+  visual.setModelMatrix(glm::mat4(1.0f));
+  visual.addMesh(mesh);
+  testTrue(g,
+           visual.getSceneLocalBounds(&bounds) &&
+             std::abs(bounds.minimum.x - 19.0f) < 0.0001f &&
+             std::abs(bounds.maximum.x - 21.0f) < 0.0001f,
+           "procedural mesh bounds derive from vertices, not stale metadata");
+
+  visual.clearPrimitives();
+  visual.addSolidCube(glm::vec3(0.0f), glm::vec3(1.0f), ColorRgba{});
+  glm::mat4 projective(1.0f);
+  projective[0][3] = 1.0f;
+  visual.setModelMatrix(projective);
+  testTrue(g,
+           !visual.getSceneLocalBounds(&bounds),
+           "non-affine model transforms disable bounds conservatively");
+}
+
+static void
+testMeshVisualRelevantCasterVolume()
+{
+  testSection("MeshVisual: relevant caster volume filters shared shadows");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  camera.setProjectionType(ProjectionType::Perspective);
+  camera.lookAt(
+    glm::vec3(0.0f, 0.0f, 10.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  MeshVisual distantCaster;
+  distantCaster.prepare(&renderer);
+  distantCaster.addSolidCube(glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{});
+  distantCaster.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 80.0f, 0.0f)));
+  distantCaster.setLightDirection(glm::vec3(1.0f, 0.0f, 0.0f));
+
+  MeshVisual receiver;
+  receiver.prepare(&renderer);
+  receiver.addSolidCube(glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{});
+  receiver.setLightDirection(glm::vec3(0.0f, 1.0f, 0.0f));
+  testTrue(g,
+           std::abs(receiver.getShadowCasterDistance() - 100.0f) < 0.0001f,
+           "caster search distance defaults to 100 world units");
+  receiver.setShadowCasterDistance(50.0f);
+  testTrue(g,
+           std::abs(receiver.getShadowCasterDistance() - 50.0f) < 0.0001f,
+           "caster search distance is configurable per visual");
+
+  MeshVisual relevantCaster;
+  relevantCaster.prepare(&renderer);
+  relevantCaster.addSolidCube(glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{});
+  relevantCaster.setLightDirection(glm::vec3(0.0f, 1.0f, 0.0f));
+  SceneGraph graph;
+  SceneGraphDrawable graphDrawable(graph);
+  const SceneNodeHandle relevantNode = graph.createNode();
+  graph.setLocalTransform(
+    relevantNode,
+    glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 40.0f, 0.0f)));
+  graph.setRenderAttachment(relevantNode, &relevantCaster);
+
+  DrawList scene(&window, &camera);
+  scene.AddDrawable(&distantCaster, RenderLayerId::World);
+  scene.AddDrawable(&receiver, RenderLayerId::World);
+  scene.AddDrawable(&graphDrawable, RenderLayerId::World);
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+
+  size_t shadowDraws = 0;
+  bool insideShadowTarget = false;
+  for (size_t index = 0; index < mock.getLastNonEmptySubmittedCount();
+       ++index) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(index);
+    if (command.commandType == CommandType::SetFramebuffer) {
+      insideShadowTarget = command.bindFramebuffer.handle.isValid();
+    } else if (insideShadowTarget &&
+               command.commandType == CommandType::DrawIndexed) {
+      shadowDraws += 1;
+    }
+  }
+  testEqSize(g,
+             shadowDraws,
+             2u,
+             "visible receiver and relevant offscreen graph caster draw depth");
+
+  bool visibleDirectionSelected = false;
+  for (size_t index = 0; index < mock.getLastNonEmptySubmittedCount();
+       ++index) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(index);
+    if (uniformVec3Near(
+          command, WorldLook::kLightDirUniform, 0.0f, 1.0f, 0.0f)) {
+      visibleDirectionSelected = true;
+      break;
+    }
+  }
+  testTrue(g,
+           visibleDirectionSelected,
+           "first camera-visible caster selects the directional light");
+
+  distantCaster.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(10000.0f, 80.0f, 0.0f)));
+  receiver.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(10000.0f, 0.0f, 0.0f)));
+  graph.setLocalTransform(
+    relevantNode,
+    glm::translate(glm::mat4(1.0f), glm::vec3(10000.0f, 40.0f, 0.0f)));
+  mock.resetCounters();
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+  size_t shadowTargetBinds = 0;
+  for (size_t index = 0; index < mock.getLastNonEmptySubmittedCount();
+       ++index) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(index);
+    if (command.commandType == CommandType::SetFramebuffer &&
+        command.bindFramebuffer.handle.isValid()) {
+      shadowTargetBinds += 1;
+    }
+  }
+  testEqSize(g,
+             shadowTargetBinds,
+             0u,
+             "no camera-visible caster skips the shared shadow pass");
+}
+
+static void
+testMeshVisualInvalidCameraKeepsAllCasters()
+{
+  testSection("MeshVisual: invalid camera falls back to all shadow casters");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  camera.setProjectionType(ProjectionType::Perspective);
+  camera.setPerspective(std::numeric_limits<float>::quiet_NaN(), 0.1f, 100.0f);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  MeshVisual first;
+  first.prepare(&renderer);
+  first.addSolidCube(glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{});
+  MeshVisual second;
+  second.prepare(&renderer);
+  second.addSolidCube(glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{});
+  second.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 20.0f, 0.0f)));
+
+  DrawList scene(&window, &camera);
+  scene.AddDrawable(&first, RenderLayerId::World);
+  scene.AddDrawable(&second, RenderLayerId::World);
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+
+  size_t shadowDraws = 0;
+  bool insideShadowTarget = false;
+  for (size_t index = 0; index < mock.getLastNonEmptySubmittedCount();
+       ++index) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(index);
+    if (command.commandType == CommandType::SetFramebuffer) {
+      insideShadowTarget = command.bindFramebuffer.handle.isValid();
+    } else if (insideShadowTarget &&
+               command.commandType == CommandType::DrawIndexed) {
+      shadowDraws += 1;
+    }
+  }
+  testEqSize(g,
+             shadowDraws,
+             2u,
+             "invalid camera reconstruction retains all shadow casters");
+}
+
+static void
+testMeshVisualCulledFrameResetsMotionHistory()
+{
+  testSection("MeshVisual: culled frames reset previous-MVP history");
+  HeadlessRenderFixture fixture(640, 480);
+  MeshVisual visual;
+  visual.prepare(&fixture.renderer);
+  visual.setShadowsEnabled(false);
+  visual.addSolidCube(glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{});
+  DrawList scene(&fixture.window, &fixture.camera);
+  scene.AddDrawable(&visual, RenderLayerId::World);
+
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+
+  visual.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(10000.0f, 0.0f, 0.0f)));
+  fixture.mock.resetCounters();
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  testEqSize(g,
+             fixture.mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             0u,
+             "off-frustum frame emits no color draw");
+
+  visual.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)));
+  fixture.mock.resetCounters();
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&scene, &fixture.camera);
+  fixture.renderer.EndFrame();
+  const RenderCommand* current =
+    findSubmittedUniformMat4(fixture.mock, WorldLook::kMvpUniform, 0);
+  const RenderCommand* previous =
+    findSubmittedUniformMat4(fixture.mock, WorldLook::kPrevMvpUniform, 0);
+  bool matricesMatch = current != nullptr && previous != nullptr;
+  if (matricesMatch) {
+    for (int index = 0; index < 16; ++index) {
+      matricesMatch =
+        matricesMatch && std::abs(current->uniformMat4.value[index] -
+                                  previous->uniformMat4.value[index]) < 0.0001f;
+    }
+  }
+  testTrue(g,
+           matricesMatch,
+           "first visible frame after a culling gap uses current MVP history");
 }
 
 static bool
@@ -621,8 +1334,9 @@ testMeshVisualShadowUniformsFromSetters()
 
   mock.resetCounters();
   renderer.BeginFrame();
-  testTrue(
-    g, visual.AppendCommands(&renderer), "lit cube appends shadow tokens");
+  DrawList scene(&window, &camera);
+  scene.AddDrawable(&visual, RenderLayerId::World);
+  renderer.RenderScene(&scene, &camera);
   renderer.EndFrame();
 
   bool sawShadowViewport = false;
@@ -673,8 +1387,7 @@ testMeshVisualShadowUniformsFromSetters()
   visual.setShadowsEnabled(false);
   mock.resetCounters();
   renderer.BeginFrame();
-  testTrue(
-    g, visual.AppendCommands(&renderer), "unshadowed cube appends tokens");
+  renderer.RenderScene(&scene, &camera);
   renderer.EndFrame();
 
   bool sawShadowFramebuffer = false;
@@ -723,7 +1436,7 @@ testMeshVisualMotionBlurUniformsFromSetters()
   renderer.EndFrame();
 
   const RenderCommand* firstMvp =
-    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 1);
+    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 0);
   const RenderCommand* firstPrev =
     findSubmittedUniformMat4(mock, WorldLook::kPrevMvpUniform, 0);
   testTrue(g, firstMvp != nullptr, "main pass emits uMVP");
@@ -732,11 +1445,11 @@ testMeshVisualMotionBlurUniformsFromSetters()
   bool haveFirstMvp = false;
   if (firstMvp != nullptr && firstPrev != nullptr) {
     std::memcpy(glm::value_ptr(firstMvpMatrix),
-                firstMvp->uniformMat4.m,
+                firstMvp->uniformMat4.value,
                 16 * sizeof(float));
     haveFirstMvp = true;
     testTrue(g,
-             matricesNear(firstPrev->uniformMat4.m, firstMvpMatrix),
+             matricesNear(firstPrev->uniformMat4.value, firstMvpMatrix),
              "first frame previous MVP matches current MVP");
   }
 
@@ -768,7 +1481,7 @@ testMeshVisualMotionBlurUniformsFromSetters()
   renderer.EndFrame();
 
   const RenderCommand* secondMvp =
-    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 1);
+    findSubmittedUniformMat4(mock, WorldLook::kMvpUniform, 0);
   const RenderCommand* secondPrev =
     findSubmittedUniformMat4(mock, WorldLook::kPrevMvpUniform, 0);
   testTrue(g,
@@ -776,15 +1489,16 @@ testMeshVisualMotionBlurUniformsFromSetters()
            "moved frame emits current and previous MVP");
   if (haveFirstMvp && secondPrev != nullptr) {
     testTrue(g,
-             matricesNear(secondPrev->uniformMat4.m, firstMvpMatrix),
+             matricesNear(secondPrev->uniformMat4.value, firstMvpMatrix),
              "second frame previous MVP matches the prior current MVP");
   }
   if (secondMvp != nullptr && secondPrev != nullptr) {
     glm::mat4 current(1.0f);
-    std::memcpy(
-      glm::value_ptr(current), secondMvp->uniformMat4.m, 16 * sizeof(float));
+    std::memcpy(glm::value_ptr(current),
+                secondMvp->uniformMat4.value,
+                16 * sizeof(float));
     testTrue(g,
-             !matricesNear(secondPrev->uniformMat4.m, current),
+             !matricesNear(secondPrev->uniformMat4.value, current),
              "moved frame current MVP differs from previous MVP");
   }
 
@@ -811,6 +1525,16 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
   registry.add("Illumo.MeshVisual.DynamicMeshReuse", []() {
     return runMeshVisualCase(testMeshVisualDynamicMeshReuse);
   });
+  registry.add("Illumo.MeshVisual.IndexedTriangles", []() {
+    return runMeshVisualCase(testMeshVisualIndexedTriangles);
+  });
+  registry.add("Illumo.MeshVisual.SharedMeshAsset", []() {
+    return runMeshVisualCase(testMeshVisualSharedMeshAsset);
+  });
+  registry.add("Illumo.MeshVisual.ManagedAssetSceneShadow", []() {
+    return runMeshVisualCase(
+      testMeshVisualManagedAssetParticipatesInSceneShadowPass);
+  });
   registry.add("Illumo.MeshVisual.SpriteAndCube",
                []() { return runMeshVisualCase(testMeshVisualSpriteAndCube); });
   registry.add("Illumo.MeshVisual.Billboard",
@@ -821,8 +1545,20 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
   registry.add("Illumo.MeshVisual.NewPrimitives", []() {
     return runMeshVisualCase(testMeshVisualNewPrimitivesEmitTokens);
   });
-  registry.add("Illumo.MeshVisual.LitShadowPassClearsDepth", []() {
-    return runMeshVisualCase(testMeshVisualLitShadowPassClearsDepth);
+  registry.add("Illumo.MeshVisual.SceneShadowPassCoversVisibleSet", []() {
+    return runMeshVisualCase(testMeshVisualSceneShadowPassCoversVisibleSet);
+  });
+  registry.add("Illumo.MeshVisual.BoundsCoverEveryGeometrySource", []() {
+    return runMeshVisualCase(testMeshVisualBoundsCoverEveryGeometrySource);
+  });
+  registry.add("Illumo.MeshVisual.RelevantCasterVolume", []() {
+    return runMeshVisualCase(testMeshVisualRelevantCasterVolume);
+  });
+  registry.add("Illumo.MeshVisual.InvalidCameraShadowFallback", []() {
+    return runMeshVisualCase(testMeshVisualInvalidCameraKeepsAllCasters);
+  });
+  registry.add("Illumo.MeshVisual.CulledFrameResetsMotionHistory", []() {
+    return runMeshVisualCase(testMeshVisualCulledFrameResetsMotionHistory);
   });
   registry.add("Illumo.MeshVisual.LightingUniformsFromSetters", []() {
     return runMeshVisualCase(testMeshVisualLightingUniformsFromSetters);

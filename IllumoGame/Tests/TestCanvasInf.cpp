@@ -1,26 +1,28 @@
+#include "Game/CanvasCoordinatePolicy.h"
 #include "Game/CanvasView.h"
 #include "Game/Cursor.h"
 #include "Game/SimulationRunner.h"
 #include "Game/SparseCellGrid.h"
 #include "Rulesets/BriansBrainRuleSet.h"
-#include "Rulesets/DayAndNightRuleSet.h"
-#include "Rulesets/GameOfLifeRuleSet.h"
-#include "Rulesets/HighlifeRuleSet.h"
-#include "Rulesets/LifeWithoutDeathRuleSet.h"
+#include "Rulesets/Elementary1DRuleSet.h"
+#include "Rulesets/LifeLikeRuleSet.h"
 #include "Rulesets/RuleSet.h"
-#include "Rulesets/SeedsRuleSet.h"
 #include "Rulesets/WireworldRuleSet.h"
 #include "TestHarness.h"
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <type_traits>
 #include <vector>
 
@@ -30,7 +32,7 @@ class IdentityRuleSet : public RuleSet
 {
 public:
   IdentityRuleSet()
-    : RuleSet(nullptr)
+    : RuleSet()
   {
   }
 };
@@ -39,6 +41,18 @@ static void
 testNegativeChunkMapping()
 {
   testSection("SparseCellGrid: negative coordinates and chunk boundaries");
+  const std::int64_t minimum = std::numeric_limits<std::int64_t>::min();
+  const std::int64_t maximum = std::numeric_limits<std::int64_t>::max();
+  testTrue(
+    g,
+    SparseCellGrid::floorDivide(minimum, 1) == minimum &&
+      SparseCellGrid::floorDivide(minimum, 16) == -576460752303423488LL &&
+      SparseCellGrid::floorDivide(minimum + 15, 16) == -576460752303423488LL &&
+      SparseCellGrid::floorDivide(minimum, 3) == -3074457345618258603LL &&
+      SparseCellGrid::floorDivide(maximum, 16) == 576460752303423487LL &&
+      SparseCellGrid::floorDivide(-1, maximum) == -1 &&
+      SparseCellGrid::floorDivide(minimum, 0) == 0,
+    "floor division preserves full signed range and invalid divisor policy");
   testEqInt(g,
             static_cast<int>(SparseCellGrid::floorDivide(-1, 16)),
             -1,
@@ -90,7 +104,7 @@ static void
 testSparseSimulationBoundaries()
 {
   testSection("SparseCellGrid: serial halo stepping");
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid grid;
   grid.setCell(CellAddress{ 15, 0 }, 0);
   grid.setCell(CellAddress{ 15, 1 }, 0);
@@ -156,7 +170,7 @@ static void
 testSparseRevisionAndBoundedVisit()
 {
   testSection("SparseCellGrid: revisions and bounded chunk visits");
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid grid;
   const std::uint64_t emptyRevision = grid.getRevision();
   testTrue(g, grid.advance(rules), "empty generation advances");
@@ -230,6 +244,135 @@ sameSparseRecords(const std::vector<SparseChunkRecord>& left,
 }
 
 static void
+testElementaryTransactions()
+{
+  // Allocation failure is fatal (the build has no exceptions), so only the
+  // publication side of the transaction is observable here.
+  testSection("Sparse elementary generation: publication");
+  Elementary1DRuleSet rule("RULE_90", 90u);
+  SparseCellGrid grid;
+  grid.setCell(CellAddress{ 0, 0 }, 0);
+  SparseCellGrid prior;
+  prior.copyStateFrom(grid);
+  const std::uint64_t priorRevision = grid.getRevision();
+  grid.setCell(CellAddress{ 32, 0 }, 0);
+  const std::uint64_t revision = grid.getRevision();
+  const std::vector<SparseChunkRecord> original = grid.collectChunkRecords();
+  SparseGenerationDelta previousDelta;
+  testTrue(g,
+           grid.captureGenerationDelta(priorRevision, &previousDelta) &&
+             prior.applyGenerationDelta(previousDelta) &&
+             sameSparseRecords(original, prior.collectChunkRecords()),
+           "the previous presentation delta reproduces the edits");
+  testTrue(g,
+           grid.advance(rule) && grid.getRevision() == revision + 1,
+           "a generation publishes once");
+  SparseGenerationDelta delta;
+  testTrue(g,
+           grid.captureGenerationDelta(revision, &delta) &&
+             prior.applyGenerationDelta(delta) &&
+             sameSparseRecords(grid.collectChunkRecords(),
+                               prior.collectChunkRecords()),
+           "published delta reproduces complete output and history");
+
+  SparseCellGrid destination;
+  destination.setCell(CellAddress{ 100, 4 }, 0);
+  testTrue(g,
+           destination.advance(rule) &&
+             destination.getCell(CellAddress{ 99, 5 }) == 0,
+           "a destination advances directly before an external source");
+  SparseCellGrid expected;
+  expected.copyStateFrom(grid);
+  expected.advance(rule);
+  testTrue(g,
+           destination.advanceFrom(grid, rule) &&
+             sameSparseRecords(destination.collectChunkRecords(),
+                               expected.collectChunkRecords()),
+           "external-source advance produces complete source history");
+  SparseCellGrid empty;
+  testTrue(g,
+           destination.advanceFrom(empty, rule) &&
+             destination.getAllocatedChunkCount() == 0 &&
+             destination.getRevision() == empty.getRevision(),
+           "empty external source replaces stale spare state");
+
+  SparseCellGrid torus(1, 1);
+  torus.setCell(CellAddress{ 8, 0 }, 0);
+  torus.setCell(CellAddress{ 8, 15 }, 0);
+  testTrue(
+    g,
+    torus.advance(rule) && torus.getCell(CellAddress{ 8, 0 }) == 1 &&
+      torus.getCell(CellAddress{ 7, 0 }) == 0 &&
+      torus.getCell(CellAddress{ 9, 0 }) == 0 &&
+      torus.getCell(CellAddress{ 8, 15 }) == 0,
+    "finite advance replaces destination row while preserving source history");
+
+  LifeLikeRuleSet life("LIFE", 1u << 3, (1u << 2) | (1u << 3));
+  SparseCellGrid evolving;
+  evolving.setCell(CellAddress{ 8, 0 }, 0);
+  SparseCellGrid cached;
+  SparseCellGrid::setCellCandidateOverrideForTesting(1);
+  SparseCellGrid::setWorkerOverrideForTesting(2);
+  for (int generation = 0; generation < 4; ++generation) {
+    SparseCellGrid fresh;
+    testTrue(g,
+             cached.advanceFrom(evolving, life) &&
+               !cached.getLastAdvanceStats().reusedCandidateTopology &&
+               fresh.advanceFrom(evolving, life) &&
+               sameSparseRecords(cached.collectChunkRecords(),
+                                 fresh.collectChunkRecords()),
+             "cached Moore sources survive elementary map replacement");
+    testTrue(g,
+             cached.advanceFrom(evolving, life) &&
+               cached.getLastAdvanceStats().reusedCandidateTopology,
+             "unchanged source reuses linked candidate topology");
+    testTrue(g, evolving.advance(rule), "elementary replacement advances");
+  }
+  SparseCellGrid::setCellCandidateOverrideForTesting(0);
+  SparseCellGrid::setWorkerOverrideForTesting(0);
+}
+
+static void
+testElementaryHistoryBench()
+{
+  testSection("Sparse elementary history latency");
+  Elementary1DRuleSet rule("RULE_90", 90u);
+  for (const int historyRows : { 0, 1024 }) {
+    SparseCellGrid source;
+    for (int y = -historyRows; y < 0; ++y) {
+      for (int x = 0; x < 128; ++x) {
+        source.setCell(CellAddress{ x, y }, 0);
+      }
+    }
+    source.setCell(CellAddress{ 0, 0 }, 0);
+    SparseCellGrid destination;
+    for (int warmup = 0; warmup < 3; ++warmup) {
+      destination.advanceFrom(source, rule);
+    }
+    const std::chrono::steady_clock::time_point started =
+      std::chrono::steady_clock::now();
+    bool succeeded = true;
+    constexpr int iterations = 64;
+    for (int i = 0; i < iterations; ++i) {
+      succeeded = destination.advanceFrom(source, rule) && succeeded;
+    }
+    const double milliseconds = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - started)
+                                  .count() /
+                                iterations;
+    std::printf("ElementaryHistoryBench: historyRows=%d historyWidth=128 "
+                "iterations=%d ms/generation=%.6f\n",
+                historyRows,
+                iterations,
+                milliseconds);
+    testTrue(g,
+             succeeded && destination.getCell(CellAddress{ -1, 1 }) == 0 &&
+               destination.getCell(CellAddress{ 1, 1 }) == 0,
+             "retained history benchmark preserves next-row result");
+  }
+}
+
+static void
 seedRepeatedDenseChunks(SparseCellGrid* grid, int chunkCount)
 {
   if (grid == nullptr) {
@@ -260,7 +403,7 @@ static void
 testSparseParallelDeterminism()
 {
   testSection("SparseCellGrid: serial and parallel target stepping");
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid serial;
   SparseCellGrid parallel;
   seedSparseRandom(&serial, 160, 17u);
@@ -350,7 +493,7 @@ static void
 testSparseCellCandidates()
 {
   testSection("SparseCellGrid: adaptive cell candidates");
-  GameOfLifeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   SparseCellGrid candidates;
   SparseCellGrid fullChunks;
   seedWideBlinkers(&candidates, 96);
@@ -383,7 +526,7 @@ testSparseCellCandidates()
                              fullChunks.collectChunkRecords()),
            "cell candidates remain byte-identical to full chunks");
 
-  WireworldRuleSet wireworld(nullptr);
+  WireworldRuleSet wireworld{};
   SparseCellGrid dense;
   SparseCellGrid denseReference;
   bool denseAssigned = true;
@@ -450,7 +593,7 @@ static void
 testSparsePerTargetAdaptiveEvaluation()
 {
   testSection("SparseCellGrid: per-target adaptive evaluation");
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid adaptive;
   SparseCellGrid fullChunks;
   seedMixedTargetWorld(&adaptive);
@@ -486,7 +629,7 @@ static void
 testSparseCandidateParallelDeterminism()
 {
   testSection("SparseCellGrid: coarse parallel candidate evaluation");
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid serial;
   SparseCellGrid parallel;
   const int colonyCount = 512;
@@ -551,7 +694,7 @@ static void
 testSparseCandidatePreparation()
 {
   testSection("SparseCellGrid: parallel candidate preparation");
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid serial;
   SparseCellGrid parallel;
   SparseCellGrid fullChunks;
@@ -620,7 +763,7 @@ static void
 testSparseChangedFrontier()
 {
   testSection("SparseCellGrid: retained changed-region frontier");
-  GameOfLifeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   SparseCellGrid stable;
   stable.setCell(CellAddress{ 3, 3 }, 0);
   stable.setCell(CellAddress{ 4, 3 }, 0);
@@ -690,7 +833,7 @@ testSparseChangedFrontier()
   ruleChange.setCell(CellAddress{ 0, 1 }, 0);
   ruleChange.setCell(CellAddress{ 1, 1 }, 0);
   testTrue(g, ruleChange.advance(life), "life block settles");
-  SeedsRuleSet seeds(nullptr);
+  LifeLikeRuleSet seeds("SEEDS", 1u << 2, 0u);
   const std::uint64_t lifeRevision = ruleChange.getRevision();
   testTrue(g, ruleChange.advance(seeds), "ruleset change advances");
   testTrue(g,
@@ -731,7 +874,7 @@ static void
 testSparseAdaptiveFrontierCost()
 {
   testSection("SparseCellGrid: adaptive frontier cost and candidates");
-  GameOfLifeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   SparseCellGrid optimized;
   SparseCellGrid reference;
   seedAdaptiveFrontierWorld(&optimized, 1024, 8);
@@ -790,7 +933,7 @@ static void
 testSparseDenseLocalIdentity()
 {
   testSection("SparseCellGrid: dense local serial/worker/path identity");
-  GameOfLifeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   SparseCellGrid serial;
   SparseCellGrid parallel;
   SparseCellGrid complete;
@@ -825,7 +968,7 @@ static void
 testSparseFrontierTrackingSurvivesLargeBurst()
 {
   testSection("SparseCellGrid: changed-chunk tracking survives 4096 burst");
-  GameOfLifeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   const int burstCount = 4200;
   SparseCellGrid burst;
   seedWideBlinkers(&burst, burstCount);
@@ -859,7 +1002,7 @@ static void
 testSparsePreciseActivityMasks()
 {
   testSection("SparseCellGrid: cell-precise activity gating");
-  GameOfLifeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
 
   SparseCellGrid interior;
   seedStableBlocksAndBlinker(&interior, 128);
@@ -904,7 +1047,7 @@ testSparsePreciseActivityMasks()
              boundaryStats.frontierTargetCount <= 2u,
            "edge changes enroll only the touching neighbor chunk");
 
-  WireworldRuleSet wireworld(nullptr);
+  WireworldRuleSet wireworld{};
   SparseCellGrid conductors;
   SparseChunkRecord conductor;
   conductor.cells.fill(WireworldRuleSet::CELL_CONDUCTOR);
@@ -926,7 +1069,7 @@ static void
 testSparseChunkMemoization()
 {
   testSection("SparseCellGrid: exact on-demand chunk memoization");
-  GameOfLifeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   SparseCellGrid cached;
   SparseCellGrid reference;
   seedRepeatedDenseChunks(&cached, 128);
@@ -954,7 +1097,7 @@ testSparseChunkMemoization()
              "memoized output is byte-identical to uncached output");
   }
 
-  SeedsRuleSet seeds(nullptr);
+  LifeLikeRuleSet seeds("SEEDS", 1u << 2, 0u);
   SparseCellGrid::setChunkMemoOverrideForTesting(1);
   testTrue(g, cached.advance(seeds), "memoized ruleset switch advances");
   SparseCellGrid::setChunkMemoOverrideForTesting(-1);
@@ -989,6 +1132,44 @@ testSparseChunkMemoization()
              sparseCandidate.getLastAdvanceStats().memoProbeCount,
              0u,
              "candidate-only evaluation bypasses halo memoization");
+}
+
+static void
+testSparseMemoRuleSemantics()
+{
+  testSection("SparseCellGrid: warm memo invalidation by transition semantics");
+  LifeLikeRuleSet life{};
+  LifeLikeRuleSet seeds("SEEDS", 1u << 2, 0u);
+  LifeLikeRuleSet sameTagSeeds("GAME_OF_LIFE", 1u << 2, 0u);
+  const RuleSet* replacements[] = { &seeds, &sameTagSeeds };
+  SparseCellGrid::setCellCandidateOverrideForTesting(-1);
+  SparseCellGrid::setWorkerOverrideForTesting(1);
+  for (const RuleSet* replacement : replacements) {
+    SparseCellGrid cached;
+    seedRepeatedDenseChunks(&cached, 64);
+    const std::vector<SparseChunkRecord> original =
+      cached.collectChunkRecords();
+    SparseCellGrid::setChunkMemoOverrideForTesting(1);
+    testTrue(g, cached.advance(life), "warm original rule entries");
+    testTrue(g,
+             cached.getLastAdvanceStats().memoHitCount > 0u,
+             "fixture exercises warm memo hits");
+    // Restore exact keys without clearing the retained memo.
+    for (const SparseChunkRecord& record : original) {
+      testTrue(g, cached.assignChunk(record), "restore original neighborhood");
+    }
+    SparseCellGrid reference;
+    reference.copyStateFrom(cached);
+    testTrue(
+      g, cached.advance(*replacement), "advance cached replacement rule");
+    SparseCellGrid::setChunkMemoOverrideForTesting(-1);
+    testTrue(
+      g, reference.advance(*replacement), "advance uncached replacement rule");
+    testTrue(g,
+             sameSparseRecords(cached.collectChunkRecords(),
+                               reference.collectChunkRecords()),
+             "equal instance revisions and tags cannot reuse old transitions");
+  }
 }
 
 static void
@@ -1106,7 +1287,7 @@ testSparseCachedStatistics()
              0u,
              "clear resets counted cache");
 
-  GameOfLifeRuleSet life(nullptr);
+  LifeLikeRuleSet life{};
   SparseCellGrid complete;
   complete.setCell(CellAddress{ 0, 0 }, 0);
   SparseCellGrid::setCellCandidateOverrideForTesting(-1);
@@ -1142,7 +1323,7 @@ testSparseCandidateScratchReuse()
 {
   testSection("SparseCellGrid: retained candidate scratch storage");
   const int colonyCount = 64;
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid grid;
   seedWideBlinkers(&grid, colonyCount);
 
@@ -1211,7 +1392,7 @@ static void
 testSparseCandidateFlatIndex()
 {
   testSection("SparseCellGrid: flat candidate index generations");
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid candidates;
   SparseCellGrid fullChunks;
   seedWideBlinkers(&candidates, 128);
@@ -1256,7 +1437,7 @@ static void
 testSparseCompleteHaloScratchReuse()
 {
   testSection("SparseCellGrid: retained complete-halo scratch storage");
-  WireworldRuleSet rules(nullptr);
+  WireworldRuleSet rules{};
   SparseCellGrid grid;
   bool assigned = true;
   for (int chunkY = 0; chunkY < 9; ++chunkY) {
@@ -1326,7 +1507,7 @@ static void
 testSparseChunkNodeReuse()
 {
   testSection("SparseCellGrid: retained generation chunk nodes");
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   SparseCellGrid candidates;
   candidates.setCell(CellAddress{ 4, 3 }, 0);
   candidates.setCell(CellAddress{ 4, 4 }, 0);
@@ -1408,13 +1589,18 @@ static void
 testSparseCellCandidateRuleEquivalence()
 {
   testSection("SparseCellGrid: candidate rule equivalence");
-  GameOfLifeRuleSet life(nullptr);
-  SeedsRuleSet seeds(nullptr);
-  BriansBrainRuleSet brains(nullptr);
-  HighlifeRuleSet highlife(nullptr);
-  DayAndNightRuleSet dayAndNight(nullptr);
-  LifeWithoutDeathRuleSet lifeWithoutDeath(nullptr);
-  WireworldRuleSet wireworld(nullptr);
+  LifeLikeRuleSet life{};
+  LifeLikeRuleSet seeds("SEEDS", 1u << 2, 0u);
+  BriansBrainRuleSet brains{};
+  LifeLikeRuleSet highlife(
+    "HIGHLIFE", (1u << 3) | (1u << 6), (1u << 2) | (1u << 3));
+  LifeLikeRuleSet dayAndNight("DAY_AND_NIGHT",
+                              (1u << 3) | (1u << 6) | (1u << 7) | (1u << 8),
+                              (1u << 3) | (1u << 4) | (1u << 6) | (1u << 7) |
+                                (1u << 8));
+  LifeLikeRuleSet lifeWithoutDeath(
+    "LIFE_WITHOUT_DEATH", 1u << 3, (1u << 9) - 1u);
+  WireworldRuleSet wireworld{};
   RuleSet* ruleSets[] = { &life,     &seeds,       &brains,
                           &highlife, &dayAndNight, &lifeWithoutDeath,
                           &wireworld };
@@ -1456,7 +1642,7 @@ static void
 testMultiStateTransitions()
 {
   testSection("SparseCellGrid: multi-state transitions");
-  WireworldRuleSet rules(nullptr);
+  WireworldRuleSet rules{};
   SparseCellGrid grid;
   grid.setCell(CellAddress{ 0, 0 }, WireworldRuleSet::CELL_HEAD);
   grid.setCell(CellAddress{ 1, 0 }, WireworldRuleSet::CELL_TAIL);
@@ -1475,7 +1661,7 @@ testMultiStateTransitions()
               WireworldRuleSet::CELL_CONDUCTOR,
               "conductor preserves state");
 
-  BriansBrainRuleSet brainRules(nullptr);
+  BriansBrainRuleSet brainRules{};
   SparseCellGrid brain;
   brain.setCell(CellAddress{ 0, 0 }, 0);
   brain.setCell(CellAddress{ 1, 0 }, 2);
@@ -1504,14 +1690,13 @@ testBoundedCanvasView()
   testTrue(g,
            view.getVisibleCell(3, 2) == CellAddress{ 0, 0 },
            "view samples the centered origin");
-  const unsigned char* pixels = view.getDisplayTexBuffer();
   const CellAddress cacheFirst = view.getCacheFirstCell();
   const int originX =
     static_cast<int>((0 - cacheFirst.x) / view.getCellsPerTexel());
   const int originY =
     static_cast<int>((cacheFirst.y - 0) / view.getCellsPerTexel());
   testEqUChar(g,
-              pixels[(originY * view.getTextureWidth() + originX) * 3],
+              view.getDisplayedTexel(originX, originY)[0],
               0,
               "visible alive cell is staged black");
 
@@ -1567,10 +1752,9 @@ testAdaptiveOverviewAndRevisionGate()
     static_cast<int>((0 - firstCell.x) / view.getCellsPerTexel());
   const int outputY =
     static_cast<int>((firstCell.y - 0) / view.getCellsPerTexel());
-  const unsigned char* pixels = view.getDisplayTexBuffer();
-  const int pixelIndex = (outputY * view.getTextureWidth() + outputX) * 3;
+  const unsigned char red = view.getDisplayedTexel(outputX, outputY)[0];
   testTrue(g,
-           pixels[pixelIndex] > 0 && pixels[pixelIndex] < 255,
+           red > 0 && red < 255,
            "overview pixel contains density-weighted live color");
 
   view.AppendCommands(&renderer);
@@ -1612,7 +1796,7 @@ testAdaptiveOverviewAndRevisionGate()
     if (command.commandType == CommandType::UpdateTexture) {
       foundOverviewUpload = true;
       usesTextureStride =
-        command.updateTexture.srcRowStride == view.getTextureWidth();
+        command.updateTexture.srcRowStride == view.getTextureWidth() * 2;
     }
   }
   testTrue(g, foundOverviewUpload, "changed overview emits one texture update");
@@ -1664,11 +1848,17 @@ testTextureCapacityAndLifecycle()
   std::uint32_t textureGeneration = 0u;
   std::size_t replacementCount = 0u;
 
+  // The renderer's shared white texture (D-R35) is not the view's.
+  renderer.whiteTexture();
+  const std::size_t sharedTextureCreates = countTextureCreates(mock);
+
   {
     CanvasView view(80, 60, &grid, &window, &camera, &renderer);
     const std::size_t initialTextureCreates = countTextureCreates(mock);
-    testEqSize(
-      g, initialTextureCreates, 1u, "view enrolls one initial display texture");
+    testEqSize(g,
+               initialTextureCreates,
+               sharedTextureCreates + 1u,
+               "view enrolls one initial display texture");
 
     view.rebuildTargetsFromGrid();
     const std::size_t grownTextureCreates = countTextureCreates(mock);
@@ -1726,6 +1916,87 @@ testTextureCapacityAndLifecycle()
              destroyedTextureCount,
              1u,
              "view destruction releases its backend texture");
+}
+
+static void
+testShaderFadeUploadsOnlyTargetChanges()
+{
+  testSection("CanvasView: the shader fades, the CPU uploads target changes");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  SparseCellGrid grid;
+  grid.setCell(CellAddress{ 0, 0 }, 0);
+  CanvasView view(80, 60, &grid, &window, &camera, &renderer);
+  view.rebuildDefaultPalette();
+  view.setFadeSpeed(4.0f);
+  view.rebuildTargetsFromGrid();
+  view.AppendCommands(&renderer);
+  mock.SubmitCommandQueue();
+  mock.ClearCommandQueue();
+
+  const CellAddress first = view.getCacheFirstCell();
+  const int x = static_cast<int>(0 - first.x);
+  const int y = static_cast<int>(first.y - 0);
+  const unsigned char live = view.getDisplayedTexel(x, y)[0];
+  grid.setCell(CellAddress{ 0, 0 }, SparseCellGrid::BackgroundState);
+  view.rebuildTargetsFromGrid();
+  view.AppendCommands(&renderer);
+  mock.SubmitCommandQueue();
+  mock.ClearCommandQueue();
+  testTrue(g,
+           view.getLastUploadByteCount() > 0u,
+           "a changed cell uploads its dirty tile");
+  const unsigned char background = view.getDisplayedTexel(x, y)[0];
+  testEqUChar(g, background, live, "a new fade starts from the shown colour");
+
+  view.tickVisual(0.1f);
+  bool uploadedWhileFading = false;
+  bool fadeUniform = false;
+  view.AppendCommands(&renderer);
+  mock.SubmitCommandQueue();
+  for (std::size_t i = 0; i < mock.getLastSubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastSubmitted(i);
+    uploadedWhileFading =
+      uploadedWhileFading || command.commandType == CommandType::UpdateTexture;
+    if (command.commandType == CommandType::SetUniformVec3 &&
+        std::strcmp(command.uniformVec3.name, WorldLook::kCanvasFadeUniform) ==
+          0) {
+      fadeUniform = std::fabs(command.uniformVec3.x - 0.1f) < 1e-4f &&
+                    command.uniformVec3.y == 4.0f &&
+                    command.uniformVec3.z == 1.0f;
+    }
+  }
+  mock.ClearCommandQueue();
+  testTrue(g, !uploadedWhileFading, "an advancing fade uploads nothing");
+  testTrue(g, fadeUniform, "the cell quad carries clock, speed and layout");
+  const float expected =
+    static_cast<float>(view.getPaletteRgb()[3]) +
+    (static_cast<float>(live) - static_cast<float>(view.getPaletteRgb()[3])) *
+      std::exp(-4.0f * 0.1f);
+  testTrue(g,
+           std::fabs(static_cast<float>(view.getDisplayedTexel(x, y)[0]) -
+                     expected) <= 1.0f,
+           "the shown colour follows the shader's exponential fade");
+
+  for (int step = 0; step < 40; ++step) {
+    view.tickVisual(0.1f);
+  }
+  testEqSize(
+    g, view.getFadingTexelCount(), 0u, "a finished fade retires on the CPU");
+  view.AppendCommands(&renderer);
+  mock.SubmitCommandQueue();
+  mock.ClearCommandQueue();
+  testTrue(g,
+           view.getLastUploadByteCount() > 0u,
+           "retirement uploads the settled slot once");
+  view.tickVisual(1.0f);
+  testTrue(g, !view.isTextureUploadPending(), "a settled canvas stays idle");
 }
 
 static void
@@ -1794,7 +2065,7 @@ testIncrementalPresentationWork()
              SparseCellGrid::kChunkCellCount,
              "single-cell removal recomputes its cached chunk");
 
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   testTrue(g, grid.advance(rules), "presentation source generation advances");
   view.rebuildTargetsFromGrid();
   testEqSize(g,
@@ -1830,7 +2101,7 @@ testDenseVisibleChangesUseCompleteSample()
   CanvasView view(80, 60, &grid, &window, &camera, nullptr);
   view.setFadeSpeed(0.0f);
   view.rebuildTargetsFromGrid();
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   testTrue(g, grid.advance(rules), "dense block advances one generation");
   view.rebuildTargetsFromGrid();
   const std::size_t fullViewTexels =
@@ -1840,6 +2111,72 @@ testDenseVisibleChangesUseCompleteSample()
              view.getLastSampledTexelCount(),
              fullViewTexels,
              "a dense visible generation samples the complete cache");
+}
+
+static void
+seedVisibleSparseBlinkers(SparseCellGrid* grid)
+{
+  if (grid == nullptr) {
+    return;
+  }
+  for (int chunkY = -12; chunkY < 13; ++chunkY) {
+    for (int chunkX = -20; chunkX < 20; ++chunkX) {
+      const std::int64_t centerX = chunkX * SparseCellGrid::kChunkDim + 8;
+      const std::int64_t centerY = chunkY * SparseCellGrid::kChunkDim + 8;
+      grid->setCell(CellAddress{ centerX - 1, centerY }, 0);
+      grid->setCell(CellAddress{ centerX, centerY }, 0);
+      grid->setCell(CellAddress{ centerX + 1, centerY }, 0);
+    }
+  }
+}
+
+static bool
+sameVisibleWorldTexels(const CanvasView& left,
+                       const CanvasView& right,
+                       const char* context);
+
+static void
+testSparseOverviewPublicationStaysIncremental()
+{
+  testSection("CanvasView: sparse overview publication remains incremental");
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  Camera camera(glm::vec2(0.0f, 0.0f), 0.1f, &env);
+  SparseCellGrid published;
+  seedVisibleSparseBlinkers(&published);
+  CanvasView view(80, 60, &published, &window, &camera, nullptr);
+  view.setFadeSpeed(0.0f);
+  view.rebuildTargetsFromGrid();
+
+  LifeLikeRuleSet rules{};
+  SparseCellGrid next;
+  testTrue(g,
+           next.advanceFrom(published, rules),
+           "sparse overview source advances one generation");
+  SparseGenerationDelta delta;
+  testTrue(g,
+           next.captureGenerationDelta(published.getRevision(), &delta, false),
+           "sparse overview generation captures a presentation delta");
+  testTrue(g,
+           !delta.fullReplacement && !delta.changedChunks.empty(),
+           "sparse overview generation retains precise changed chunks");
+
+  view.adoptGrid(&next, delta);
+  CanvasView reference(80, 60, &next, &window, &camera, nullptr);
+  reference.setFadeSpeed(0.0f);
+  reference.rebuildTargetsFromGrid();
+  const std::size_t fullCacheTexels =
+    static_cast<std::size_t>(view.getCachedTexelWidth()) *
+    static_cast<std::size_t>(view.getCachedTexelHeight());
+  testTrue(g,
+           view.getLastSampledTexelCount() < fullCacheTexels / 4u,
+           "sparse changed-cell masks avoid a broad overview refill");
+  testTrue(g,
+           sameVisibleWorldTexels(
+             view, reference, "sparse overview generation publication"),
+           "incremental sparse publication matches a fresh overview refill");
 }
 
 static void
@@ -1872,25 +2209,75 @@ testCanvasViewUsesWorldCellQuad()
   testTrue(g,
            view.getVisual().getSpace() == PrimitiveSpace::World,
            "CanvasView uses the camera world space");
-  SpritePrimitive* sprite = view.getVisual().getSprite(0);
-  testTrue(g, sprite != nullptr, "CanvasView owns one display sprite");
-  if (sprite != nullptr) {
+  testEqSize(g,
+             view.getVisual().shapeCount(),
+             0u,
+             "infinite canvas has no finite-world boundary");
+  testEqSize(g,
+             view.getVisual().spriteCount(),
+             0u,
+             "cells draw as the canvas-style quad, not a visual sprite");
+  const std::array<float, 32>& quad = view.getCellQuadVertices();
+  {
     const CellAddress cacheFirst = view.getCacheFirstCell();
     const float expectedX = static_cast<float>(cacheFirst.x) * 16.0f - 8.0f;
     const float expectedTop = static_cast<float>(cacheFirst.y) * 16.0f + 8.0f;
     const float expectedHeight =
       static_cast<float>(view.getCacheCellHeight()) * 16.0f;
+    const float expectedWidth =
+      static_cast<float>(view.getCacheCellWidth()) * 16.0f;
+    // Corners: bottom-left, bottom-right, top-right, top-left.
     testTrue(g,
-             sprite->rect.x == expectedX &&
-               sprite->rect.y == expectedTop - expectedHeight &&
-               sprite->rect.w ==
-                 static_cast<float>(view.getCacheCellWidth()) * 16.0f &&
-               sprite->rect.h == expectedHeight,
-             "display sprite follows padded cache cell boundaries");
+             quad[0] == expectedX && quad[1] == expectedTop - expectedHeight &&
+               quad[16] == expectedX + expectedWidth && quad[17] == expectedTop,
+             "cell quad follows padded cache cell boundaries");
     testTrue(g,
-             sprite->region.v0 == 1.0f && sprite->region.v1 == 0.0f,
-             "display sprite keeps world-up rows upright");
+             quad[7] == 1.0f && quad[31] == 0.0f,
+             "cell quad keeps world-up rows upright");
   }
+
+  SparseCellGrid finiteGrid(4, 2);
+  CanvasView finiteView(4, 4, &finiteGrid, &window, &camera, &renderer);
+  finiteView.rebuildTargetsFromGrid();
+  testEqSize(g,
+             finiteView.getVisual().shapeCount(),
+             2u,
+             "finite canvas has contrasting wrap boundary outlines");
+  ShapePrimitive* boundaryUnderlay = finiteView.getVisual().getShape(0);
+  ShapePrimitive* boundaryAccent = finiteView.getVisual().getShape(1);
+  const float expectedBoundaryX = -520.0f;
+  const float expectedBoundaryY = -264.0f;
+  const float expectedBoundaryWidth = 1024.0f;
+  const float expectedBoundaryHeight = 512.0f;
+  testTrue(g,
+           boundaryUnderlay != nullptr && boundaryAccent != nullptr &&
+             boundaryUnderlay->kind == ShapeKind::OutlineRect &&
+             boundaryAccent->kind == ShapeKind::OutlineRect &&
+             boundaryUnderlay->rect.x == expectedBoundaryX &&
+             boundaryUnderlay->rect.y == expectedBoundaryY &&
+             boundaryUnderlay->rect.w == expectedBoundaryWidth &&
+             boundaryUnderlay->rect.h == expectedBoundaryHeight &&
+             boundaryAccent->rect.x == expectedBoundaryX &&
+             boundaryAccent->rect.y == expectedBoundaryY &&
+             boundaryAccent->rect.w == expectedBoundaryWidth &&
+             boundaryAccent->rect.h == expectedBoundaryHeight,
+           "finite boundary follows the canonical torus cell edges");
+  testTrue(g,
+           boundaryUnderlay != nullptr && boundaryAccent != nullptr &&
+             boundaryUnderlay->lineWidth == 4.0f &&
+             boundaryAccent->lineWidth == 2.0f &&
+             boundaryAccent->color.r == 245 && boundaryAccent->color.g == 102 &&
+             boundaryAccent->color.b == 112,
+           "finite boundary uses a two-pixel red edge at unit zoom");
+  camera.SetZoom(0.25f);
+  finiteView.syncVisibleRegion();
+  boundaryUnderlay = finiteView.getVisual().getShape(0);
+  boundaryAccent = finiteView.getVisual().getShape(1);
+  testTrue(g,
+           boundaryUnderlay != nullptr && boundaryAccent != nullptr &&
+             boundaryUnderlay->lineWidth == 16.0f &&
+             boundaryAccent->lineWidth == 8.0f,
+           "finite boundary keeps its screen thickness while zooming");
 }
 
 static void
@@ -1945,11 +2332,10 @@ readCacheTexelRgb(const CanvasView& view,
   const int cellsPerTexel = view.getCellsPerTexel();
   const int x = static_cast<int>((cell.x - first.x) / cellsPerTexel);
   const int y = static_cast<int>((first.y - cell.y) / cellsPerTexel);
-  const int index = (y * view.getTextureWidth() + x) * 3;
-  const unsigned char* pixels = view.getDisplayTexBuffer();
-  rgb[0] = pixels[index];
-  rgb[1] = pixels[index + 1];
-  rgb[2] = pixels[index + 2];
+  const std::array<unsigned char, 3> texel = view.getDisplayedTexel(x, y);
+  rgb[0] = texel[0];
+  rgb[1] = texel[1];
+  rgb[2] = texel[2];
 }
 
 static void
@@ -2097,7 +2483,14 @@ seedScrollPattern(SparseCellGrid* grid)
   for (std::int64_t y = -120; y <= 120; ++y) {
     for (std::int64_t x = -120; x <= 280; ++x) {
       if ((x % 5 == 0) || (y % 7 == 0)) {
-        grid->setCell(CellAddress{ x, y }, 0);
+        const unsigned char states[] = {
+          WireworldRuleSet::CELL_HEAD,
+          WireworldRuleSet::CELL_TAIL,
+          WireworldRuleSet::CELL_CONDUCTOR,
+        };
+        const std::uint64_t selector =
+          static_cast<std::uint64_t>(std::llabs(x * 3 + y * 5));
+        grid->setCell(CellAddress{ x, y }, states[selector % 3u]);
       }
     }
   }
@@ -2113,8 +2506,9 @@ testCameraCacheScrollMatchesRefill()
   env.setVar("WinY", 720);
   SparseCellGrid grid;
   seedScrollPattern(&grid);
+  WireworldRuleSet wireworld{};
 
-  const float zooms[] = { 1.0f, 0.1f };
+  const float zooms[] = { 1.0f, 0.16f, 0.1f };
   const double cellWorld = 16.0;
   const double panXs[] = { 3.0 * cellWorld, -3.0 * cellWorld, 3.0 * cellWorld };
   const double panYs[] = { 0.0, 0.0, 3.0 * cellWorld };
@@ -2124,6 +2518,7 @@ testCameraCacheScrollMatchesRefill()
       Camera camera(glm::vec2(0.0f, 0.0f), zoom, &env);
       CanvasView view(80, 60, &grid, &window, &camera, nullptr);
       view.setFadeSpeed(0.0f);
+      view.rebuildPalette(&wireworld);
       view.rebuildTargetsFromGrid();
       const std::size_t initialRefills = view.getCacheRefillCount();
       for (int frame = 1; frame <= 40; ++frame) {
@@ -2147,12 +2542,38 @@ testCameraCacheScrollMatchesRefill()
                "near-zoom pan keeps using cache scroll");
       CanvasView reference(80, 60, &grid, &window, &camera, nullptr);
       reference.setFadeSpeed(0.0f);
+      reference.rebuildPalette(&wireworld);
       reference.rebuildTargetsFromGrid();
       testTrue(g,
                sameVisibleWorldTexels(view, reference, context),
                "scrolled visible texels match a full refill");
     }
   }
+
+  SparseCellGrid emptyGrid;
+  Camera emptyCamera(glm::vec2(0.0f, 0.0f), 0.1f, &env);
+  CanvasView emptyView(80, 60, &emptyGrid, &window, &emptyCamera, nullptr);
+  emptyView.setFadeSpeed(0.0f);
+  emptyView.rebuildPalette(&wireworld);
+  emptyView.rebuildTargetsFromGrid();
+  const std::size_t emptyInitialRefills = emptyView.getCacheRefillCount();
+  for (int frame = 1; frame <= 40; ++frame) {
+    emptyCamera.SetPositionPrecise(
+      -static_cast<double>(frame) * 3.0 * cellWorld,
+      static_cast<double>(frame) * 3.0 * cellWorld);
+    emptyView.rebuildTargetsFromGrid();
+  }
+  CanvasView emptyReference(80, 60, &emptyGrid, &window, &emptyCamera, nullptr);
+  emptyReference.setFadeSpeed(0.0f);
+  emptyReference.rebuildPalette(&wireworld);
+  emptyReference.rebuildTargetsFromGrid();
+  testTrue(g,
+           emptyView.getCacheRefillCount() - emptyInitialRefills < 40u,
+           "empty far-zoom diagonal pan does not refill every frame");
+  testTrue(g,
+           sameVisibleWorldTexels(
+             emptyView, emptyReference, "empty zoom=0.1 negative diagonal"),
+           "empty scrolled texels match a full refill");
 }
 
 static void
@@ -2202,6 +2623,66 @@ testBoundedDirtyUploadRectangles()
 }
 
 static void
+testAsyncSimulationLifecycle()
+{
+  testSection("Sparse simulation: repeated startup and teardown");
+  SparseCellGrid published;
+  published.setCell(CellAddress{ -1, 0 }, 0);
+  published.setCell(CellAddress{ 0, 0 }, 0);
+  published.setCell(CellAddress{ 1, 0 }, 0);
+  LifeLikeRuleSet rules{};
+  SparseCellGrid expected;
+  expected.copyStateFrom(published);
+  testTrue(g, expected.advance(rules), "reference generation succeeds");
+
+  for (int iteration = 0; iteration < 128; ++iteration) {
+    {
+      SimulationRunner idleRunner;
+      testTrue(g, !idleRunner.isBusy(), "fresh runner is idle");
+    }
+
+    SparseCellGrid working;
+    {
+      SimulationRunner runner;
+      SparseGenerationDelta mirrorDelta;
+      const bool started = runner.start(
+        &working, &published, &rules, std::move(mirrorDelta), false);
+      testTrue(g, started, "fresh runner accepts immediate work");
+      if (started) {
+        SparseCellGrid* completedGrid = nullptr;
+        bool succeeded = false;
+        testTrue(g,
+                 runner.waitAndTakeCompleted(
+                   &completedGrid, nullptr, nullptr, &succeeded),
+                 "fresh runner completes immediate work");
+        testTrue(g,
+                 succeeded && completedGrid == &working &&
+                   sameSparseRecords(working.collectChunkRecords(),
+                                     expected.collectChunkRecords()),
+                 "first generation matches synchronous output");
+      }
+      runner.shutdown();
+      runner.shutdown();
+      testTrue(g, !runner.isBusy(), "repeated shutdown leaves runner idle");
+    }
+
+    working.clear();
+    {
+      SimulationRunner runner;
+      SparseGenerationDelta mirrorDelta;
+      testTrue(g,
+               runner.start(
+                 &working, &published, &rules, std::move(mirrorDelta), false),
+               "fresh runner accepts work before immediate destruction");
+    }
+    testTrue(g,
+             sameSparseRecords(working.collectChunkRecords(),
+                               expected.collectChunkRecords()),
+             "destruction joins and drains the submitted generation");
+  }
+}
+
+static void
 testAsyncSimulationPublication()
 {
   testSection("Sparse simulation: dual-grid publication and delta mirroring");
@@ -2209,7 +2690,7 @@ testAsyncSimulationPublication()
   seedStableBlocksAndBlinker(&published, 96);
   SparseCellGrid expected;
   expected.copyStateFrom(published);
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
   expected.advance(rules);
 
   SparseCellGrid working;
@@ -2491,7 +2972,7 @@ reportDenseSoupPresentation(const char* name,
   CanvasView view(80, 60, &grid, &window, &camera, &renderer);
   view.setFadeSpeed(fadeSpeed);
   view.rebuildTargetsFromGrid();
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules{};
 
   const int warmupFrames = 4;
   const int measuredFrames = 12;
@@ -2648,6 +3129,30 @@ testPresentationFrameLatencyBench()
   const std::size_t panRefills = view.getCacheRefillCount() - panRefillsBefore;
 
   camera.SetPositionPrecise(0.0, 0.0);
+  camera.SetZoom(0.1f);
+  view.syncVisibleRegion();
+  double farPanWorldX = 0.0;
+  for (int frame = 0; frame < warmupFrames; ++frame) {
+    farPanWorldX += panStepWorld;
+    camera.SetPositionPrecise(farPanWorldX, 0.0);
+    view.syncVisibleRegion();
+  }
+  const std::size_t farPanRefillsBefore = view.getCacheRefillCount();
+  RollingMetric farPanMetric;
+  for (int frame = 0; frame < measuredFrames; ++frame) {
+    farPanWorldX += panStepWorld;
+    const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+    camera.SetPositionPrecise(farPanWorldX, 0.0);
+    view.syncVisibleRegion();
+    farPanMetric.add(std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - start)
+                       .count());
+  }
+  const std::size_t farPanRefills =
+    view.getCacheRefillCount() - farPanRefillsBefore;
+
+  camera.SetPositionPrecise(0.0, 0.0);
   camera.SetZoom(1.0f);
   view.syncVisibleRegion();
   for (int frame = 0; frame < warmupFrames; ++frame) {
@@ -2687,6 +3192,13 @@ testPresentationFrameLatencyBench()
               panMetric.p95(),
               panMetric.maximum(),
               panRefills);
+  std::printf("BENCH: Presentation far-zoom sparse-pan N=%d p50/p95/max="
+              "%.3f/%.3f/%.3f ms refills=%zu\n",
+              measuredFrames,
+              farPanMetric.median(),
+              farPanMetric.p95(),
+              farPanMetric.maximum(),
+              farPanRefills);
   std::printf("BENCH: Presentation smooth-zoom N=%d p50/p95/max="
               "%.3f/%.3f/%.3f ms refills=%zu\n",
               measuredFrames,
@@ -2701,8 +3213,101 @@ testPresentationFrameLatencyBench()
   testTrue(
     g, panRefills == 0u, "aligned pan scrolls the cache instead of refilling");
   testTrue(g,
+           farPanRefills == 0u,
+           "far-zoom aligned pan scrolls the cache instead of refilling");
+  testTrue(g,
+           view.getCacheScrollMetric().size() > 0u,
+           "presentation records cache-scroll timing samples");
+  testTrue(g,
            zoomRefills < static_cast<std::size_t>(measuredFrames),
            "padded cache avoids a refill on every smooth-zoom frame");
+
+  SparseCellGrid published;
+  SparseCellGrid working;
+  seedVisibleSparseBlinkers(&published);
+  SparseCellGrid* currentGrid = &published;
+  SparseCellGrid* nextGrid = &working;
+  Camera publicationCamera(glm::vec2(0.0f, 0.0f), 0.1f, &env);
+  CanvasView incrementalPublication(
+    80, 60, currentGrid, &window, &publicationCamera, nullptr);
+  CanvasView forcedFullPublication(
+    80, 60, currentGrid, &window, &publicationCamera, nullptr);
+  incrementalPublication.setFadeSpeed(0.0f);
+  forcedFullPublication.setFadeSpeed(0.0f);
+  incrementalPublication.rebuildTargetsFromGrid();
+  forcedFullPublication.rebuildTargetsFromGrid();
+  LifeLikeRuleSet publicationRules{};
+  RollingMetric incrementalPublicationMetric;
+  RollingMetric forcedFullPublicationMetric;
+  const std::size_t incrementalRefillsBefore =
+    incrementalPublication.getCacheRefillCount();
+  const std::size_t forcedFullRefillsBefore =
+    forcedFullPublication.getCacheRefillCount();
+  bool publicationWorkSucceeded = true;
+  for (int frame = 0; frame < warmupFrames + measuredFrames; ++frame) {
+    publicationWorkSucceeded =
+      nextGrid->advanceFrom(*currentGrid, publicationRules) &&
+      publicationWorkSucceeded;
+    SparseGenerationDelta publicationDelta;
+    publicationWorkSucceeded =
+      nextGrid->captureGenerationDelta(
+        currentGrid->getRevision(), &publicationDelta, false) &&
+      publicationWorkSucceeded;
+    SparseGenerationDelta forcedFullDelta = publicationDelta;
+    forcedFullDelta.fullReplacement = true;
+    const std::chrono::steady_clock::time_point incrementalStart =
+      std::chrono::steady_clock::now();
+    incrementalPublication.adoptGrid(nextGrid, publicationDelta);
+    const std::chrono::steady_clock::time_point forcedFullStart =
+      std::chrono::steady_clock::now();
+    forcedFullPublication.adoptGrid(nextGrid, forcedFullDelta);
+    const std::chrono::steady_clock::time_point publicationEnd =
+      std::chrono::steady_clock::now();
+    if (frame >= warmupFrames) {
+      incrementalPublicationMetric.add(
+        std::chrono::duration<double, std::milli>(forcedFullStart -
+                                                  incrementalStart)
+          .count());
+      forcedFullPublicationMetric.add(std::chrono::duration<double, std::milli>(
+                                        publicationEnd - forcedFullStart)
+                                        .count());
+    }
+    SparseCellGrid* priorGrid = currentGrid;
+    currentGrid = nextGrid;
+    nextGrid = priorGrid;
+  }
+  const std::size_t incrementalPublicationRefills =
+    incrementalPublication.getCacheRefillCount() - incrementalRefillsBefore;
+  const std::size_t forcedFullPublicationRefills =
+    forcedFullPublication.getCacheRefillCount() - forcedFullRefillsBefore;
+  std::printf("BENCH: Presentation zoom0.1 sparse-publication N=%d "
+              "incremental p50/p95/max=%.3f/%.3f/%.3f ms "
+              "forced-full=%.3f/%.3f/%.3f ms refills=%zu/%zu\n",
+              measuredFrames,
+              incrementalPublicationMetric.median(),
+              incrementalPublicationMetric.p95(),
+              incrementalPublicationMetric.maximum(),
+              forcedFullPublicationMetric.median(),
+              forcedFullPublicationMetric.p95(),
+              forcedFullPublicationMetric.maximum(),
+              incrementalPublicationRefills,
+              forcedFullPublicationRefills);
+  testTrue(g,
+           publicationWorkSucceeded,
+           "publication benchmark advances and captures every sparse delta");
+  testEqSize(g,
+             incrementalPublicationRefills,
+             0u,
+             "precise sparse publications avoid complete overview refills");
+  testTrue(g,
+           forcedFullPublicationRefills >=
+             static_cast<std::size_t>(measuredFrames),
+           "forced-full control exercises complete overview refills");
+  testTrue(g,
+           sameVisibleWorldTexels(incrementalPublication,
+                                  forcedFullPublication,
+                                  "zoom0.1 sparse publication benchmark"),
+           "incremental publication remains byte-identical to a full refill");
 }
 
 static void
@@ -2722,15 +3327,41 @@ testCursorUsesCellBounds()
   Cursor cursor;
   cursor.init(&renderer, &window, &camera);
   cursor.setFromCell(0, 0);
+  testTrue(g,
+           cursor.displayX() == -8.0f && cursor.displayY() == -8.0f &&
+             cursor.getVisual().shapeCount() > 0u,
+           "the first placement snaps onto its selected cell");
 
-  ShapePrimitive* outline = cursor.getVisual().getShape(0);
-  testTrue(g, outline != nullptr, "cursor creates a cell outline");
-  if (outline != nullptr) {
-    testTrue(g,
-             outline->rect.x == -8.0f && outline->rect.y == -8.0f &&
-               outline->rect.w == 16.0f && outline->rect.h == 16.0f,
-             "cursor outline is centered on its selected cell");
+  // Moving glides there on a spring: it passes the cell, bounces back and
+  // settles exactly.
+  cursor.setFromCell(3, 0);
+  cursor.tick(0.02f, false);
+  testTrue(g,
+           cursor.targetX() == 40.0f && cursor.displayX() > -8.0f &&
+             cursor.displayX() < 40.0f,
+           "the cursor glides toward the new cell");
+  float furthest = cursor.displayX();
+  for (int frame = 0; frame < 60; ++frame) {
+    cursor.tick(1.0f / 60.0f, false);
+    furthest = std::max(furthest, cursor.displayX());
   }
+  testTrue(g,
+           furthest > 40.0f && cursor.displayX() == 40.0f &&
+             cursor.displayY() == -8.0f,
+           "it bounces past the cell and settles exactly on it");
+
+  cursor.setVisible(false);
+  cursor.tick(1.0f / 60.0f, false);
+  cursor.setVisible(true);
+  cursor.setFromCell(10, 0);
+  testTrue(g,
+           cursor.displayX() == 152.0f,
+           "a cursor that was hidden reappears in place");
+  cursor.tick(1.0f / 60.0f, true);
+  cursor.setFromCell(0, 0);
+  testTrue(g,
+           cursor.displayX() == -8.0f && cursor.displayY() == -8.0f,
+           "reduced motion snaps the cursor between cells");
   mock.resetCounters();
   testTrue(g,
            cursor.AppendCommands(&renderer),
@@ -2760,6 +3391,49 @@ runCanvasInfCase(void (*testFunction)())
 void
 registerCanvasInfTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllumoGame.CanvasInf.ElementaryTransactions",
+               []() { return runCanvasInfCase(testElementaryTransactions); });
+  registry.add("IllumoGame.Sim.ElementaryHistoryBench",
+               []() { return runCanvasInfCase(testElementaryHistoryBench); });
+  registry.add("IllumoGame.CanvasInf.CameraCoordinateBounds", []() {
+    g = {};
+    std::int64_t cell = 123;
+    testTrue(g,
+             !CanvasCoordinatePolicy::tryWorldToCell(1e300, &cell) &&
+               cell == 123,
+             "huge coordinate rejected before narrowing");
+    testTrue(g,
+             CanvasCoordinatePolicy::tryWorldToCell(
+               CanvasCoordinatePolicy::kMaximumWorld, &cell) &&
+               cell == CanvasCoordinatePolicy::kMaximumCell,
+             "positive boundary converts exactly");
+    testTrue(g,
+             CanvasCoordinatePolicy::tryWorldToCell(
+               -CanvasCoordinatePolicy::kMaximumWorld, &cell) &&
+               cell == -CanvasCoordinatePolicy::kMaximumCell,
+             "negative boundary converts exactly");
+    NullRenderWindow window(1280, 720);
+    EnvVars env;
+    Camera camera(glm::vec2(0), 0.1f, &env);
+    SparseCellGrid grid;
+    CanvasView view(80, 60, &grid, &window, &camera, nullptr);
+    for (double position : { CanvasCoordinatePolicy::kMaximumWorld,
+                             -CanvasCoordinatePolicy::kMaximumWorld }) {
+      camera.SetPositionPrecise(position, position);
+      view.syncVisibleRegion();
+      testTrue(g,
+               view.getCacheCellWidth() > 0 && view.getCacheCellHeight() > 0,
+               "endpoint margin supports padded cache and opposite-end jump");
+    }
+    const CellAddress prior = view.getCacheFirstCell();
+    camera.SetPositionPrecise(1e300, -1e300);
+    view.syncVisibleRegion();
+    testTrue(g,
+             view.getCacheFirstCell().x == prior.x &&
+               view.getCacheFirstCell().y == prior.y,
+             "invalid direct camera preserves previous safe cache");
+    return g.failures;
+  });
   registry.add("IllumoGame.CanvasInf.NegativeChunkMapping",
                []() { return runCanvasInfCase(testNegativeChunkMapping); });
   registry.add("IllumoGame.CanvasInf.UnboundedChunks",
@@ -2798,6 +3472,8 @@ registerCanvasInfTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CanvasInf.SparsePreciseActivityMasks", []() {
     return runCanvasInfCase(testSparsePreciseActivityMasks);
   });
+  registry.add("IllumoGame.CanvasInf.SparseMemoRuleSemantics",
+               []() { return runCanvasInfCase(testSparseMemoRuleSemantics); });
   registry.add("IllumoGame.CanvasInf.SparseChunkMemoization",
                []() { return runCanvasInfCase(testSparseChunkMemoization); });
   registry.add("IllumoGame.CanvasInf.SparseCachedStatistics",
@@ -2828,9 +3504,16 @@ registerCanvasInfTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CanvasInf.IncrementalPresentationWork", []() {
     return runCanvasInfCase(testIncrementalPresentationWork);
   });
+  registry.add("IllumoGame.CanvasInf.ShaderFadeUploadsOnlyTargetChanges", []() {
+    return runCanvasInfCase(testShaderFadeUploadsOnlyTargetChanges);
+  });
   registry.add(
     "IllumoGame.CanvasInf.DenseVisibleChangesUseCompleteSample", []() {
       return runCanvasInfCase(testDenseVisibleChangesUseCompleteSample);
+    });
+  registry.add(
+    "IllumoGame.CanvasInf.SparseOverviewPublicationStaysIncremental", []() {
+      return runCanvasInfCase(testSparseOverviewPublicationStaysIncremental);
     });
   registry.add("IllumoGame.CanvasInf.WorldCellPresentation", []() {
     return runCanvasInfCase(testCanvasViewUsesWorldCellQuad);
@@ -2847,6 +3530,8 @@ registerCanvasInfTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CanvasInf.BoundedDirtyUploadRects", []() {
     return runCanvasInfCase(testBoundedDirtyUploadRectangles);
   });
+  registry.add("IllumoGame.CanvasInf.AsyncSimulationLifecycle",
+               []() { return runCanvasInfCase(testAsyncSimulationLifecycle); });
   registry.add("IllumoGame.CanvasInf.AsyncSimulationPublication", []() {
     return runCanvasInfCase(testAsyncSimulationPublication);
   });

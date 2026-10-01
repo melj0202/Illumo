@@ -1,3 +1,5 @@
+#include <Illumo/Foundation/Profile.h>
+#include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
@@ -8,6 +10,29 @@
 #include <cmath>
 #include <cstring>
 #include <glm/gtc/type_ptr.hpp>
+#include <limits>
+
+static bool
+includeBoundsPoint(const glm::vec3& point,
+                   glm::vec3* minimum,
+                   glm::vec3* maximum,
+                   bool* valid)
+{
+  if (minimum == nullptr || maximum == nullptr || valid == nullptr ||
+      !std::isfinite(point.x) || !std::isfinite(point.y) ||
+      !std::isfinite(point.z)) {
+    return false;
+  }
+  if (!*valid) {
+    *minimum = point;
+    *maximum = point;
+    *valid = true;
+  } else {
+    *minimum = glm::min(*minimum, point);
+    *maximum = glm::max(*maximum, point);
+  }
+  return true;
+}
 
 MeshVisual::MeshVisual() = default;
 
@@ -31,6 +56,7 @@ void
 MeshVisual::setModelMatrix(const glm::mat4& value)
 {
   modelMatrix = value;
+  ++boundsRevision;
 }
 
 void
@@ -93,6 +119,13 @@ MeshVisual::setLightDistance(float distance)
 }
 
 void
+MeshVisual::setShadowCasterDistance(float distance)
+{
+  shadowCasterDistance =
+    std::isfinite(distance) ? std::max(distance, 0.0f) : 0.0f;
+}
+
+void
 MeshVisual::setShadowBias(float bias)
 {
   shadowBias = std::max(bias, 0.0f);
@@ -130,7 +163,18 @@ MeshVisual::clearPrimitives()
   triangleVertices.clear();
   triangleIndices.clear();
   sprites.clear();
+  lineBoundsMin = glm::vec3(0.0f);
+  lineBoundsMax = glm::vec3(0.0f);
+  lineBoundsValid = false;
+  triangleBoundsMin = glm::vec3(0.0f);
+  triangleBoundsMax = glm::vec3(0.0f);
+  triangleBoundsValid = false;
+  spriteBoundsMin = glm::vec3(0.0f);
+  spriteBoundsMax = glm::vec3(0.0f);
+  spriteBoundsValid = false;
+  geometryBoundsReliable = true;
   geometryDirty = true;
+  ++boundsRevision;
 }
 
 size_t
@@ -168,7 +212,16 @@ MeshVisual::addQuad(const glm::vec3& center,
   triangleIndices.push_back(vertexOffset + 0);
   triangleIndices.push_back(vertexOffset + 2);
   triangleIndices.push_back(vertexOffset + 3);
+  for (const glm::vec3& corner : corners) {
+    if (!includeBoundsPoint(corner,
+                            &triangleBoundsMin,
+                            &triangleBoundsMax,
+                            &triangleBoundsValid)) {
+      geometryBoundsReliable = false;
+    }
+  }
   geometryDirty = true;
+  ++boundsRevision;
   return triangleIndices.size() / 6;
 }
 
@@ -189,7 +242,22 @@ MeshVisual::addSprite(TextureHandle textureHandle,
   item.facing = facing;
   item.region = region;
   sprites.push_back(item);
+  const float radius =
+    0.5f * std::sqrt(item.local.scale.x * item.local.scale.x +
+                     item.local.scale.y * item.local.scale.y);
+  const glm::vec3 extent(radius);
+  if (!includeBoundsPoint(center - extent,
+                          &spriteBoundsMin,
+                          &spriteBoundsMax,
+                          &spriteBoundsValid) ||
+      !includeBoundsPoint(center + extent,
+                          &spriteBoundsMin,
+                          &spriteBoundsMax,
+                          &spriteBoundsValid)) {
+    geometryBoundsReliable = false;
+  }
   geometryDirty = true;
+  ++boundsRevision;
   return sprites.size() - 1;
 }
 
@@ -324,7 +392,18 @@ MeshVisual::addSolidCube(const glm::vec3& center,
     triangleIndices.push_back(offset + 2);
     triangleIndices.push_back(offset + 3);
   }
+  if (!includeBoundsPoint(center - extent,
+                          &triangleBoundsMin,
+                          &triangleBoundsMax,
+                          &triangleBoundsValid) ||
+      !includeBoundsPoint(center + extent,
+                          &triangleBoundsMin,
+                          &triangleBoundsMax,
+                          &triangleBoundsValid)) {
+    geometryBoundsReliable = false;
+  }
   geometryDirty = true;
+  ++boundsRevision;
 }
 
 void
@@ -378,7 +457,16 @@ MeshVisual::addSolidTriangle(const glm::vec3& a,
   triangleIndices.push_back(vertexOffset + 0);
   triangleIndices.push_back(vertexOffset + 1);
   triangleIndices.push_back(vertexOffset + 2);
+  for (const glm::vec3& point : { a, b, c }) {
+    if (!includeBoundsPoint(point,
+                            &triangleBoundsMin,
+                            &triangleBoundsMax,
+                            &triangleBoundsValid)) {
+      geometryBoundsReliable = false;
+    }
+  }
   geometryDirty = true;
+  ++boundsRevision;
 }
 
 void
@@ -482,7 +570,20 @@ MeshVisual::addSolidEllipse(const glm::vec3& center,
     triangleIndices.push_back(current);
     triangleIndices.push_back(next);
   }
+  const glm::vec3 extent(
+    std::max(radius.x, 0.0f), std::max(radius.y, 0.0f), 0.0f);
+  if (!includeBoundsPoint(center - extent,
+                          &triangleBoundsMin,
+                          &triangleBoundsMax,
+                          &triangleBoundsValid) ||
+      !includeBoundsPoint(center + extent,
+                          &triangleBoundsMin,
+                          &triangleBoundsMax,
+                          &triangleBoundsValid)) {
+    geometryBoundsReliable = false;
+  }
   geometryDirty = true;
+  ++boundsRevision;
 }
 
 void
@@ -490,6 +591,11 @@ MeshVisual::addMesh(const MeshData& mesh, ColorRgba tint)
 {
   if (mesh.vertices.empty() || mesh.indices.empty()) {
     return;
+  }
+  for (uint32_t index : mesh.indices) {
+    if (index >= mesh.vertices.size()) {
+      return;
+    }
   }
 
   const unsigned int vertexOffset =
@@ -519,12 +625,55 @@ MeshVisual::addMesh(const MeshData& mesh, ColorRgba tint)
                                  a,
                                  vertex.texCoords.x,
                                  vertex.texCoords.y });
+    if (!includeBoundsPoint(vertex.position,
+                            &triangleBoundsMin,
+                            &triangleBoundsMax,
+                            &triangleBoundsValid)) {
+      geometryBoundsReliable = false;
+    }
   }
 
   for (size_t i = 0; i < mesh.indices.size(); ++i) {
     triangleIndices.push_back(vertexOffset + mesh.indices[i]);
   }
   geometryDirty = true;
+  ++boundsRevision;
+}
+
+void
+MeshVisual::setMeshAsset(const MeshAssetInfo& asset, ColorRgba tint)
+{
+  if (!asset.isValid()) {
+    clearMeshAsset();
+    return;
+  }
+  meshAssetHandle = asset.handle;
+  meshAssetIndexCount = asset.indexCount;
+  meshAssetTint = tint;
+  meshAssetBoundsMin = asset.minBounds;
+  meshAssetBoundsMax = asset.maxBounds;
+  meshAssetBoundsValid = true;
+  ++boundsRevision;
+  for (int axis = 0; axis < 3; ++axis) {
+    if (!std::isfinite(meshAssetBoundsMin[axis]) ||
+        !std::isfinite(meshAssetBoundsMax[axis]) ||
+        meshAssetBoundsMin[axis] > meshAssetBoundsMax[axis]) {
+      meshAssetBoundsValid = false;
+      break;
+    }
+  }
+}
+
+void
+MeshVisual::clearMeshAsset()
+{
+  meshAssetHandle = MeshHandle{};
+  meshAssetIndexCount = 0;
+  meshAssetTint = ColorRgba{ 255, 255, 255, 255 };
+  meshAssetBoundsMin = glm::vec3(0.0f);
+  meshAssetBoundsMax = glm::vec3(0.0f);
+  meshAssetBoundsValid = false;
+  ++boundsRevision;
 }
 
 bool
@@ -534,9 +683,85 @@ MeshVisual::AppendCommands(Renderer* value)
 }
 
 void
+MeshVisual::CollectShadowCasters(Renderer* value)
+{
+  collectShadowCasterWithWorld(value, glm::mat4(1.0f));
+}
+
+void
+MeshVisual::AppendShadowCommands(Renderer* value)
+{
+  appendShadowCommandsWithWorld(value, glm::mat4(1.0f));
+}
+
+void
 MeshVisual::appendSceneCommands(Renderer* value, const Matrix4& worldTransform)
 {
-  (void)appendCommandsWithWorld(value, worldTransform);
+  if (!appendCommandsWithWorld(value, worldTransform, false) &&
+      value != nullptr) {
+    value->reportFrameError(
+      "MeshVisual scene attachment could not emit its resources");
+  }
+}
+
+bool
+MeshVisual::getSceneLocalBounds(AxisAlignedBounds3* bounds) const
+{
+  if (bounds == nullptr || !geometryBoundsReliable) {
+    return false;
+  }
+
+  bool boundsValid = false;
+  AxisAlignedBounds3 combined;
+  const bool hasLines = !lineVertices.empty();
+  const bool hasTriangles =
+    !triangleVertices.empty() && !triangleIndices.empty();
+  const bool hasSprites = !sprites.empty();
+  const bool hasMeshAsset =
+    meshAssetHandle.isValid() && meshAssetIndexCount > 0;
+  if ((hasLines && !lineBoundsValid) ||
+      (hasTriangles && !triangleBoundsValid) ||
+      (hasSprites && !spriteBoundsValid) ||
+      (hasMeshAsset && !meshAssetBoundsValid)) {
+    return false;
+  }
+
+  const AxisAlignedBounds3 candidates[] = {
+    AxisAlignedBounds3{ lineBoundsMin, lineBoundsMax },
+    AxisAlignedBounds3{ triangleBoundsMin, triangleBoundsMax },
+    AxisAlignedBounds3{ spriteBoundsMin, spriteBoundsMax },
+    AxisAlignedBounds3{ meshAssetBoundsMin, meshAssetBoundsMax },
+  };
+  const bool present[] = { hasLines, hasTriangles, hasSprites, hasMeshAsset };
+  for (size_t index = 0; index < 4; ++index) {
+    if (!present[index]) {
+      continue;
+    }
+    if (!boundsValid) {
+      combined = candidates[index];
+      boundsValid = true;
+    } else {
+      combined.include(candidates[index]);
+    }
+  }
+  if (!boundsValid) {
+    return false;
+  }
+  return combined.transformed(modelMatrix, bounds);
+}
+
+void
+MeshVisual::collectSceneShadowCasters(Renderer* value,
+                                      const Matrix4& worldTransform)
+{
+  collectShadowCasterWithWorld(value, worldTransform);
+}
+
+void
+MeshVisual::appendSceneShadowCommands(Renderer* value,
+                                      const Matrix4& worldTransform)
+{
+  appendShadowCommandsWithWorld(value, worldTransform);
 }
 
 void
@@ -552,7 +777,50 @@ MeshVisual::addLine(const glm::vec3& start,
     { end.x, end.y, end.z, color.r, color.g, color.b, color.a });
   lineIndices.push_back(firstVertex);
   lineIndices.push_back(firstVertex + 1);
+  if (!includeBoundsPoint(
+        start, &lineBoundsMin, &lineBoundsMax, &lineBoundsValid) ||
+      !includeBoundsPoint(
+        end, &lineBoundsMin, &lineBoundsMax, &lineBoundsValid)) {
+    geometryBoundsReliable = false;
+  }
   geometryDirty = true;
+  ++boundsRevision;
+}
+
+bool
+MeshVisual::getLocalShadowBounds(AxisAlignedBounds3* bounds) const
+{
+  if (bounds == nullptr || !geometryBoundsReliable) {
+    return false;
+  }
+  const bool hasTriangles =
+    !triangleVertices.empty() && !triangleIndices.empty();
+  const bool hasMeshAsset =
+    meshAssetHandle.isValid() && meshAssetIndexCount > 0;
+  if ((hasTriangles && !triangleBoundsValid) ||
+      (hasMeshAsset && !meshAssetBoundsValid) ||
+      (!hasTriangles && !hasMeshAsset)) {
+    return false;
+  }
+  if (hasTriangles) {
+    *bounds = AxisAlignedBounds3{ triangleBoundsMin, triangleBoundsMax };
+  } else {
+    *bounds = AxisAlignedBounds3{ meshAssetBoundsMin, meshAssetBoundsMax };
+  }
+  if (hasTriangles && hasMeshAsset) {
+    bounds->include(
+      AxisAlignedBounds3{ meshAssetBoundsMin, meshAssetBoundsMax });
+  }
+  return bounds->isValid();
+}
+
+bool
+MeshVisual::getWorldShadowBounds(const glm::mat4& nodeWorld,
+                                 AxisAlignedBounds3* bounds) const
+{
+  AxisAlignedBounds3 localBounds;
+  return getLocalShadowBounds(&localBounds) &&
+         localBounds.transformed(nodeWorld * modelMatrix, bounds);
 }
 
 void
@@ -564,8 +832,6 @@ MeshVisual::ensureStyles()
   const RenderStyle* shapeStyle = renderer->getStyle(RenderStyleId::Shape);
   const RenderStyle* spriteStyle = renderer->getStyle(RenderStyleId::Sprite);
   const RenderStyle* litStyle = renderer->getStyle(RenderStyleId::LitMesh);
-  const RenderStyle* shadowStyle =
-    renderer->getStyle(RenderStyleId::ShadowDepth);
 
   if (shapeStyle != nullptr && !lineStyleHandle.isValid()) {
     RenderStyle lineStyle = *shapeStyle;
@@ -596,41 +862,6 @@ MeshVisual::ensureStyles()
   if (litStyle != nullptr && !litMeshStyleHandle.isValid()) {
     litMeshStyleHandle =
       renderer->getBuiltinStyleHandle(RenderStyleId::LitMesh);
-  }
-  if (shadowStyle != nullptr && !shadowDepthStyleHandle.isValid()) {
-    shadowDepthStyleHandle =
-      renderer->getBuiltinStyleHandle(RenderStyleId::ShadowDepth);
-  }
-}
-
-void
-MeshVisual::ensureShadowResources(Renderer* value)
-{
-  if (value == nullptr) {
-    return;
-  }
-  if (shadowFboHandle.isValid() && enrolledShadowMapSize == shadowMapSize) {
-    return;
-  }
-  releaseShadowResources();
-  shadowFboHandle = value->enrollDepthFramebuffer(
-    shadowMapSize, shadowMapSize, &shadowDepthTextureHandle);
-  if (shadowFboHandle.isValid()) {
-    enrolledShadowMapSize = shadowMapSize;
-  }
-}
-
-void
-MeshVisual::releaseShadowResources()
-{
-  if (renderer == nullptr) {
-    return;
-  }
-  if (shadowFboHandle.isValid()) {
-    renderer->destroyFramebuffer(shadowFboHandle);
-    shadowFboHandle = FramebufferHandle{};
-    shadowDepthTextureHandle = TextureHandle{};
-    enrolledShadowMapSize = 0;
   }
 }
 
@@ -677,11 +908,8 @@ MeshVisual::resolveViewProjection(Renderer* value,
 }
 
 bool
-MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
+MeshVisual::prepareForCommands(Renderer* value)
 {
-  if (!isVisible()) {
-    return true;
-  }
   if (value == nullptr || (renderer != nullptr && renderer != value)) {
     return false;
   }
@@ -694,13 +922,19 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   }
 
   const bool hasLines = !lineDrawVertices.empty();
-  const bool hasTriangles = !triangleDrawVertices.empty();
+  const bool hasTriangles =
+    !triangleVertices.empty() && !triangleIndices.empty();
   const bool hasSprites = !sprites.empty();
+  const bool hasMeshAsset =
+    meshAssetHandle.isValid() && meshAssetIndexCount > 0;
   if (hasLines && !lineStyleHandle.isValid()) {
     return false;
   }
   if (hasTriangles && !triangleStyleHandle.isValid() &&
       !litMeshStyleHandle.isValid()) {
+    return false;
+  }
+  if (hasMeshAsset && !litMeshStyleHandle.isValid()) {
     return false;
   }
   if (hasSprites && !spriteStyleHandle.isValid()) {
@@ -714,12 +948,8 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
                                       MeshVertexLayout::Pos3Color4U8)) {
     return false;
   }
-  if (hasTriangles &&
-      !ensureMeshCapacity(&triangleMeshHandle,
-                          &triangleMeshIndices,
-                          &triangleMeshCapacity,
-                          triangleDrawVertices.size(),
-                          MeshVertexLayout::Pos3Norm3Color4U8Uv2)) {
+  if (hasTriangles && !ensureTriangleMeshCapacity(triangleVertices.size(),
+                                                  triangleIndices.size())) {
     return false;
   }
   if (hasSprites && !ensureMeshCapacity(&spriteMeshHandle,
@@ -731,29 +961,140 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   }
 
   if (lineUploadPending && lineMeshHandle.isValid()) {
-    value->pushUpdateBuffer(
+    lineUploadPending = !value->pushUpdateBuffer(
       lineMeshHandle,
       0,
       static_cast<unsigned int>(lineDrawVertices.size() * sizeof(ColorVertex)),
       lineDrawVertices.data());
-    lineUploadPending = false;
   }
   if (triangleUploadPending && triangleMeshHandle.isValid()) {
-    value->pushUpdateBuffer(triangleMeshHandle,
-                            0,
-                            static_cast<unsigned int>(
-                              triangleDrawVertices.size() * sizeof(LitVertex)),
-                            triangleDrawVertices.data());
-    triangleUploadPending = false;
+    const bool verticesAccepted = value->pushUpdateBuffer(
+      triangleMeshHandle,
+      0,
+      static_cast<unsigned int>(triangleVertices.size() * sizeof(LitVertex)),
+      triangleVertices.data());
+    const bool indicesAccepted = value->pushUpdateIndexBuffer(
+      triangleMeshHandle,
+      0,
+      static_cast<unsigned int>(triangleIndices.size() * sizeof(unsigned int)),
+      triangleIndices.data());
+    triangleUploadPending = !verticesAccepted || !indicesAccepted;
   }
   if (spriteUploadPending && spriteMeshHandle.isValid()) {
-    value->pushUpdateBuffer(
+    spriteUploadPending = !value->pushUpdateBuffer(
       spriteMeshHandle,
       0,
       static_cast<unsigned int>(spriteVertices.size() * sizeof(SpriteVertex)),
       spriteVertices.data());
-    spriteUploadPending = false;
   }
+
+  return true;
+}
+
+void
+MeshVisual::collectShadowCasterWithWorld(Renderer* value,
+                                         const glm::mat4& nodeWorld)
+{
+  if (!isVisible() || !lightingEnabled || !shadowsEnabled ||
+      !prepareForCommands(value)) {
+    return;
+  }
+
+  AxisAlignedBounds3 worldBounds;
+  if (!getWorldShadowBounds(nodeWorld, &worldBounds)) {
+    return;
+  }
+
+  Renderer::ShadowCasterDesc caster;
+  caster.boundsMin = { worldBounds.minimum.x,
+                       worldBounds.minimum.y,
+                       worldBounds.minimum.z };
+  caster.boundsMax = { worldBounds.maximum.x,
+                       worldBounds.maximum.y,
+                       worldBounds.maximum.z };
+  caster.lightDirection = { lightDirection.x,
+                            lightDirection.y,
+                            lightDirection.z };
+  caster.mapSize = shadowMapSize;
+  caster.minimumRadius = shadowRadius;
+  caster.lightDistance = lightDistance;
+  caster.casterDistance = shadowCasterDistance;
+  value->registerShadowCaster(caster);
+}
+
+void
+MeshVisual::appendShadowCommandsWithWorld(Renderer* value,
+                                          const glm::mat4& nodeWorld)
+{
+  if (!isVisible() || !lightingEnabled || !shadowsEnabled || value == nullptr) {
+    return;
+  }
+
+  AxisAlignedBounds3 worldBounds;
+  if (getWorldShadowBounds(nodeWorld, &worldBounds) &&
+      !value->isShadowCasterRelevant(worldBounds)) {
+    return;
+  }
+  if (!prepareForCommands(value)) {
+    return;
+  }
+
+  const bool hasTriangles =
+    !triangleIndices.empty() && triangleMeshHandle.isValid();
+  const bool hasMeshAsset =
+    meshAssetHandle.isValid() && meshAssetIndexCount > 0;
+  if (!hasTriangles && !hasMeshAsset) {
+    return;
+  }
+
+  const Renderer::ShadowFrameContext& shadow = value->getShadowFrameContext();
+  if (!shadow.active || !shadow.depthTexture.isValid()) {
+    return;
+  }
+
+  glm::mat4 lightSpaceMatrix(1.0f);
+  std::memcpy(glm::value_ptr(lightSpaceMatrix),
+              shadow.lightSpaceMatrix.data(),
+              shadow.lightSpaceMatrix.size() * sizeof(float));
+  const glm::mat4 lightMvp = lightSpaceMatrix * nodeWorld * modelMatrix;
+  value->pushUniformMat4(WorldLook::kMvpUniform, glm::value_ptr(lightMvp));
+  if (hasTriangles) {
+    value->pushSetMesh(triangleMeshHandle);
+    value->pushDrawIndexed(static_cast<unsigned int>(triangleIndices.size()));
+  }
+  if (hasMeshAsset) {
+    value->pushSetMesh(meshAssetHandle);
+    value->pushDrawIndexed(meshAssetIndexCount);
+  }
+}
+
+bool
+MeshVisual::appendCommandsWithWorld(Renderer* value,
+                                    const glm::mat4& nodeWorld,
+                                    bool cameraCull)
+{
+  if (!isVisible()) {
+    return true;
+  }
+  AxisAlignedBounds3 localBounds;
+  AxisAlignedBounds3 worldBounds;
+  // SceneGraphDrawable already accepted the snapshot bounds. Direct
+  // drawables still own their camera test.
+  if (cameraCull && value != nullptr && getSceneLocalBounds(&localBounds) &&
+      localBounds.transformed(nodeWorld, &worldBounds) &&
+      !value->isWorldBoundsVisible(worldBounds)) {
+    return true;
+  }
+  if (!prepareForCommands(value)) {
+    return false;
+  }
+
+  const bool hasLines = !lineDrawVertices.empty();
+  const bool hasTriangles =
+    !triangleVertices.empty() && !triangleIndices.empty();
+  const bool hasSprites = !sprites.empty();
+  const bool hasMeshAsset =
+    meshAssetHandle.isValid() && meshAssetIndexCount > 0;
 
   glm::mat4 viewProjection(1.0f);
   glm::mat4 view(1.0f);
@@ -763,54 +1104,31 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   const glm::mat4 coloredWorld = nodeWorld * modelMatrix;
   const glm::mat4 coloredMvp = viewProjection * coloredWorld;
   const float* coloredMvpPtr = glm::value_ptr(coloredMvp);
+  const Renderer::FrameContext& frame = value->getFrameContext();
+  bool previousMvpUsable = hasPreviousMvp;
+  if (frame.active && frame.frameSerial != 0) {
+    const bool sameFrame = previousFrameSerial == frame.frameSerial;
+    const bool previousFrame = previousFrameSerial + 1 == frame.frameSerial;
+    previousMvpUsable = previousMvpUsable && (sameFrame || previousFrame);
+  }
   const glm::mat4 previousMvp =
-    hasPreviousMvp ? previousColoredMvp : coloredMvp;
+    previousMvpUsable ? previousColoredMvp : coloredMvp;
 
-  // Directional lighting & shadow setup. Viewer meshes are normalized to
-  // radius 1; a tight ortho keeps shadow texels on the object instead of
-  // a 30-unit empty volume. Light and shadow parameters come from drawable
-  // state (products persist those values in EnvVars).
-  const glm::vec3 lightPos = lightDirection * lightDistance;
-  const glm::mat4 lightView =
-    glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-  const glm::mat4 lightProj = glm::ortho(-shadowRadius,
-                                         shadowRadius,
-                                         -shadowRadius,
-                                         shadowRadius,
-                                         0.5f,
-                                         lightDistance + shadowRadius);
-  const glm::mat4 lightSpaceMatrix = lightProj * lightView;
-
-  // Pass 1: Directional Shadow Depth Pass (when lighting and shadow depth are
-  // valid)
-  bool shadowMapBound = false;
-  if (lightingEnabled && shadowsEnabled && hasTriangles &&
-      triangleMeshHandle.isValid() && shadowDepthStyleHandle.isValid()) {
-    ensureShadowResources(value);
-    if (shadowFboHandle.isValid()) {
-      value->pushFramebuffer(shadowFboHandle);
-      value->pushViewport(0, 0, shadowMapSize, shadowMapSize);
-      // Depth-only FBO has no color attachment. A color clear is a no-op and
-      // leaves uninitialized depth at 0, so the main pass shadows every
-      // fragment and lighting collapses to ambient.
-      value->pushClearDepth();
-
-      const glm::mat4 lightMvp = lightSpaceMatrix * coloredWorld;
-      value->bindStyle(shadowDepthStyleHandle);
-      value->pushSetMesh(triangleMeshHandle);
-      value->pushUniformMat4(WorldLook::kMvpUniform, glm::value_ptr(lightMvp));
-      value->pushDrawIndexed(
-        static_cast<unsigned int>(triangleDrawVertices.size()));
-
-      // Restore pass framebuffer & viewport
-      value->pushFramebuffer(value->getCurrentPassFramebuffer());
-      const std::array<int, 4> vp = value->getCurrentPassViewport();
-      value->pushViewport(vp[0], vp[1], vp[2], vp[3]);
-      shadowMapBound = shadowDepthTextureHandle.isValid();
-    }
+  const Renderer::ShadowFrameContext& shadow = value->getShadowFrameContext();
+  const bool shadowMapBound = lightingEnabled && shadowsEnabled &&
+                              shadow.active && shadow.depthTexture.isValid();
+  glm::mat4 lightSpaceMatrix(1.0f);
+  glm::vec3 activeLightDirection = lightDirection;
+  if (shadowMapBound) {
+    std::memcpy(glm::value_ptr(lightSpaceMatrix),
+                shadow.lightSpaceMatrix.data(),
+                shadow.lightSpaceMatrix.size() * sizeof(float));
+    activeLightDirection = glm::vec3(shadow.lightDirection[0],
+                                     shadow.lightDirection[1],
+                                     shadow.lightDirection[2]);
   }
 
-  // Pass 2: Main Render Pass
+  // The renderer has already emitted the one shared scene shadow pass.
   if (hasLines && lineMeshHandle.isValid()) {
     if (!value->bindStyle(lineStyleHandle)) {
       return false;
@@ -835,9 +1153,9 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
       value->pushUniformMat4(WorldLook::kLightSpaceMatrixUniform,
                              glm::value_ptr(lightSpaceMatrix));
       value->pushUniformVec3(WorldLook::kLightDirUniform,
-                             lightDirection.x,
-                             lightDirection.y,
-                             lightDirection.z);
+                             activeLightDirection.x,
+                             activeLightDirection.y,
+                             activeLightDirection.z);
       value->pushUniformVec3(WorldLook::kLightColorUniform,
                              lightColor.x,
                              lightColor.y,
@@ -862,15 +1180,15 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
       value->pushUniformFloat(WorldLook::kMotionBlurAmountUniform,
                               motionBlurAmount);
       value->pushUniformFloat(WorldLook::kMotionBlurMaxUniform, motionBlurMax);
+      value->pushUniformVec4(WorldLook::kTintUniform, 1.0f, 1.0f, 1.0f, 1.0f);
 
       if (shadowMapBound) {
-        value->pushSetTexture(shadowDepthTextureHandle,
+        value->pushSetTexture(shadow.depthTexture,
                               WorldLook::kShadowTextureUnit);
         value->pushUniformInt(WorldLook::kShadowMapUniform,
                               WorldLook::kShadowTextureUnit);
       }
-      value->pushDrawIndexed(
-        static_cast<unsigned int>(triangleDrawVertices.size()));
+      value->pushDrawIndexed(static_cast<unsigned int>(triangleIndices.size()));
     } else {
       if (!value->bindStyle(triangleStyleHandle)) {
         return false;
@@ -881,9 +1199,58 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
                              glm::value_ptr(previousMvp));
       value->pushUniformInt(WorldLook::kMotionBlurEnabledUniform,
                             motionBlurEnabled ? 1 : 0);
-      value->pushDrawIndexed(
-        static_cast<unsigned int>(triangleDrawVertices.size()));
+      value->pushDrawIndexed(static_cast<unsigned int>(triangleIndices.size()));
     }
+  }
+  if (hasMeshAsset) {
+    if (!value->bindStyle(litMeshStyleHandle)) {
+      return false;
+    }
+    value->pushSetMesh(meshAssetHandle);
+    value->pushUniformMat4(WorldLook::kMvpUniform, coloredMvpPtr);
+    value->pushUniformMat4(WorldLook::kModelUniform,
+                           glm::value_ptr(coloredWorld));
+    value->pushUniformMat4(WorldLook::kLightSpaceMatrixUniform,
+                           glm::value_ptr(lightSpaceMatrix));
+    value->pushUniformVec3(WorldLook::kLightDirUniform,
+                           activeLightDirection.x,
+                           activeLightDirection.y,
+                           activeLightDirection.z);
+    value->pushUniformVec3(WorldLook::kLightColorUniform,
+                           lightingEnabled ? lightColor.x : 0.0f,
+                           lightingEnabled ? lightColor.y : 0.0f,
+                           lightingEnabled ? lightColor.z : 0.0f);
+    value->pushUniformVec3(WorldLook::kAmbientColorUniform,
+                           lightingEnabled ? ambientColor.x : 1.0f,
+                           lightingEnabled ? ambientColor.y : 1.0f,
+                           lightingEnabled ? ambientColor.z : 1.0f);
+    value->pushUniformInt(WorldLook::kShadowsEnabledUniform,
+                          lightingEnabled && shadowMapBound ? 1 : 0);
+    value->pushUniformFloat(WorldLook::kShadowBiasUniform, shadowBias);
+    value->pushUniformFloat(WorldLook::kShadowSlopeScaleUniform,
+                            shadowSlopeScale);
+    value->pushUniformFloat(WorldLook::kShadowNormalOffsetUniform,
+                            shadowNormalOffset);
+    value->pushUniformInt(WorldLook::kShadowPcfUniform,
+                          shadowPcfEnabled ? 1 : 0);
+    value->pushUniformMat4(WorldLook::kPrevMvpUniform,
+                           glm::value_ptr(previousMvp));
+    value->pushUniformInt(WorldLook::kMotionBlurEnabledUniform,
+                          motionBlurEnabled ? 1 : 0);
+    value->pushUniformFloat(WorldLook::kMotionBlurAmountUniform,
+                            motionBlurAmount);
+    value->pushUniformFloat(WorldLook::kMotionBlurMaxUniform, motionBlurMax);
+    value->pushUniformVec4(WorldLook::kTintUniform,
+                           static_cast<float>(meshAssetTint.r) / 255.0f,
+                           static_cast<float>(meshAssetTint.g) / 255.0f,
+                           static_cast<float>(meshAssetTint.b) / 255.0f,
+                           static_cast<float>(meshAssetTint.a) / 255.0f);
+    if (lightingEnabled && shadowMapBound) {
+      value->pushSetTexture(shadow.depthTexture, WorldLook::kShadowTextureUnit);
+      value->pushUniformInt(WorldLook::kShadowMapUniform,
+                            WorldLook::kShadowTextureUnit);
+    }
+    value->pushDrawIndexed(meshAssetIndexCount);
   }
   if (hasSprites && spriteMeshHandle.isValid()) {
     if (!value->bindStyle(spriteStyleHandle)) {
@@ -908,15 +1275,29 @@ MeshVisual::appendCommandsWithWorld(Renderer* value, const glm::mat4& nodeWorld)
   }
   previousColoredMvp = coloredMvp;
   hasPreviousMvp = true;
+  if (frame.active) {
+    previousFrameSerial = frame.frameSerial;
+  }
   return true;
 }
 
 void
 MeshVisual::rebuildMeshes()
 {
+  ILLUMO_PROFILE_ZONE("MeshVisual.rebuildMeshes");
   expandIndexedVertices(lineVertices, lineIndices, &lineDrawVertices);
-  expandIndexedLitVertices(
-    triangleVertices, triangleIndices, &triangleDrawVertices);
+  triangleBoundsValid = !triangleVertices.empty() && !triangleIndices.empty();
+  if (triangleBoundsValid) {
+    const LitVertex& first = triangleVertices[0];
+    triangleBoundsMin = glm::vec3(first.x, first.y, first.z);
+    triangleBoundsMax = triangleBoundsMin;
+    for (size_t i = 1; i < triangleVertices.size(); ++i) {
+      const LitVertex& vertex = triangleVertices[i];
+      const glm::vec3 position(vertex.x, vertex.y, vertex.z);
+      triangleBoundsMin = glm::min(triangleBoundsMin, position);
+      triangleBoundsMax = glm::max(triangleBoundsMax, position);
+    }
+  }
   spriteVertices.clear();
   spriteVertices.reserve(sprites.size() * 6);
   for (size_t i = 0; i < sprites.size(); ++i) {
@@ -969,7 +1350,7 @@ MeshVisual::rebuildMeshes()
     }
   }
   lineUploadPending = !lineDrawVertices.empty();
-  triangleUploadPending = !triangleDrawVertices.empty();
+  triangleUploadPending = !triangleVertices.empty() && !triangleIndices.empty();
   spriteUploadPending = !spriteVertices.empty();
   geometryDirty = false;
 }
@@ -991,6 +1372,7 @@ MeshVisual::ensureMeshCapacity(MeshHandle* meshHandle,
   if (meshHandle->isValid() && *capacity >= required) {
     return true;
   }
+  ILLUMO_PROFILE_ZONE("MeshVisual.ensureMeshCapacity");
 
   size_t nextCapacity = *capacity == 0 ? 64u : *capacity;
   while (nextCapacity < required) {
@@ -1029,27 +1411,63 @@ MeshVisual::ensureMeshCapacity(MeshHandle* meshHandle,
   return true;
 }
 
+bool
+MeshVisual::ensureTriangleMeshCapacity(size_t requiredVertices,
+                                       size_t requiredIndices)
+{
+  if (requiredVertices == 0 || requiredIndices == 0) {
+    return true;
+  }
+  if (renderer == nullptr) {
+    return false;
+  }
+  if (triangleMeshHandle.isValid() &&
+      triangleVertexCapacity >= requiredVertices &&
+      triangleIndexCapacity >= requiredIndices) {
+    return true;
+  }
+  ILLUMO_PROFILE_ZONE("MeshVisual.ensureTriangleMeshCapacity");
+
+  size_t nextVertexCapacity =
+    triangleVertexCapacity == 0 ? 64u : triangleVertexCapacity;
+  while (nextVertexCapacity < requiredVertices) {
+    nextVertexCapacity *= 2u;
+  }
+  size_t nextIndexCapacity =
+    triangleIndexCapacity == 0 ? 64u : triangleIndexCapacity;
+  while (nextIndexCapacity < requiredIndices) {
+    nextIndexCapacity *= 2u;
+  }
+
+  const size_t vertexCapacityBytes = nextVertexCapacity * sizeof(LitVertex);
+  const size_t indexCapacityBytes = nextIndexCapacity * sizeof(unsigned int);
+  if (triangleMeshHandle.isValid()) {
+    if (!renderer->replaceDynamicMesh(triangleMeshHandle,
+                                      vertexCapacityBytes,
+                                      nullptr,
+                                      indexCapacityBytes,
+                                      MeshVertexLayout::Pos3Norm3Color4U8Uv2)) {
+      return false;
+    }
+  } else {
+    triangleMeshHandle =
+      renderer->enrollDynamicMesh(vertexCapacityBytes,
+                                  nullptr,
+                                  indexCapacityBytes,
+                                  MeshVertexLayout::Pos3Norm3Color4U8Uv2);
+    if (!triangleMeshHandle.isValid()) {
+      return false;
+    }
+  }
+  triangleVertexCapacity = nextVertexCapacity;
+  triangleIndexCapacity = nextIndexCapacity;
+  return true;
+}
+
 void
 MeshVisual::expandIndexedVertices(const std::vector<ColorVertex>& vertices,
                                   const std::vector<unsigned int>& indices,
                                   std::vector<ColorVertex>* drawVertices)
-{
-  if (drawVertices == nullptr) {
-    return;
-  }
-  drawVertices->clear();
-  drawVertices->reserve(indices.size());
-  for (unsigned int index : indices) {
-    if (index < vertices.size()) {
-      drawVertices->push_back(vertices[index]);
-    }
-  }
-}
-
-void
-MeshVisual::expandIndexedLitVertices(const std::vector<LitVertex>& vertices,
-                                     const std::vector<unsigned int>& indices,
-                                     std::vector<LitVertex>* drawVertices)
 {
   if (drawVertices == nullptr) {
     return;
@@ -1082,10 +1500,10 @@ MeshVisual::releaseMeshes()
     spriteMeshHandle = MeshHandle{};
   }
   lineMeshCapacity = 0;
-  triangleMeshCapacity = 0;
+  triangleVertexCapacity = 0;
+  triangleIndexCapacity = 0;
   spriteMeshCapacity = 0;
   lineMeshIndices.clear();
-  triangleMeshIndices.clear();
   spriteMeshIndices.clear();
   lineUploadPending = false;
   triangleUploadPending = false;
@@ -1111,6 +1529,4 @@ MeshVisual::releaseStyles()
     spriteStyleHandle = RenderStyleHandle{};
   }
   litMeshStyleHandle = RenderStyleHandle{};
-  shadowDepthStyleHandle = RenderStyleHandle{};
-  releaseShadowResources();
 }

@@ -8,6 +8,8 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/RenderCommand.h>
 #include <Illumo/Rendering/ResourceHandlePool.h>
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <unordered_map>
 
@@ -18,16 +20,38 @@ private:
   CommandQueue* commandQueue;
   IRenderWindow* window;
   int fps = 0;
+  size_t m_rejectionsAtFrameStart = 0;
 
   std::unordered_map<uint32_t, GLMeshResourceEntry> _vaoRegistryLookup;
   std::unordered_map<uint32_t, GLShaderResourceEntry> _programRegistryLookup;
   std::unordered_map<uint32_t, GLTextureResourceEntry> _textureRegistryLookup;
   std::unordered_map<uint32_t, GLFramebufferResourceEntry>
     _framebufferRegistryLookup;
+  std::unordered_map<uint32_t, GLBufferResourceEntry> _bufferRegistryLookup;
   ResourceHandlePool<MeshHandle> meshHandles;
   ResourceHandlePool<ShaderHandle> shaderHandles;
   ResourceHandlePool<TextureHandle> textureHandles;
   ResourceHandlePool<FramebufferHandle> framebufferHandles;
+  ResourceHandlePool<BufferHandle> bufferHandles;
+
+  // Two pixel-pack buffers per readback stream; a fence marks each copy.
+  struct ReadbackSlot
+  {
+    GLuint buffer = 0;
+    GLsync fence = nullptr;
+    int width = 0;
+    int height = 0;
+    std::uint64_t order = 0;
+  };
+  struct ReadbackStream
+  {
+    std::array<ReadbackSlot, 2> slots;
+  };
+  std::unordered_map<std::uint32_t, ReadbackStream> _readbackStreams;
+  std::uint64_t _readbackOrder = 0;
+  void releaseReadbackSlot(ReadbackSlot& slot);
+  // Logs the GPU, driver and context limits once after GLEW loads.
+  void logContextDescription();
 
 public:
   GLBackend(IRenderWindow* window);
@@ -40,7 +64,25 @@ public:
   void SubmitCommandQueue() override;
   void PushToCommandQueue(RenderCommand command) override;
   void ClearCommandQueue() override;
+  size_t rejectedCommandCount() const override
+  {
+    return commandQueue->GetTotalRejected();
+  }
+  size_t commandHighWaterMark() const override
+  {
+    return commandQueue->GetHighWaterMark();
+  }
   int getFPS() const override { return fps; }
+  FrameReadback readBackbuffer(int width, int height) override;
+  bool requestFramebufferReadback(std::uint32_t stream,
+                                  FramebufferHandle framebuffer,
+                                  int width,
+                                  int height) override;
+  bool takeFramebufferReadback(std::uint32_t stream,
+                               bool wait,
+                               FrameReadback& out) override;
+  void releaseReadbackStream(std::uint32_t stream) override;
+  std::string submissionError() const override { return device->frameError(); }
 
   MeshHandle CreateMesh(const void* vertices,
                         size_t vertexSize,
@@ -77,12 +119,22 @@ public:
                               const int height,
                               int channels,
                               const TextureOptions& options) override;
+  TextureHandle CreateCubemap(
+    const std::array<const unsigned char*, 6>& facesData,
+    int width,
+    int height,
+    int channels = 3) override;
   bool ReplaceTexture(TextureHandle handle,
                       const unsigned char* data,
                       int width,
                       int height,
                       int channels,
                       const TextureOptions& options) override;
+  bool ReplaceCubemap(TextureHandle handle,
+                      const std::array<const unsigned char*, 6>& faces,
+                      int width,
+                      int height,
+                      int channels) override;
   bool DestroyTexture(TextureHandle handle) override;
   bool IsTextureValid(TextureHandle handle) const override;
   TextureInfo GetTextureInfo(TextureHandle handle) const override;
@@ -96,4 +148,8 @@ public:
     TextureHandle* outDepthTexture) override;
   bool DestroyFramebuffer(FramebufferHandle handle) override;
   bool IsFramebufferValid(FramebufferHandle handle) const override;
+
+  BufferHandle CreateBuffer(BufferUsage usage, size_t capacityBytes) override;
+  bool DestroyBuffer(BufferHandle handle) override;
+  bool IsBufferValid(BufferHandle handle) const override;
 };

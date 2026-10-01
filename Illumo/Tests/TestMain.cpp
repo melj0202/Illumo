@@ -3,7 +3,6 @@
 #include <Illumo/Testing/TestRegistry.h>
 #include <cctype>
 #include <cstdio>
-#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -33,18 +32,76 @@ registerSysCmdLineTests(IllumoTestRegistry& registry);
 void
 registerSceneGraphTests(IllumoTestRegistry& registry);
 void
+registerSceneGraphOracleTests(IllumoTestRegistry& registry);
+void
+registerSceneGraphV2Tests(IllumoTestRegistry& registry);
+void
+registerSceneAllocationTests(IllumoTestRegistry& registry);
+void
+registerSceneBenchmarks(IllumoTestRegistry& registry);
+void
 registerGuiKitTests(IllumoTestRegistry& registry);
+void
+registerGuiTextEditTests(IllumoTestRegistry& registry);
+void
+registerGuiFileTreeTests(IllumoTestRegistry& registry);
+void
+registerGuiDropdownListTests(IllumoTestRegistry& registry);
+void
+registerGuiPanelDockTests(IllumoTestRegistry& registry);
+void
+registerGuiEngineBrandTests(IllumoTestRegistry& registry);
 void
 registerMeshLoaderTests(IllumoTestRegistry& registry);
 void
 registerShaderPreprocessorTests(IllumoTestRegistry& registry);
 void
 registerFontTests(IllumoTestRegistry& registry);
+void
+registerFrameCaptureTests(IllumoTestRegistry& registry);
+void
+registerAtomicFileTests(IllumoTestRegistry& registry);
+void
+registerVirtualPathTests(IllumoTestRegistry& registry);
+void
+registerPackageManifestTests(IllumoTestRegistry& registry);
+void
+registerPackageArchiveTests(IllumoTestRegistry& registry);
+void
+registerPackageMountsTests(IllumoTestRegistry& registry);
+void
+registerVirtualFileSystemTests(IllumoTestRegistry& registry);
+void
+registerIlscCodecTests(IllumoTestRegistry& registry);
+void
+registerSceneInstanceTests(IllumoTestRegistry& registry);
+void
+registerSceneDirectorTests(IllumoTestRegistry& registry);
+void
+registerAudioTests(IllumoTestRegistry& registry);
+void
+registerInstancingTests(IllumoTestRegistry& registry);
+void
+registerRenderWorldTests(IllumoTestRegistry& registry);
+void
+registerVisualStoreTests(IllumoTestRegistry& registry);
+void
+registerVulkanShaderTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
 {
   IllumoTestRegistry registry;
+  registerAtomicFileTests(registry);
+  registerVirtualPathTests(registry);
+  registerPackageManifestTests(registry);
+  registerPackageArchiveTests(registry);
+  registerPackageMountsTests(registry);
+  registerVirtualFileSystemTests(registry);
+  registerIlscCodecTests(registry);
+  registerSceneInstanceTests(registry);
+  registerSceneDirectorTests(registry);
+  registerFrameCaptureTests(registry);
   registerMockBackendTests(registry);
   registerRendererE2ETests(registry);
   registerUITokenTests(registry);
@@ -58,9 +115,23 @@ createRegistry()
   registerTextureUploadPolicyTests(registry);
   registerSysCmdLineTests(registry);
   registerSceneGraphTests(registry);
+  registerSceneGraphOracleTests(registry);
+  registerSceneGraphV2Tests(registry);
+  registerSceneAllocationTests(registry);
+  registerSceneBenchmarks(registry);
   registerGuiKitTests(registry);
+  registerGuiTextEditTests(registry);
+  registerGuiFileTreeTests(registry);
+  registerGuiDropdownListTests(registry);
+  registerGuiPanelDockTests(registry);
+  registerGuiEngineBrandTests(registry);
   registerShaderPreprocessorTests(registry);
   registerFontTests(registry);
+  registerAudioTests(registry);
+  registerInstancingTests(registry);
+  registerRenderWorldTests(registry);
+  registerVisualStoreTests(registry);
+  registerVulkanShaderTests(registry);
   return registry;
 }
 
@@ -69,20 +140,12 @@ runTestCase(const IllumoTestCase& testCase)
 {
   std::printf("\n======== %s ========\n", testCase.name.c_str());
 
-  try {
-    const int failures = testCase.function();
-    std::printf("======== %s: %s (%d failure(s)) ========\n",
-                testCase.name.c_str(),
-                failures == 0 ? "PASSED" : "FAILED",
-                failures);
-    return failures == 0 ? 0 : 1;
-  } catch (const std::exception& exception) {
-    std::printf("FAIL: unhandled exception: %s\n", exception.what());
-  } catch (...) {
-    std::printf("FAIL: unhandled non-standard exception\n");
-  }
-
-  return 1;
+  const int failures = testCase.function();
+  std::printf("======== %s: %s (%d failure(s)) ========\n",
+              testCase.name.c_str(),
+              failures == 0 ? "PASSED" : "FAILED",
+              failures);
+  return failures == 0 ? 0 : 1;
 }
 
 static int

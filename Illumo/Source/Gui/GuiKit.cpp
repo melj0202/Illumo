@@ -1,7 +1,10 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Rendering/Font.h>
+#include <Illumo/Rendering/FontWeightRamp.h>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 float
 GuiKit::estimateTextWidth(const std::string& text, float sizePt)
@@ -13,6 +16,34 @@ float
 GuiKit::defaultLineHeight(float sizePt)
 {
   return sizePt * 1.35f;
+}
+
+float
+GuiKit::caretOriginAfterText(const std::string& text, float textX, float sizePt)
+{
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  if (font == nullptr) {
+    return textX + estimateTextWidth(text, sizePt);
+  }
+  const FontMetrics& metrics = font->getMetrics();
+  const float scale =
+    metrics.pixelSize > 0.0f ? sizePt / metrics.pixelSize : 1.0f;
+  float inkRight = textX;
+  if (!text.empty()) {
+    // Measured advance excludes the final glyph's right side bearing.
+    const TextBounds bounds = font->measureText(text, sizePt);
+    const GlyphInfo* lastGlyph =
+      font->getGlyph(static_cast<unsigned char>(text.back()));
+    inkRight += bounds.width;
+    if (lastGlyph != nullptr) {
+      inkRight +=
+        (lastGlyph->bearingX + lastGlyph->width - lastGlyph->advanceX) * scale;
+    }
+  }
+  const GlyphInfo* caretGlyph = font->getGlyph('|');
+  const float caretBearing =
+    caretGlyph == nullptr ? 0.0f : caretGlyph->bearingX * scale;
+  return inkRight + 1.0f - caretBearing;
 }
 
 void
@@ -53,6 +84,59 @@ GuiKit::drawTextAligned(GameVisual& visual,
   visual.addText(text, drawX, y, sizePt, color);
 }
 
+size_t
+GuiKit::drawEmphasizedText(GameVisual& visual,
+                           const std::string& text,
+                           float x,
+                           float y,
+                           float sizePt,
+                           ColorRgba color,
+                           float emphasis)
+{
+  const size_t index = visual.addText(text, x, y, sizePt, color);
+  const FontWeightRamp& ramp = FontWeightRamp::ui();
+  TextPrimitive* primitive = visual.getText(index);
+  if (!ramp.empty() && primitive != nullptr) {
+    ramp.apply(*primitive, ramp.weightFor(emphasis));
+  }
+  return index;
+}
+
+float
+GuiKit::measureEmphasizedText(const std::string& text,
+                              float sizePt,
+                              float emphasis)
+{
+  const FontWeightRamp& ramp = FontWeightRamp::ui();
+  const float weighted =
+    ramp.empty() ? -1.0f : ramp.measure(text, sizePt, ramp.weightFor(emphasis));
+  if (weighted >= 0.0f) {
+    return weighted;
+  }
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  return font ? font->measureText(text, sizePt).width
+              : estimateTextWidth(text, sizePt);
+}
+
+void
+GuiKit::drawEmphasizedTextCentered(GameVisual& visual,
+                                   const std::string& text,
+                                   float centerX,
+                                   float centerY,
+                                   float sizePt,
+                                   ColorRgba color,
+                                   float emphasis)
+{
+  const float textW = measureEmphasizedText(text, sizePt, emphasis);
+  drawEmphasizedText(visual,
+                     text,
+                     centerX - textW * 0.5f,
+                     centerY - sizePt * 0.5f,
+                     sizePt,
+                     color,
+                     emphasis);
+}
+
 void
 GuiKit::drawLabelValue(GameVisual& visual,
                        const std::string& label,
@@ -70,6 +154,1490 @@ GuiKit::drawLabelValue(GameVisual& visual,
                           : estimateTextWidth(value, sizePt);
   const float valX = x + std::max(0.0f, width - valW);
   visual.addText(value, valX, y, sizePt, valueColor);
+}
+
+// Quarter-circle unit directions at 15-degree steps (0..90 degrees).
+static const float kQuarterCos[7] = { 1.0f,        0.96592583f, 0.86602540f,
+                                      0.70710678f, 0.5f,        0.25881905f,
+                                      0.0f };
+static const float kQuarterSin[7] = { 0.0f,        0.25881905f, 0.5f,
+                                      0.70710678f, 0.86602540f, 0.96592583f,
+                                      1.0f };
+static const int kCornerPoints = 7;
+
+struct GuiPoint
+{
+  float x = 0.0f;
+  float y = 0.0f;
+};
+
+static bool
+finiteRect(float x, float y, float width, float height)
+{
+  return std::isfinite(x) && std::isfinite(y) && std::isfinite(width) &&
+         std::isfinite(height) && width > 0.0f && height > 0.0f;
+}
+
+// Rounded shapes subdivide each quarter by the corner's radius: 15-degree
+// steps (6 per quarter) through radius 15, then about four units of arc per
+// step so large radii (bubbles, pills) stay round instead of faceted. Always
+// even, since filled corners pack two wedges per quad.
+static const int kMaxCornerSteps = 24;
+static const int kMaxCornerPoints = kMaxCornerSteps + 1;
+static const int kMaxPerimeterPoints = 4 * kMaxCornerPoints;
+
+static int
+cornerSteps(float radius)
+{
+  const float arc = std::max(0.0f, radius) * 1.57079633f;
+  const int steps =
+    std::clamp(static_cast<int>(std::ceil(arc / 4.0f)), 6, kMaxCornerSteps);
+  return steps + (steps % 2);
+}
+
+// Unit direction for step `step` of `steps` in corner `corner` (0 top-left,
+// 1 top-right, 2 bottom-right, 3 bottom-left), walking the outline clockwise
+// on screen.
+static GuiPoint
+cornerDirection(int corner, int step, int steps)
+{
+  float c = 0.0f;
+  float s = 0.0f;
+  if (steps == 6) {
+    c = kQuarterCos[step];
+    s = kQuarterSin[step];
+  } else {
+    const float angle =
+      1.57079633f * static_cast<float>(step) / static_cast<float>(steps);
+    c = step == steps ? 0.0f : std::cos(angle);
+    s = step == steps ? 1.0f : std::sin(angle);
+  }
+  if (corner == 0) {
+    return GuiPoint{ -c, -s };
+  }
+  if (corner == 1) {
+    return GuiPoint{ s, -c };
+  }
+  if (corner == 2) {
+    return GuiPoint{ c, s };
+  }
+  return GuiPoint{ -s, c };
+}
+
+// Clockwise outline of the rounded rect grown by `offset` (negative insets),
+// `steps + 1` points per corner. The offset curve keeps the corner centers,
+// so bands between two offsets are exactly parallel; insets deeper than the
+// radius collapse to sharp corners.
+static void
+roundedPerimeter(float x,
+                 float y,
+                 float width,
+                 float height,
+                 float radius,
+                 float offset,
+                 int steps,
+                 GuiPoint* points)
+{
+  const int cornerPoints = steps + 1;
+  const float grownRadius = std::max(0.0f, radius + offset);
+  const float left = x - offset + grownRadius;
+  const float right = x + width + offset - grownRadius;
+  const float top = y - offset + grownRadius;
+  const float bottom = y + height + offset - grownRadius;
+  const float centersX[4] = { left, right, right, left };
+  const float centersY[4] = { top, top, bottom, bottom };
+  for (int corner = 0; corner < 4; ++corner) {
+    for (int step = 0; step < cornerPoints; ++step) {
+      const GuiPoint direction = cornerDirection(corner, step, steps);
+      points[corner * cornerPoints + step] =
+        GuiPoint{ centersX[corner] + direction.x * grownRadius,
+                  centersY[corner] + direction.y * grownRadius };
+    }
+  }
+}
+
+static float
+clampedRadius(float radius, float width, float height)
+{
+  if (!std::isfinite(radius)) {
+    return 0.0f;
+  }
+  return std::clamp(radius, 0.0f, std::min(width, height) * 0.5f);
+}
+
+// Non-overlapping quarter fans keep translucent rounded surfaces evenly tinted.
+// Each corner packs two 15-degree wedges per quad: (center, r0, r1) and
+// (r1, r2, center) share the fan-ordered quad (center, r0, r1, r2).
+void
+GuiKit::drawRoundedRect(GameVisual& visual,
+                        float x,
+                        float y,
+                        float width,
+                        float height,
+                        float radius,
+                        ColorRgba color)
+{
+  if (!finiteRect(x, y, width, height) || !std::isfinite(radius) ||
+      color.a == 0) {
+    return;
+  }
+  radius = clampedRadius(radius, width, height);
+  if (radius == 0.0f) {
+    visual.addFilledRect(x, y, width, height, color);
+    return;
+  }
+  visual.addFilledRect(x + radius, y, width - 2.0f * radius, height, color);
+  visual.addFilledRect(x, y + radius, radius, height - 2.0f * radius, color);
+  visual.addFilledRect(
+    x + width - radius, y + radius, radius, height - 2.0f * radius, color);
+  const int steps = cornerSteps(radius);
+  const int cornerPoints = steps + 1;
+  GuiPoint rim[kMaxPerimeterPoints];
+  roundedPerimeter(x, y, width, height, radius, 0.0f, steps, rim);
+  const float centersX[4] = {
+    x + radius, x + width - radius, x + width - radius, x + radius
+  };
+  const float centersY[4] = {
+    y + radius, y + radius, y + height - radius, y + height - radius
+  };
+  for (int corner = 0; corner < 4; ++corner) {
+    const int base = corner * cornerPoints;
+    for (int step = 0; step + 2 < cornerPoints; step += 2) {
+      const GuiPoint& r0 = rim[base + step];
+      const GuiPoint& r1 = rim[base + step + 1];
+      const GuiPoint& r2 = rim[base + step + 2];
+      visual.addGradientQuad(centersX[corner],
+                             centersY[corner],
+                             r0.x,
+                             r0.y,
+                             r1.x,
+                             r1.y,
+                             r2.x,
+                             r2.y,
+                             color,
+                             color,
+                             color,
+                             color);
+    }
+  }
+}
+
+void
+GuiKit::drawRoundedPanel(GameVisual& visual,
+                         float x,
+                         float y,
+                         float width,
+                         float height,
+                         unsigned char opacity)
+{
+  GuiGlassStyle style;
+  style.opacity = opacity;
+  drawGlassPanel(visual, x, y, width, height, style);
+}
+
+// Horizontal slices pair the right outline with its mirror on the left, so
+// every quad is a convex trapezoid. Each vertex takes its color from its
+// position along y (or x when `acrossX`); a color linear in position is
+// reproduced exactly inside every slice.
+static void
+drawRoundedSlices(GameVisual& visual,
+                  float x,
+                  float y,
+                  float width,
+                  float height,
+                  float radius,
+                  ColorRgba from,
+                  ColorRgba to,
+                  bool acrossX)
+{
+  if (!finiteRect(x, y, width, height) || (from.a == 0 && to.a == 0)) {
+    return;
+  }
+  radius = clampedRadius(radius, width, height);
+  const int steps = cornerSteps(radius);
+  const int cornerPoints = steps + 1;
+  GuiPoint rim[kMaxPerimeterPoints];
+  roundedPerimeter(x, y, width, height, radius, 0.0f, steps, rim);
+  // Right side top to bottom: top-right corner then bottom-right corner.
+  GuiPoint rightSide[2 * kMaxCornerPoints];
+  GuiPoint leftSide[2 * kMaxCornerPoints];
+  for (int step = 0; step < cornerPoints; ++step) {
+    rightSide[step] = rim[cornerPoints + step];
+    rightSide[cornerPoints + step] = rim[2 * cornerPoints + step];
+    // Left mirrors: top-left walks up, bottom-left walks down, so reverse.
+    leftSide[step] = rim[cornerPoints - 1 - step];
+    leftSide[cornerPoints + step] = rim[4 * cornerPoints - 1 - step];
+  }
+  for (int level = 0; level + 1 < 2 * cornerPoints; ++level) {
+    const GuiPoint& l0 = leftSide[level];
+    const GuiPoint& r0 = rightSide[level];
+    const GuiPoint& r1 = rightSide[level + 1];
+    const GuiPoint& l1 = leftSide[level + 1];
+    if (r1.y - r0.y <= 0.0001f) {
+      continue;
+    }
+    const GuiPoint corners[4] = { l0, r0, r1, l1 };
+    ColorRgba colors[4];
+    for (int corner = 0; corner < 4; ++corner) {
+      const float along = acrossX ? (corners[corner].x - x) / width
+                                  : (corners[corner].y - y) / height;
+      colors[corner] = UiTheme::mix(from, to, along);
+    }
+    visual.addGradientQuad(l0.x,
+                           l0.y,
+                           r0.x,
+                           r0.y,
+                           r1.x,
+                           r1.y,
+                           l1.x,
+                           l1.y,
+                           colors[0],
+                           colors[1],
+                           colors[2],
+                           colors[3]);
+  }
+}
+
+void
+GuiKit::drawRoundedGradientRect(GameVisual& visual,
+                                float x,
+                                float y,
+                                float width,
+                                float height,
+                                float radius,
+                                ColorRgba top,
+                                ColorRgba bottom)
+{
+  drawRoundedSlices(visual, x, y, width, height, radius, top, bottom, false);
+}
+
+void
+GuiKit::drawRoundedSideGradientRect(GameVisual& visual,
+                                    float x,
+                                    float y,
+                                    float width,
+                                    float height,
+                                    float radius,
+                                    ColorRgba left,
+                                    ColorRgba right)
+{
+  drawRoundedSlices(visual, x, y, width, height, radius, left, right, true);
+}
+
+void
+GuiKit::drawRoundedBand(GameVisual& visual,
+                        float x,
+                        float y,
+                        float width,
+                        float height,
+                        float radius,
+                        float innerOffset,
+                        float outerOffset,
+                        ColorRgba innerColor,
+                        ColorRgba outerColor)
+{
+  if (!finiteRect(x, y, width, height) || !std::isfinite(innerOffset) ||
+      !std::isfinite(outerOffset) || outerOffset <= innerOffset ||
+      (innerColor.a == 0 && outerColor.a == 0)) {
+    return;
+  }
+  radius = clampedRadius(radius, width, height);
+  const int steps = cornerSteps(radius);
+  const int perimeterPoints = 4 * (steps + 1);
+  GuiPoint inner[kMaxPerimeterPoints];
+  GuiPoint outer[kMaxPerimeterPoints];
+  roundedPerimeter(x, y, width, height, radius, innerOffset, steps, inner);
+  roundedPerimeter(x, y, width, height, radius, outerOffset, steps, outer);
+  for (int index = 0; index < perimeterPoints; ++index) {
+    const int next = (index + 1) % perimeterPoints;
+    visual.addGradientQuad(inner[index].x,
+                           inner[index].y,
+                           outer[index].x,
+                           outer[index].y,
+                           outer[next].x,
+                           outer[next].y,
+                           inner[next].x,
+                           inner[next].y,
+                           innerColor,
+                           outerColor,
+                           outerColor,
+                           innerColor);
+  }
+}
+
+void
+GuiKit::drawPolyline(GameVisual& visual,
+                     const GuiPoint2* points,
+                     int pointCount,
+                     float thickness,
+                     ColorRgba color,
+                     bool closed,
+                     bool squareCaps)
+{
+  static const int kMaximumPoints = 32;
+  if (points == nullptr || pointCount < 2 || !std::isfinite(thickness) ||
+      thickness <= 0.0f || color.a == 0) {
+    return;
+  }
+  // Consecutive duplicates would have no direction; drop them.
+  GuiPoint2 path[kMaximumPoints];
+  int count = 0;
+  for (int index = 0; index < std::min(pointCount, kMaximumPoints); ++index) {
+    const GuiPoint2 point = points[index];
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+      return;
+    }
+    if (count > 0 && std::abs(point.x - path[count - 1].x) < 0.0001f &&
+        std::abs(point.y - path[count - 1].y) < 0.0001f) {
+      continue;
+    }
+    path[count++] = point;
+  }
+  if (closed && count > 2 &&
+      std::abs(path[0].x - path[count - 1].x) < 0.0001f &&
+      std::abs(path[0].y - path[count - 1].y) < 0.0001f) {
+    --count;
+  }
+  if (count < 2) {
+    return;
+  }
+  if (closed && count < 3) {
+    closed = false;
+  }
+  const float half = thickness * 0.5f;
+  const int segments = closed ? count : count - 1;
+  GuiPoint2 direction[kMaximumPoints];
+  for (int segment = 0; segment < segments; ++segment) {
+    const GuiPoint2 from = path[segment];
+    const GuiPoint2 to = path[(segment + 1) % count];
+    const float dx = to.x - from.x;
+    const float dy = to.y - from.y;
+    const float length = std::sqrt(dx * dx + dy * dy);
+    direction[segment] = GuiPoint2{ dx / length, dy / length };
+  }
+  // Each vertex gets one offset pair shared by the segments meeting there,
+  // which is what closes the joint.
+  GuiPoint2 sideA[kMaximumPoints];
+  GuiPoint2 sideB[kMaximumPoints];
+  for (int vertex = 0; vertex < count; ++vertex) {
+    const bool hasPrevious = closed || vertex > 0;
+    const bool hasNext = closed || vertex < count - 1;
+    GuiPoint2 point = path[vertex];
+    float offsetX = 0.0f;
+    float offsetY = 0.0f;
+    if (hasPrevious && hasNext) {
+      const GuiPoint2 in = direction[(vertex - 1 + segments) % segments];
+      const GuiPoint2 out = direction[vertex % segments];
+      const float normalInX = -in.y;
+      const float normalInY = in.x;
+      float miterX = normalInX - out.y;
+      float miterY = normalInY + out.x;
+      const float miterLength = std::sqrt(miterX * miterX + miterY * miterY);
+      if (miterLength < 0.0001f) {
+        // The path doubles back on itself: no joint to fill.
+        offsetX = normalInX * half;
+        offsetY = normalInY * half;
+      } else {
+        miterX /= miterLength;
+        miterY /= miterLength;
+        const float cosine = miterX * normalInX + miterY * normalInY;
+        const float reach =
+          std::min(half / std::max(cosine, 0.0001f), 4.0f * half);
+        offsetX = miterX * reach;
+        offsetY = miterY * reach;
+      }
+    } else {
+      const GuiPoint2 along = direction[hasNext ? vertex : vertex - 1];
+      offsetX = -along.y * half;
+      offsetY = along.x * half;
+      if (squareCaps) {
+        const float outward = hasNext ? -half : half;
+        point.x += along.x * outward;
+        point.y += along.y * outward;
+      }
+    }
+    sideA[vertex] = GuiPoint2{ point.x + offsetX, point.y + offsetY };
+    sideB[vertex] = GuiPoint2{ point.x - offsetX, point.y - offsetY };
+  }
+  for (int segment = 0; segment < segments; ++segment) {
+    const int from = segment;
+    const int to = (segment + 1) % count;
+    visual.addGradientQuad(sideA[from].x,
+                           sideA[from].y,
+                           sideB[from].x,
+                           sideB[from].y,
+                           sideB[to].x,
+                           sideB[to].y,
+                           sideA[to].x,
+                           sideA[to].y,
+                           color,
+                           color,
+                           color,
+                           color);
+  }
+}
+
+// One solid quad whose four (across, along) corners are given in chevron
+// space; `sideways` swaps the axes so the same geometry points left/right.
+static void
+addChevronQuad(GameVisual& visual,
+               bool sideways,
+               const float (&corners)[8],
+               ColorRgba color)
+{
+  float points[8];
+  for (int index = 0; index < 4; ++index) {
+    points[index * 2] = sideways ? corners[index * 2 + 1] : corners[index * 2];
+    points[index * 2 + 1] =
+      sideways ? corners[index * 2] : corners[index * 2 + 1];
+  }
+  visual.addGradientQuad(points[0],
+                         points[1],
+                         points[2],
+                         points[3],
+                         points[4],
+                         points[5],
+                         points[6],
+                         points[7],
+                         color,
+                         color,
+                         color,
+                         color);
+}
+
+// A mitered chevron in chevron space: the tip at (centerX, tipY), the arms
+// ending at centerX -/+ halfWidth, tipY + depth. With `sideways` the axes
+// swap: centerX runs vertically and tipY horizontally.
+static void
+drawChevronQuads(GameVisual& visual,
+                 float centerX,
+                 float tipY,
+                 float halfWidth,
+                 float depth,
+                 float thickness,
+                 ColorRgba color,
+                 bool sideways)
+{
+  if (!std::isfinite(centerX) || !std::isfinite(tipY) ||
+      !std::isfinite(halfWidth) || !std::isfinite(depth) ||
+      !std::isfinite(thickness) || halfWidth <= 0.0f || depth == 0.0f ||
+      thickness <= 0.0f || color.a == 0) {
+    return;
+  }
+  const float half = thickness * 0.5f;
+  const float armLength = std::sqrt(halfWidth * halfWidth + depth * depth);
+  // Unit vector from the tip along the right arm; the left arm mirrors it.
+  const float ux = halfWidth / armLength;
+  const float uy = depth / armLength;
+  // The bisector runs straight along the depth axis into the V, and the
+  // offset edges of both arms cross on it: the miter. sin(half-angle) is
+  // the arm's horizontal share. Very sharp chevrons cap the miter.
+  const float miter = std::min(half / ux, 4.0f * half);
+  const float direction = depth > 0.0f ? 1.0f : -1.0f;
+  const float innerTipY = tipY + direction * miter;
+  const float outerTipY = tipY - direction * miter;
+  // The right arm's unit normal toward the V's inside.
+  const float nx = -uy * direction;
+  const float ny = ux * direction;
+  const float endY = tipY + depth;
+  const float rightX = centerX + halfWidth;
+  const float leftX = centerX - halfWidth;
+  const float rightArm[8] = { rightX + nx * half,
+                              endY + ny * half,
+                              rightX - nx * half,
+                              endY - ny * half,
+                              centerX,
+                              outerTipY,
+                              centerX,
+                              innerTipY };
+  const float leftArm[8] = { leftX - nx * half, endY + ny * half,
+                             leftX + nx * half, endY - ny * half,
+                             centerX,           outerTipY,
+                             centerX,           innerTipY };
+  addChevronQuad(visual, sideways, rightArm, color);
+  addChevronQuad(visual, sideways, leftArm, color);
+}
+
+void
+GuiKit::drawChevron(GameVisual& visual,
+                    float centerX,
+                    float tipY,
+                    float halfWidth,
+                    float depth,
+                    float thickness,
+                    ColorRgba color)
+{
+  drawChevronQuads(
+    visual, centerX, tipY, halfWidth, depth, thickness, color, false);
+}
+
+void
+GuiKit::drawSideChevron(GameVisual& visual,
+                        float tipX,
+                        float centerY,
+                        float halfHeight,
+                        float depth,
+                        float thickness,
+                        ColorRgba color)
+{
+  // In chevron space the arms end at tip + depth; a right-pointing chevron's
+  // arms end to the left of its tip.
+  drawChevronQuads(
+    visual, centerY, tipX, halfHeight, -depth, thickness, color, true);
+}
+
+void
+GuiKit::drawRoundedOutline(GameVisual& visual,
+                           float x,
+                           float y,
+                           float width,
+                           float height,
+                           float radius,
+                           float thickness,
+                           ColorRgba color)
+{
+  drawRoundedBand(
+    visual, x, y, width, height, radius, -thickness, 0.0f, color, color);
+}
+
+void
+GuiKit::drawSoftShadow(GameVisual& visual,
+                       float x,
+                       float y,
+                       float width,
+                       float height,
+                       float radius,
+                       float spread,
+                       float offsetY,
+                       ColorRgba color)
+{
+  if (!std::isfinite(offsetY) || !finiteRect(x, y, width, height)) {
+    return;
+  }
+  // Start slightly inside the edge so the falloff has no hard seam at the
+  // rim, and fill the core so an offset shadow leaves no gap under its caster.
+  const float inset = std::min({ radius, 4.0f, width * 0.5f, height * 0.5f });
+  drawRoundedRect(visual,
+                  x + inset,
+                  y + offsetY + inset,
+                  width - 2.0f * inset,
+                  height - 2.0f * inset,
+                  std::max(0.0f, radius - inset),
+                  color);
+  drawRoundedBand(visual,
+                  x,
+                  y + offsetY,
+                  width,
+                  height,
+                  radius,
+                  -inset,
+                  spread,
+                  color,
+                  UiTheme::transparentOf(color));
+}
+
+void
+GuiKit::drawSoftGlow(GameVisual& visual,
+                     float centerX,
+                     float centerY,
+                     float radiusX,
+                     float radiusY,
+                     ColorRgba color,
+                     int segments)
+{
+  if (!std::isfinite(centerX) || !std::isfinite(centerY) ||
+      !std::isfinite(radiusX) || !std::isfinite(radiusY) || radiusX <= 0.0f ||
+      radiusY <= 0.0f || color.a == 0) {
+    return;
+  }
+  const int clamped = std::clamp(segments, 8, 48);
+  const int count = clamped - clamped % 2;
+  // Three rings approximate a smooth gaussian-like falloff.
+  const float ringRadius[3] = { 0.32f, 0.66f, 1.0f };
+  const float ringAlpha[3] = { 0.62f, 0.2f, 0.0f };
+  const float step = 6.28318531f / static_cast<float>(count);
+  const ColorRgba ringColors[3] = { UiTheme::fade(color, ringAlpha[0]),
+                                    UiTheme::fade(color, ringAlpha[1]),
+                                    UiTheme::transparentOf(color) };
+  for (int segment = 0; segment < count; segment += 2) {
+    const float a0 = step * static_cast<float>(segment);
+    const float a1 = a0 + step;
+    const float a2 = a1 + step;
+    const float r = ringRadius[0];
+    visual.addGradientQuad(centerX,
+                           centerY,
+                           centerX + std::cos(a0) * radiusX * r,
+                           centerY + std::sin(a0) * radiusY * r,
+                           centerX + std::cos(a1) * radiusX * r,
+                           centerY + std::sin(a1) * radiusY * r,
+                           centerX + std::cos(a2) * radiusX * r,
+                           centerY + std::sin(a2) * radiusY * r,
+                           color,
+                           ringColors[0],
+                           ringColors[0],
+                           ringColors[0]);
+  }
+  for (int ring = 0; ring < 2; ++ring) {
+    const float inner = ringRadius[ring];
+    const float outer = ringRadius[ring + 1];
+    for (int segment = 0; segment < count; ++segment) {
+      const float a0 = step * static_cast<float>(segment);
+      const float a1 = a0 + step;
+      const float c0 = std::cos(a0);
+      const float s0 = std::sin(a0);
+      const float c1 = std::cos(a1);
+      const float s1 = std::sin(a1);
+      visual.addGradientQuad(centerX + c0 * radiusX * inner,
+                             centerY + s0 * radiusY * inner,
+                             centerX + c0 * radiusX * outer,
+                             centerY + s0 * radiusY * outer,
+                             centerX + c1 * radiusX * outer,
+                             centerY + s1 * radiusY * outer,
+                             centerX + c1 * radiusX * inner,
+                             centerY + s1 * radiusY * inner,
+                             ringColors[ring],
+                             ringColors[ring + 1],
+                             ringColors[ring + 1],
+                             ringColors[ring]);
+    }
+  }
+}
+
+void
+GuiKit::drawVignette(GameVisual& visual,
+                     float width,
+                     float height,
+                     ColorRgba center,
+                     ColorRgba edge,
+                     float innerFraction)
+{
+  if (!finiteRect(0.0f, 0.0f, width, height)) {
+    return;
+  }
+  const int kSegments = 32;
+  const float cx = width * 0.5f;
+  const float cy = height * 0.5f;
+  // The outer ellipse passes through the screen corners.
+  const float rx = cx * 1.4142136f;
+  const float ry = cy * 1.4142136f;
+  const float inner = std::clamp(innerFraction, 0.05f, 0.95f);
+  const float step = 6.28318531f / static_cast<float>(kSegments);
+  if (center.a != 0) {
+    // The center fan shares the ring's vertices so no sliver stays uncovered.
+    for (int segment = 0; segment < kSegments; segment += 2) {
+      const float a0 = step * static_cast<float>(segment);
+      const float a1 = a0 + step;
+      const float a2 = a1 + step;
+      visual.addGradientQuad(cx,
+                             cy,
+                             cx + std::cos(a0) * rx * inner,
+                             cy + std::sin(a0) * ry * inner,
+                             cx + std::cos(a1) * rx * inner,
+                             cy + std::sin(a1) * ry * inner,
+                             cx + std::cos(a2) * rx * inner,
+                             cy + std::sin(a2) * ry * inner,
+                             center,
+                             center,
+                             center,
+                             center);
+    }
+  }
+  for (int segment = 0; segment < kSegments; ++segment) {
+    const float a0 = step * static_cast<float>(segment);
+    const float a1 = a0 + step;
+    const float c0 = std::cos(a0);
+    const float s0 = std::sin(a0);
+    const float c1 = std::cos(a1);
+    const float s1 = std::sin(a1);
+    visual.addGradientQuad(cx + c0 * rx * inner,
+                           cy + s0 * ry * inner,
+                           cx + c0 * rx,
+                           cy + s0 * ry,
+                           cx + c1 * rx,
+                           cy + s1 * ry,
+                           cx + c1 * rx * inner,
+                           cy + s1 * ry * inner,
+                           center,
+                           edge,
+                           edge,
+                           center);
+  }
+}
+
+void
+GuiKit::drawSheen(GameVisual& visual,
+                  float x,
+                  float y,
+                  float width,
+                  float height,
+                  float inset,
+                  float progress,
+                  ColorRgba color)
+{
+  if (!finiteRect(x, y, width, height) || !std::isfinite(progress) ||
+      progress <= 0.0f || progress >= 1.0f || color.a == 0) {
+    return;
+  }
+  const float minX = x + std::max(0.0f, inset);
+  const float maxX = x + width - std::max(0.0f, inset);
+  if (maxX <= minX) {
+    return;
+  }
+  const float band = std::max(12.0f, height * 1.1f);
+  const float skew = height * 0.45f;
+  const float travel = (maxX - minX) + band * 2.0f + skew;
+  const float centerBottom = minX - band - skew + travel * progress;
+  const float centerTop = centerBottom + skew;
+  // The band is clipped to the inset, so it swells in as it enters and dies
+  // away as it leaves: by the time any part of it is cut at an edge it is
+  // nearly clear, so no cut shows. The ramps span a good share of the width
+  // it crosses (not just its own), so even a quick sweep across a wide row
+  // brightens and fades over many frames instead of popping in and out.
+  const float reach = std::min({ centerBottom - minX,
+                                 centerTop - minX,
+                                 maxX - centerBottom,
+                                 maxX - centerTop });
+  const float ramp = std::max(band * 0.75f, (maxX - minX) * 0.4f);
+  const float entry = std::clamp(reach / ramp, 0.0f, 1.0f);
+  if (entry <= 0.0f) {
+    return;
+  }
+  color = UiTheme::fade(color, entry * entry * (3.0f - 2.0f * entry));
+  const float top = y + 1.0f;
+  const float bottom = y + height - 1.0f;
+  const ColorRgba clear = UiTheme::transparentOf(color);
+  // Left half fades in, right half fades out; clamping x keeps both convex.
+  const float leftTop0 = std::clamp(centerTop - band * 0.5f, minX, maxX);
+  const float leftTop1 = std::clamp(centerTop, minX, maxX);
+  const float leftBottom0 = std::clamp(centerBottom - band * 0.5f, minX, maxX);
+  const float leftBottom1 = std::clamp(centerBottom, minX, maxX);
+  if (leftTop1 > leftTop0 || leftBottom1 > leftBottom0) {
+    visual.addGradientQuad(leftTop0,
+                           top,
+                           leftTop1,
+                           top,
+                           leftBottom1,
+                           bottom,
+                           leftBottom0,
+                           bottom,
+                           clear,
+                           color,
+                           color,
+                           clear);
+  }
+  const float rightTop1 = std::clamp(centerTop + band * 0.5f, minX, maxX);
+  const float rightBottom1 = std::clamp(centerBottom + band * 0.5f, minX, maxX);
+  if (rightTop1 > leftTop1 || rightBottom1 > leftBottom1) {
+    visual.addGradientQuad(leftTop1,
+                           top,
+                           rightTop1,
+                           top,
+                           rightBottom1,
+                           bottom,
+                           leftBottom1,
+                           bottom,
+                           color,
+                           clear,
+                           clear,
+                           color);
+  }
+}
+
+void
+GuiKit::drawGlassPanel(GameVisual& visual,
+                       float x,
+                       float y,
+                       float width,
+                       float height,
+                       const GuiGlassStyle& style)
+{
+  if (!finiteRect(x, y, width, height) || style.opacity == 0) {
+    return;
+  }
+  ILLUMO_PROFILE_ZONE("GuiKit.drawGlassPanel");
+  const unsigned char opacity = style.opacity;
+  const float radius = clampedRadius(style.radius, width, height);
+  const float tiltX =
+    std::isfinite(style.tiltX) ? std::clamp(style.tiltX, -1.0f, 1.0f) : 0.0f;
+  const float tiltY =
+    std::isfinite(style.tiltY) ? std::clamp(style.tiltY, -1.0f, 1.0f) : 0.0f;
+  if (style.shadow) {
+    // A pane turned toward the pointer throws its shadow the other way.
+    drawSoftShadow(visual,
+                   x - 16.0f * tiltX,
+                   y - 10.0f * tiltY,
+                   width,
+                   height,
+                   radius,
+                   28.0f,
+                   12.0f,
+                   UiTheme::applyOpacity(UiTheme::glowShadow(), opacity));
+  }
+  const float glow = std::clamp(style.glow, 0.0f, 1.0f);
+  if (glow > 0.0f) {
+    drawRoundedBand(
+      visual,
+      x,
+      y,
+      width,
+      height,
+      radius,
+      0.0f,
+      22.0f,
+      UiTheme::applyOpacity(
+        UiTheme::fade(UiTheme::accentCool(), 0.05f + 0.13f * glow), opacity),
+      UiTheme::transparentOf(UiTheme::accentCool()));
+  }
+  drawRoundedRect(visual,
+                  x,
+                  y,
+                  width,
+                  height,
+                  radius,
+                  UiTheme::applyOpacity(UiTheme::glassRim(), opacity));
+  drawRoundedGradientRect(
+    visual,
+    x + 1.0f,
+    y + 1.0f,
+    width - 2.0f,
+    height - 2.0f,
+    std::max(0.0f, radius - 1.0f),
+    UiTheme::applyOpacity(UiTheme::glassTop(), opacity),
+    UiTheme::applyOpacity(UiTheme::glassBottom(), opacity));
+  // A lit inner rim on the upper edge reads as light catching the glass.
+  const float litWidth = std::max(0.0f, width - 2.0f * radius);
+  if (litWidth > 0.0f) {
+    const ColorRgba lit = UiTheme::applyOpacity(
+      UiTheme::fade(UiTheme::glassRimLit(), 0.55f), opacity);
+    const ColorRgba clear = UiTheme::transparentOf(lit);
+    visual.addGradientRect(
+      x + radius, y + 1.0f, litWidth * 0.5f, 1.0f, clear, lit, lit, clear);
+    visual.addGradientRect(x + radius + litWidth * 0.5f,
+                           y + 1.0f,
+                           litWidth * 0.5f,
+                           1.0f,
+                           lit,
+                           clear,
+                           clear,
+                           lit);
+  }
+  const float tilt = std::max(std::abs(tiltX), std::abs(tiltY));
+  if (tilt > 0.0f) {
+    // Glare follows the pointer across the glass, and the edges turned
+    // toward it catch the light; both fade out as the pane levels.
+    drawSheen(
+      visual,
+      x,
+      y,
+      width,
+      height,
+      radius,
+      0.5f + 0.42f * tiltX,
+      UiTheme::applyOpacity(ColorRgba{ 200, 245, 255, 255 },
+                            static_cast<unsigned char>(
+                              static_cast<float>(opacity) * 0.07f * tilt)));
+    const float edgeLength = std::max(0.0f, height - 2.0f * radius);
+    const float edgeWidth = std::max(0.0f, width - 2.0f * radius);
+    const float edges[4] = { std::max(0.0f, -tiltX),
+                             std::max(0.0f, tiltX),
+                             std::max(0.0f, -tiltY),
+                             std::max(0.0f, tiltY) };
+    for (int edge = 0; edge < 4; ++edge) {
+      if (edges[edge] <= 0.0f) {
+        continue;
+      }
+      const ColorRgba shine = UiTheme::applyOpacity(
+        UiTheme::fade(UiTheme::glassRimLit(), 0.75f * edges[edge]), opacity);
+      const ColorRgba clear = UiTheme::transparentOf(shine);
+      if (edge < 2 && edgeLength > 0.0f) {
+        const float edgeX = edge == 0 ? x : x + width - 2.0f;
+        visual.addGradientRect(edgeX,
+                               y + radius,
+                               2.0f,
+                               edgeLength * 0.5f,
+                               clear,
+                               clear,
+                               shine,
+                               shine);
+        visual.addGradientRect(edgeX,
+                               y + radius + edgeLength * 0.5f,
+                               2.0f,
+                               edgeLength * 0.5f,
+                               shine,
+                               shine,
+                               clear,
+                               clear);
+      } else if (edge >= 2 && edgeWidth > 0.0f) {
+        const float edgeY = edge == 2 ? y : y + height - 2.0f;
+        visual.addGradientRect(x + radius,
+                               edgeY,
+                               edgeWidth * 0.5f,
+                               2.0f,
+                               clear,
+                               shine,
+                               shine,
+                               clear);
+        visual.addGradientRect(x + radius + edgeWidth * 0.5f,
+                               edgeY,
+                               edgeWidth * 0.5f,
+                               2.0f,
+                               shine,
+                               clear,
+                               clear,
+                               shine);
+      }
+    }
+  }
+  if (!style.accentLine) {
+    return;
+  }
+  const float reveal = std::clamp(style.accentReveal, 0.0f, 1.0f);
+  const float lineWidth = std::max(0.0f, width - 48.0f) * reveal;
+  if (lineWidth <= 0.0f) {
+    return;
+  }
+  const float lineX =
+    x + 24.0f + (std::max(0.0f, width - 48.0f) - lineWidth) * 0.5f;
+  const ColorRgba cyan = UiTheme::applyOpacity(UiTheme::accentCool(), opacity);
+  const ColorRgba violet =
+    UiTheme::applyOpacity(UiTheme::accentViolet(), opacity);
+  visual.addGradientRect(lineX, y, lineWidth, 2.0f, cyan, violet, violet, cyan);
+  // A glint travels the hairline twice per ambient cycle.
+  const float phase =
+    std::isfinite(style.ambientPhase)
+      ? style.ambientPhase / 6.0f - std::floor(style.ambientPhase / 6.0f)
+      : 0.0f;
+  const float glintWidth = std::min(90.0f, lineWidth * 0.35f);
+  const float glintX = lineX - glintWidth + (lineWidth + glintWidth) * phase;
+  const float glintLeft = std::clamp(glintX, lineX, lineX + lineWidth);
+  const float glintMid =
+    std::clamp(glintX + glintWidth * 0.5f, lineX, lineX + lineWidth);
+  const float glintRight =
+    std::clamp(glintX + glintWidth, lineX, lineX + lineWidth);
+  // The glint swells in as its peak enters the line and dies away as it
+  // leaves, over a good share of the line, so it never pops in or out at
+  // either end.
+  const float glintReach =
+    std::min(glintX + glintWidth * 0.5f - lineX,
+             lineX + lineWidth - (glintX + glintWidth * 0.5f));
+  const float glintRamp =
+    std::max({ 1.0f, glintWidth * 0.75f, lineWidth * 0.3f });
+  const float glintEntry = std::clamp(glintReach / glintRamp, 0.0f, 1.0f);
+  if (glintEntry <= 0.0f) {
+    return;
+  }
+  const ColorRgba white = UiTheme::fade(
+    UiTheme::applyOpacity(ColorRgba{ 236, 252, 255, 230 }, opacity),
+    glintEntry * glintEntry * (3.0f - 2.0f * glintEntry));
+  const ColorRgba clearWhite = UiTheme::transparentOf(white);
+  if (glintMid > glintLeft) {
+    visual.addGradientRect(glintLeft,
+                           y - 0.5f,
+                           glintMid - glintLeft,
+                           3.0f,
+                           clearWhite,
+                           white,
+                           white,
+                           clearWhite);
+  }
+  if (glintRight > glintMid) {
+    visual.addGradientRect(glintMid,
+                           y - 0.5f,
+                           glintRight - glintMid,
+                           3.0f,
+                           white,
+                           clearWhite,
+                           clearWhite,
+                           white);
+  }
+}
+
+// One arrow glyph centered at (cx, cy); dx/dy is the pointing direction.
+static void
+drawArrowGlyph(GameVisual& visual,
+               float cx,
+               float cy,
+               float half,
+               float dx,
+               float dy,
+               ColorRgba color)
+{
+  // Base across the perpendicular, tip along the direction.
+  const float px = -dy;
+  const float py = dx;
+  visual.addFilledTriangle(cx - dx * half * 0.6f + px * half,
+                           cy - dy * half * 0.6f + py * half,
+                           cx - dx * half * 0.6f - px * half,
+                           cy - dy * half * 0.6f - py * half,
+                           cx + dx * half * 0.7f,
+                           cy + dy * half * 0.7f,
+                           color);
+}
+
+static bool
+drawArrowLabel(GameVisual& visual,
+               const std::string& label,
+               float x,
+               float y,
+               float size,
+               ColorRgba color)
+{
+  // Arrow glyphs are not in the ASCII atlas; draw them as small triangles.
+  const float half = size * 0.36f;
+  const float cx = x + half;
+  const float cy = y + size * 0.5f;
+  if (label == "UP") {
+    drawArrowGlyph(visual, cx, cy, half, 0.0f, -1.0f, color);
+  } else if (label == "DOWN") {
+    drawArrowGlyph(visual, cx, cy, half, 0.0f, 1.0f, color);
+  } else if (label == "LEFT") {
+    drawArrowGlyph(visual, cx, cy, half, -1.0f, 0.0f, color);
+  } else if (label == "RIGHT") {
+    drawArrowGlyph(visual, cx, cy, half, 1.0f, 0.0f, color);
+  } else if (label == "UPDOWN") {
+    drawArrowGlyph(
+      visual, cx, cy - size * 0.24f, half * 0.8f, 0.0f, -1.0f, color);
+    drawArrowGlyph(
+      visual, cx, cy + size * 0.24f, half * 0.8f, 0.0f, 1.0f, color);
+  } else if (label == "LEFTRIGHT") {
+    drawArrowGlyph(visual, cx, cy, half * 0.8f, -1.0f, 0.0f, color);
+    drawArrowGlyph(
+      visual, cx + half * 1.7f, cy, half * 0.8f, 1.0f, 0.0f, color);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+// A liquid drop is a stack of slices across its travel axis: a quarter-circle
+// cap at each end (the same 15-degree steps as a rounded rect) and evenly
+// spaced middle levels where the neck forms.
+static const int kLiquidMiddleLevels = 18;
+static const int kLiquidLevels = 2 * kCornerPoints + kLiquidMiddleLevels;
+
+struct LiquidProfile
+{
+  // Per level: position along the travel and the near/far cross edges.
+  float along[kLiquidLevels] = {};
+  float nearEdge[kLiquidLevels] = {};
+  float farEdge[kLiquidLevels] = {};
+};
+
+// Outline of the drop grown by `offset` (negative insets). The neck and taper
+// come from the unoffset shape, so bands between two offsets stay parallel.
+static bool
+liquidProfile(const GuiLiquidSelection& drop,
+              float offset,
+              LiquidProfile* profile)
+{
+  if (!std::isfinite(drop.crossStart) || !std::isfinite(drop.crossSize) ||
+      !std::isfinite(drop.headStart) || !std::isfinite(drop.tailStart) ||
+      !std::isfinite(drop.cellLength) || !std::isfinite(offset) ||
+      drop.crossSize <= 0.0f || drop.cellLength <= 0.0f) {
+    return false;
+  }
+  const float squash =
+    std::isfinite(drop.squash) ? std::clamp(drop.squash, -1.0f, 1.0f) : 0.0f;
+  // Jelly: a bulging drop spreads across the travel and shortens along it.
+  const float shrink = squash * std::min(4.0f, drop.cellLength * 0.07f);
+  const float grow = squash * std::min(5.0f, drop.crossSize * 0.05f);
+  const bool headFirst = drop.headStart <= drop.tailStart;
+  const float start =
+    std::min(drop.headStart, drop.tailStart) + shrink - offset;
+  const float end = std::max(drop.headStart, drop.tailStart) + drop.cellLength -
+                    shrink + offset;
+  const float crossLow = drop.crossStart - grow - offset;
+  const float crossHigh = drop.crossStart + drop.crossSize + grow + offset;
+  const float length = end - start;
+  const float half = (crossHigh - crossLow) * 0.5f;
+  if (!(length > 0.0f) || !(half > 0.0f)) {
+    return false;
+  }
+  const float center = crossLow + half;
+  const float baseRadius =
+    clampedRadius(drop.radius, drop.crossSize, drop.cellLength);
+  const float radius =
+    std::clamp(baseRadius + offset, 0.0f, std::min(half, length * 0.5f));
+  // The neck deepens as the drop stretches over one and a half cells.
+  const float stretch = std::clamp(std::abs(drop.headStart - drop.tailStart) /
+                                     (drop.cellLength * 1.5f),
+                                   0.0f,
+                                   1.0f);
+  const float baseHalf = drop.crossSize * 0.5f;
+  const float maxInset =
+    stretch *
+    std::min(std::max(0.0f, baseHalf - baseRadius - 1.0f), baseHalf * 0.16f);
+
+  float halfWidth[kLiquidLevels];
+  for (int step = 0; step < kCornerPoints; ++step) {
+    profile->along[step] = start + radius * (1.0f - kQuarterCos[step]);
+    halfWidth[step] = half - radius + radius * kQuarterSin[step];
+    const int endLevel = kCornerPoints + kLiquidMiddleLevels + step;
+    profile->along[endLevel] = end - radius + radius * kQuarterSin[step];
+    halfWidth[endLevel] = half - radius + radius * kQuarterCos[step];
+  }
+  for (int level = 0; level < kLiquidMiddleLevels; ++level) {
+    const float t = static_cast<float>(level + 1) /
+                    static_cast<float>(kLiquidMiddleLevels + 1);
+    profile->along[kCornerPoints + level] =
+      start + radius + (length - 2.0f * radius) * t;
+    halfWidth[kCornerPoints + level] = half;
+  }
+  // The head cell keeps its full width; behind it, u runs from the head (0)
+  // to the tail tip (1), necking in the middle and tapering the tail. Both
+  // terms leave and arrive with zero slope, so the outline flows out of the
+  // head and into the tail without a shoulder.
+  const float separation = std::abs(drop.headStart - drop.tailStart);
+  const float behindHead =
+    headFirst ? drop.headStart + drop.cellLength : drop.headStart;
+  for (int level = 0; level < kLiquidLevels; ++level) {
+    const float behind = headFirst ? profile->along[level] - behindHead
+                                   : behindHead - profile->along[level];
+    const float u =
+      separation > 0.0001f ? std::clamp(behind / separation, 0.0f, 1.0f) : 0.0f;
+    const float neck = std::sin(3.14159265f * u);
+    const float taper = u * u * (3.0f - 2.0f * u);
+    const float inset = maxInset * (0.6f * neck * neck + 0.45f * taper);
+    const float width = std::max(0.0f, halfWidth[level] - inset);
+    profile->nearEdge[level] = center - width;
+    profile->farEdge[level] = center + width;
+  }
+  return true;
+}
+
+// Screen position of a profile point: along is y for vertical travel and x
+// for horizontal travel.
+static GuiPoint
+liquidPoint(bool horizontal, float along, float cross)
+{
+  return horizontal ? GuiPoint{ along, cross } : GuiPoint{ cross, along };
+}
+
+static void
+drawLiquidFill(GameVisual& visual,
+               const GuiLiquidSelection& drop,
+               const LiquidProfile& profile,
+               ColorRgba top,
+               ColorRgba bottom)
+{
+  if (top.a == 0 && bottom.a == 0) {
+    return;
+  }
+  float minY = 0.0f;
+  float maxY = 0.0f;
+  if (drop.horizontal) {
+    minY = profile.nearEdge[0];
+    maxY = profile.farEdge[0];
+    for (int level = 1; level < kLiquidLevels; ++level) {
+      minY = std::min(minY, profile.nearEdge[level]);
+      maxY = std::max(maxY, profile.farEdge[level]);
+    }
+  } else {
+    minY = profile.along[0];
+    maxY = profile.along[kLiquidLevels - 1];
+  }
+  const float span = std::max(0.0001f, maxY - minY);
+  for (int level = 0; level + 1 < kLiquidLevels; ++level) {
+    if (profile.along[level + 1] - profile.along[level] <= 0.0001f) {
+      continue;
+    }
+    GuiPoint corners[4] = {
+      liquidPoint(
+        drop.horizontal, profile.along[level], profile.nearEdge[level]),
+      liquidPoint(
+        drop.horizontal, profile.along[level], profile.farEdge[level]),
+      liquidPoint(
+        drop.horizontal, profile.along[level + 1], profile.farEdge[level + 1]),
+      liquidPoint(
+        drop.horizontal, profile.along[level + 1], profile.nearEdge[level + 1])
+    };
+    if (drop.horizontal) {
+      // Keep the clockwise screen winding of the vertical slices.
+      std::swap(corners[1], corners[3]);
+    }
+    ColorRgba colors[4];
+    for (int corner = 0; corner < 4; ++corner) {
+      colors[corner] =
+        UiTheme::mix(top, bottom, (corners[corner].y - minY) / span);
+    }
+    visual.addGradientQuad(corners[0].x,
+                           corners[0].y,
+                           corners[1].x,
+                           corners[1].y,
+                           corners[2].x,
+                           corners[2].y,
+                           corners[3].x,
+                           corners[3].y,
+                           colors[0],
+                           colors[1],
+                           colors[2],
+                           colors[3]);
+  }
+}
+
+// The closed outline: far edge head-to-tail, then near edge back again.
+static void
+liquidPerimeter(const GuiLiquidSelection& drop,
+                const LiquidProfile& profile,
+                GuiPoint* points)
+{
+  for (int level = 0; level < kLiquidLevels; ++level) {
+    points[level] = liquidPoint(
+      drop.horizontal, profile.along[level], profile.farEdge[level]);
+    const int back = kLiquidLevels - 1 - level;
+    points[kLiquidLevels + level] =
+      liquidPoint(drop.horizontal, profile.along[back], profile.nearEdge[back]);
+  }
+}
+
+void
+GuiKit::drawLiquidSelection(GameVisual& visual,
+                            const GuiLiquidSelection& selection)
+{
+  LiquidProfile shape;
+  if (!liquidProfile(selection, 0.0f, &shape)) {
+    return;
+  }
+  if (selection.glow.a != 0 && std::isfinite(selection.glowSpread) &&
+      selection.glowSpread > 0.0f) {
+    LiquidProfile halo;
+    if (liquidProfile(selection, selection.glowSpread, &halo)) {
+      GuiPoint inner[2 * kLiquidLevels];
+      GuiPoint outer[2 * kLiquidLevels];
+      liquidPerimeter(selection, shape, inner);
+      liquidPerimeter(selection, halo, outer);
+      // The glow blends top to bottom like the rim, by each point's height.
+      const ColorRgba glowBottom =
+        selection.glowBottom.a != 0 ? selection.glowBottom : selection.glow;
+      float glowTop = inner[0].y;
+      float glowLow = inner[0].y;
+      for (int index = 1; index < 2 * kLiquidLevels; ++index) {
+        glowTop = std::min(glowTop, inner[index].y);
+        glowLow = std::max(glowLow, inner[index].y);
+      }
+      const float glowSpan = std::max(0.0001f, glowLow - glowTop);
+      for (int index = 0; index < 2 * kLiquidLevels; ++index) {
+        const int next = (index + 1) % (2 * kLiquidLevels);
+        const ColorRgba here = UiTheme::mix(
+          selection.glow, glowBottom, (inner[index].y - glowTop) / glowSpan);
+        const ColorRgba there = UiTheme::mix(
+          selection.glow, glowBottom, (inner[next].y - glowTop) / glowSpan);
+        visual.addGradientQuad(inner[index].x,
+                               inner[index].y,
+                               outer[index].x,
+                               outer[index].y,
+                               outer[next].x,
+                               outer[next].y,
+                               inner[next].x,
+                               inner[next].y,
+                               here,
+                               UiTheme::transparentOf(here),
+                               UiTheme::transparentOf(there),
+                               there);
+      }
+    }
+  }
+  drawLiquidFill(visual,
+                 selection,
+                 shape,
+                 selection.rim,
+                 selection.rimBottom.a != 0 ? selection.rimBottom
+                                            : selection.rim);
+  LiquidProfile face;
+  if (liquidProfile(selection, -1.0f, &face)) {
+    drawLiquidFill(
+      visual, selection, face, selection.faceTop, selection.faceBottom);
+  }
+  if (selection.sheen >= 0.0f && selection.sheenColor.a != 0) {
+    const float alongStart = shape.along[0];
+    const float alongEnd = shape.along[kLiquidLevels - 1];
+    float crossLow = shape.nearEdge[0];
+    float crossHigh = shape.farEdge[0];
+    for (int level = 1; level < kLiquidLevels; ++level) {
+      crossLow = std::min(crossLow, shape.nearEdge[level]);
+      crossHigh = std::max(crossHigh, shape.farEdge[level]);
+    }
+    const GuiPoint origin =
+      liquidPoint(selection.horizontal, alongStart, crossLow);
+    const GuiPoint extent = liquidPoint(
+      selection.horizontal, alongEnd - alongStart, crossHigh - crossLow);
+    drawSheen(visual,
+              origin.x,
+              origin.y,
+              extent.x,
+              extent.y,
+              selection.radius,
+              selection.sheen,
+              selection.sheenColor);
+  }
+}
+
+void
+GuiKit::drawSplash(GameVisual& visual,
+                   float centerX,
+                   float centerY,
+                   float progress,
+                   float scale,
+                   ColorRgba color)
+{
+  if (!std::isfinite(centerX) || !std::isfinite(centerY) ||
+      !std::isfinite(progress) || !std::isfinite(scale) || progress <= 0.0f ||
+      progress >= 1.0f || scale <= 0.0f || color.a == 0) {
+    return;
+  }
+  const float fade = (1.0f - progress) * (1.0f - progress);
+  // The ring swells fast and thins as it spreads, like a ripple on water.
+  const float swell =
+    1.0f - (1.0f - progress) * (1.0f - progress) * (1.0f - progress);
+  const float ringRadius = scale * (6.0f + 38.0f * swell);
+  const float ringWidth = scale * (0.8f + 3.2f * (1.0f - progress));
+  const ColorRgba ring = UiTheme::fade(color, 0.7f * fade);
+  const int kRingSegments = 24;
+  const float step = 6.28318531f / static_cast<float>(kRingSegments);
+  for (int segment = 0; segment < kRingSegments; ++segment) {
+    const float a0 = step * static_cast<float>(segment);
+    const float a1 = a0 + step;
+    const float inner = ringRadius - ringWidth * 0.5f;
+    const float outer = ringRadius + ringWidth * 0.5f;
+    visual.addGradientQuad(centerX + std::cos(a0) * inner,
+                           centerY + std::sin(a0) * inner * 0.6f,
+                           centerX + std::cos(a0) * outer,
+                           centerY + std::sin(a0) * outer * 0.6f,
+                           centerX + std::cos(a1) * outer,
+                           centerY + std::sin(a1) * outer * 0.6f,
+                           centerX + std::cos(a1) * inner,
+                           centerY + std::sin(a1) * inner * 0.6f,
+                           ring,
+                           ring,
+                           ring,
+                           ring);
+  }
+  // Droplets leap up and out, arc back down under gravity and shrink. Each
+  // is a teardrop: a round head with a tail trailing along its velocity.
+  const int kDroplets = 7;
+  const float gravity = 130.0f * scale;
+  for (int droplet = 0; droplet < kDroplets; ++droplet) {
+    const float spread =
+      static_cast<float>(droplet) / static_cast<float>(kDroplets - 1);
+    const float angle = -2.75f + 2.36f * spread;
+    const float speed =
+      scale * (54.0f + 16.0f * static_cast<float>(droplet % 3));
+    const float time = progress * 0.62f;
+    const float x = centerX + std::cos(angle) * speed * time;
+    const float y =
+      centerY + std::sin(angle) * speed * time + 0.5f * gravity * time * time;
+    const float vx = std::cos(angle) * speed;
+    const float vy = std::sin(angle) * speed + gravity * time;
+    const float size =
+      scale * (3.4f - 2.4f * progress) * (droplet % 2 == 0 ? 1.0f : 0.75f);
+    if (size <= 0.2f) {
+      continue;
+    }
+    const ColorRgba tint = UiTheme::fade(color, 0.85f * (1.0f - progress));
+    const float speedLength = std::max(0.001f, std::sqrt(vx * vx + vy * vy));
+    const float dirX = vx / speedLength;
+    const float dirY = vy / speedLength;
+    const float tail = size * (1.4f + 1.2f * (1.0f - progress));
+    visual.addFilledTriangle(x - dirX * tail,
+                             y - dirY * tail,
+                             x - dirY * size * 0.5f,
+                             y + dirX * size * 0.5f,
+                             x + dirY * size * 0.5f,
+                             y - dirX * size * 0.5f,
+                             tint);
+    visual.addFilledEllipse(x - size * 0.5f, y - size * 0.5f, size, size, tint);
+  }
+}
+
+static float
+keycapLabelWidth(const std::string& label, float sizePt)
+{
+  const float arrow = sizePt * 0.72f;
+  if (label == "UP" || label == "DOWN" || label == "LEFT" || label == "RIGHT" ||
+      label == "UPDOWN") {
+    return arrow;
+  }
+  if (label == "LEFTRIGHT") {
+    return arrow + sizePt * 0.36f * 1.2f;
+  }
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  return font ? font->measureText(label, sizePt).width
+              : GuiKit::estimateTextWidth(label, sizePt);
+}
+
+float
+GuiKit::drawKeycap(GameVisual& visual,
+                   float x,
+                   float y,
+                   const std::string& label,
+                   float sizePt,
+                   unsigned char opacity)
+{
+  const float padding = sizePt * 0.55f;
+  const float labelWidth = keycapLabelWidth(label, sizePt);
+  const float width = std::max(sizePt * 1.7f, labelWidth + padding * 2.0f);
+  const float height = sizePt * 1.75f;
+  const float radius = sizePt * 0.42f;
+  // Darker lower edge first, then the face, so the key reads as raised.
+  drawRoundedRect(visual,
+                  x,
+                  y + 1.5f,
+                  width,
+                  height,
+                  radius,
+                  UiTheme::applyOpacity(UiTheme::keycapEdge(), opacity));
+  drawRoundedGradientRect(
+    visual,
+    x,
+    y,
+    width,
+    height,
+    radius,
+    UiTheme::applyOpacity(UiTheme::keycapFace(), opacity),
+    UiTheme::applyOpacity(
+      UiTheme::mix(UiTheme::keycapFace(), UiTheme::keycapEdge(), 0.35f),
+      opacity));
+  const ColorRgba ink =
+    UiTheme::applyOpacity(UiTheme::textSecondary(), opacity);
+  const float labelX = x + (width - labelWidth) * 0.5f;
+  const float labelY = y + (height - sizePt) * 0.5f;
+  if (!drawArrowLabel(visual, label, labelX, labelY, sizePt, ink)) {
+    visual.addText(label, labelX, labelY, sizePt, ink);
+  }
+  return width;
+}
+
+float
+GuiKit::measureKeyHint(const std::string& key,
+                       const std::string& action,
+                       float sizePt)
+{
+  const float padding = sizePt * 0.55f;
+  const float keyWidth =
+    std::max(sizePt * 1.7f, keycapLabelWidth(key, sizePt) + padding * 2.0f);
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  const float actionWidth = font ? font->measureText(action, sizePt).width
+                                 : estimateTextWidth(action, sizePt);
+  return keyWidth + sizePt * 0.6f + actionWidth + sizePt * 1.6f;
+}
+
+float
+GuiKit::drawKeyHint(GameVisual& visual,
+                    float x,
+                    float y,
+                    const std::string& key,
+                    const std::string& action,
+                    float sizePt,
+                    unsigned char opacity)
+{
+  const float keyWidth = drawKeycap(visual, x, y, key, sizePt, opacity);
+  const float height = sizePt * 1.75f;
+  visual.addText(action,
+                 x + keyWidth + sizePt * 0.6f,
+                 y + (height - sizePt) * 0.5f,
+                 sizePt,
+                 UiTheme::applyOpacity(UiTheme::textMuted(), opacity));
+  return measureKeyHint(key, action, sizePt);
 }
 
 bool
@@ -561,4 +2129,96 @@ GuiKit::drawTreeRow(GameVisual& visual,
                  textY,
                  13.0f,
                  isSelected ? UiTheme::textPrimary() : UiTheme::textMuted());
+}
+
+static float
+measureText(const std::string& text, float sizePt)
+{
+  if (text.empty()) {
+    return 0.0f;
+  }
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  if (font == nullptr) {
+    return GuiKit::estimateTextWidth(text, sizePt);
+  }
+  return font->measureText(text, sizePt).width;
+}
+
+void
+GuiKit::drawTextField(GameVisual& visual,
+                      float x,
+                      float y,
+                      float w,
+                      float h,
+                      const std::string& value,
+                      float fontSize,
+                      const GuiTextEdit* edit,
+                      bool invalid,
+                      bool hovered,
+                      bool readOnly)
+{
+  const bool focused = edit != nullptr && edit->active();
+  const ColorRgba background = readOnly  ? ColorRgba{ 14, 20, 30, 255 }
+                               : focused ? ColorRgba{ 10, 16, 26, 255 }
+                                         : ColorRgba{ 18, 26, 40, 255 };
+  visual.addFilledRect(x, y, w, h, background);
+  if (!readOnly) {
+    const ColorRgba border = invalid   ? ColorRgba{ 240, 70, 80, 255 }
+                             : focused ? ColorRgba{ 66, 214, 210, 255 }
+                             : hovered ? ColorRgba{ 66, 120, 180, 255 }
+                                       : ColorRgba{ 44, 62, 86, 255 };
+    visual.addOutlineRect(x, y, w, h, border, focused ? 1.5f : 1.0f);
+  }
+  const float padding = 4.0f;
+  const float textY = y + std::max(0.0f, std::round((h - fontSize) * 0.5f));
+  const float room = std::max(1.0f, w - padding * 2.0f);
+  const ColorRgba textColor =
+    readOnly ? UiTheme::textMuted() : UiTheme::textPrimary();
+  if (!focused) {
+    std::string shown = value;
+    if (measureText(shown, fontSize) > room) {
+      while (!shown.empty() && measureText(shown + "...", fontSize) > room) {
+        shown.pop_back();
+        // Never leave half of a multi-byte sequence.
+        while (!shown.empty() &&
+               (static_cast<unsigned char>(shown.back()) & 0xc0u) == 0x80u) {
+          shown.pop_back();
+        }
+        if (!shown.empty() &&
+            static_cast<unsigned char>(shown.back()) >= 0xc0u) {
+          shown.pop_back();
+        }
+      }
+      shown += "...";
+    }
+    visual.addText(shown, x + padding, textY, fontSize, textColor);
+    return;
+  }
+  const std::string& text = edit->text();
+  // Scroll so the caret stays inside the field.
+  const float caretX = measureText(text.substr(0, edit->caret()), fontSize);
+  const float offset = std::max(0.0f, caretX - room + 2.0f);
+  const float originX = x + padding - offset;
+  if (edit->hasSelection()) {
+    const float start =
+      measureText(text.substr(0, edit->selectionStart()), fontSize);
+    const float end =
+      measureText(text.substr(0, edit->selectionEnd()), fontSize);
+    const float left = std::max(x + 1.0f, originX + start);
+    const float right = std::min(x + w - 1.0f, originX + end);
+    if (right > left) {
+      visual.addFilledRect(
+        left, y + 2.0f, right - left, h - 4.0f, ColorRgba{ 40, 90, 140, 255 });
+    }
+  }
+  visual.addText(text, originX, textY, fontSize, textColor);
+  if (edit->caretVisible()) {
+    const float caretScreenX = originX + caretX;
+    visual.addLine(caretScreenX,
+                   y + 3.0f,
+                   caretScreenX,
+                   y + h - 3.0f,
+                   ColorRgba{ 230, 240, 250, 255 },
+                   1.0f);
+  }
 }

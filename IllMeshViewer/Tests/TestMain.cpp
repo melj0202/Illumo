@@ -3,7 +3,6 @@
 #include <Illumo/Testing/TestRegistry.h>
 #include <cctype>
 #include <cstdio>
-#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -15,7 +14,9 @@ registerMeshViewerCameraTests(IllumoTestRegistry& registry);
 void
 registerMeshViewerUiTests(IllumoTestRegistry& registry);
 void
-registerMeshViewerModuleTests(IllumoTestRegistry& registry);
+registerMeshViewerSceneTests(IllumoTestRegistry& registry);
+void
+registerMeshViewerPanelsTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -24,7 +25,8 @@ createRegistry()
   registerMeshViewerConfigTests(registry);
   registerMeshViewerCameraTests(registry);
   registerMeshViewerUiTests(registry);
-  registerMeshViewerModuleTests(registry);
+  registerMeshViewerSceneTests(registry);
+  registerMeshViewerPanelsTests(registry);
   return registry;
 }
 
@@ -33,20 +35,12 @@ runTestCase(const IllumoTestCase& testCase)
 {
   std::printf("\n======== %s ========\n", testCase.name.c_str());
 
-  try {
-    const int failures = testCase.function();
-    std::printf("======== %s: %s (%d failure(s)) ========\n",
-                testCase.name.c_str(),
-                failures == 0 ? "PASSED" : "FAILED",
-                failures);
-    return failures == 0 ? 0 : 1;
-  } catch (const std::exception& exception) {
-    std::printf("FAIL: unhandled exception: %s\n", exception.what());
-  } catch (...) {
-    std::printf("FAIL: unhandled non-standard exception\n");
-  }
-
-  return 1;
+  const int failures = testCase.function();
+  std::printf("======== %s: %s (%d failure(s)) ========\n",
+              testCase.name.c_str(),
+              failures == 0 ? "PASSED" : "FAILED",
+              failures);
+  return failures == 0 ? 0 : 1;
 }
 
 static int

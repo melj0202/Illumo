@@ -3,13 +3,14 @@
 #include <Illumo/Testing/TestRegistry.h>
 #include <cctype>
 #include <cstdio>
-#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <string>
 
 void
 registerRuleSetTests(IllumoTestRegistry& registry);
+void
+registerRuleCatalogLoaderTests(IllumoTestRegistry& registry);
 void
 registerCellContextTests(IllumoTestRegistry& registry);
 void
@@ -19,7 +20,7 @@ registerDomainBoundaryTests(IllumoTestRegistry& registry);
 void
 registerSimTests(IllumoTestRegistry& registry);
 void
-registerCellGameModuleTests(IllumoTestRegistry& registry);
+registerCanvasSceneTests(IllumoTestRegistry& registry);
 void
 registerProductBoundaryTests(IllumoTestRegistry& registry);
 void
@@ -28,6 +29,10 @@ void
 registerWorldTopologyTests(IllumoTestRegistry& registry);
 void
 registerConfigurationMenuTests(IllumoTestRegistry& registry);
+void
+registerNewSimulationMenuTests(IllumoTestRegistry& registry);
+void
+registerCSimSoundsTests(IllumoTestRegistry& registry);
 void
 registerExitConfirmDialogTests(IllumoTestRegistry& registry);
 void
@@ -42,16 +47,19 @@ createRegistry()
 {
   IllumoTestRegistry registry;
   registerRuleSetTests(registry);
+  registerRuleCatalogLoaderTests(registry);
   registerCellContextTests(registry);
   registerCanvasDomainTests(registry);
   registerDomainBoundaryTests(registry);
   registerSimTests(registry);
-  registerCellGameModuleTests(registry);
+  registerCanvasSceneTests(registry);
   registerMainMenuTests(registry);
   registerProductBoundaryTests(registry);
   registerCanvasInfTests(registry);
   registerWorldTopologyTests(registry);
   registerConfigurationMenuTests(registry);
+  registerNewSimulationMenuTests(registry);
+  registerCSimSoundsTests(registry);
   registerExitConfirmDialogTests(registry);
   registerIllumoGameConfigTests(registry);
   registerEditorTests(registry);
@@ -63,20 +71,12 @@ runTestCase(const IllumoTestCase& testCase)
 {
   std::printf("\n======== %s ========\n", testCase.name.c_str());
 
-  try {
-    const int failures = testCase.function();
-    std::printf("======== %s: %s (%d failure(s)) ========\n",
-                testCase.name.c_str(),
-                failures == 0 ? "PASSED" : "FAILED",
-                failures);
-    return failures == 0 ? 0 : 1;
-  } catch (const std::exception& exception) {
-    std::printf("FAIL: unhandled exception: %s\n", exception.what());
-  } catch (...) {
-    std::printf("FAIL: unhandled non-standard exception\n");
-  }
-
-  return 1;
+  const int failures = testCase.function();
+  std::printf("======== %s: %s (%d failure(s)) ========\n",
+              testCase.name.c_str(),
+              failures == 0 ? "PASSED" : "FAILED",
+              failures);
+  return failures == 0 ? 0 : 1;
 }
 
 static int

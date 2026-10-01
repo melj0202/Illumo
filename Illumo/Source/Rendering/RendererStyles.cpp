@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/ShaderPreprocessor.h>
@@ -172,6 +173,62 @@ void main() {
 }
 )";
 
+static const char* kSkyboxVertexShader = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+
+out vec3 vTexCoords;
+
+uniform mat4 uViewProjection;
+
+void main() {
+    vTexCoords = aPos;
+    vec4 pos = uViewProjection * vec4(aPos, 1.0);
+    gl_Position = pos.xyww;
+}
+)";
+
+static const char* kSkyboxFragmentShader = R"(
+#version 330 core
+in vec3 vTexCoords;
+
+layout (location = 0) out vec4 FragColor;
+layout (location = 1) out vec2 FragVelocity;
+
+uniform samplerCube uSkybox;
+uniform vec4 uTint;
+
+void main() {
+    FragColor = texture(uSkybox, vTexCoords) * uTint;
+    FragVelocity = vec2(0.0);
+}
+)";
+
+// One fragment per cell of a canvas fade texture (frame schema v9, D-R31):
+// the fade's start colour at 2x, its target at 2x + 1, their alpha bytes the
+// start time in 1/512 s ticks wrapping every 128 s. Mirrors canvas_frag.glsl.
+static const char* kCanvasFadeFragmentShader = R"(
+#version 330 core
+out vec4 FragColor;
+
+uniform sampler2D uTexture;
+// x: the fade clock in seconds, y: the fade speed.
+uniform vec3 uCanvasFade;
+
+void main() {
+    ivec2 cell = ivec2(gl_FragCoord.xy);
+    vec4 from = texelFetch(uTexture, ivec2(cell.x * 2, cell.y), 0);
+    vec4 to = texelFetch(uTexture, ivec2(cell.x * 2 + 1, cell.y), 0);
+    float ticks = floor(from.a * 255.0 + 0.5) + floor(to.a * 255.0 + 0.5) * 256.0;
+    float age = mod(uCanvasFade.x - ticks / 512.0 + 128.0, 128.0);
+    // A start time a rounding step ahead of the clock: just begun.
+    if (age > 127.0) {
+        age = 0.0;
+    }
+    FragColor = vec4(mix(to.rgb, from.rgb, exp(-uCanvasFade.y * age)), 1.0);
+}
+)";
+
 static void
 fillCanvasPipeline(PipelineState& ps)
 {
@@ -198,6 +255,7 @@ Renderer::ensureBuiltinStyles()
   if (_builtinStylesReady || !_backend) {
     return;
   }
+  ILLUMO_PROFILE_ZONE("Renderer.ensureBuiltinStyles");
 
   // Canvas: file-backed shaders (same paths as historical Canvas enroll).
   {
@@ -312,7 +370,82 @@ Renderer::ensureBuiltinStyles()
       createStyle(style);
   }
 
+  // Canvas fade resolve: the full-screen quad into a cell-sized target.
+  {
+    RenderStyle style;
+    fillCanvasPipeline(style.pipeline);
+    ShaderSources sources;
+    sources.vertexSource = kMotionBlurVertexShader;
+    sources.fragmentSource = kCanvasFadeFragmentShader;
+    style.shaderHandle = enrollShader(sources);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::CanvasFade)] =
+      createStyle(style);
+  }
+
+  // 3D Cubemap Skybox.
+  {
+    RenderStyle style;
+    style.pipeline.depthTestEnabled = true;
+    style.pipeline.blendEnabled = false;
+    style.pipeline.faceCullingEnabled = false;
+    style.pipeline.primitives = Primitives::Triangles;
+    ShaderSources sources;
+    sources.vertexSource = kSkyboxVertexShader;
+    sources.fragmentSource = kSkyboxFragmentShader;
+    style.shaderHandle = enrollShader(sources);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::Skybox)] =
+      createStyle(style);
+  }
+
+  // Instanced lit meshes and their shadow depth pass.
+  {
+    RenderStyle style;
+    style.pipeline.depthTestEnabled = true;
+    style.pipeline.blendEnabled = false;
+    style.pipeline.faceCullingEnabled = false;
+    style.pipeline.primitives = Primitives::Triangles;
+    ShaderPaths paths;
+    paths.vertexPath = "Shader/mesh_lit_instanced_vertex.glsl";
+    paths.fragmentPath = "Shader/mesh_lit_instanced_frag.glsl";
+    style.shaderHandle = enrollShader(paths);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::LitMeshInstanced)] =
+      createStyle(style);
+  }
+  {
+    RenderStyle style;
+    style.pipeline.depthTestEnabled = true;
+    style.pipeline.blendEnabled = false;
+    style.pipeline.faceCullingEnabled = false;
+    style.pipeline.primitives = Primitives::Triangles;
+    ShaderPaths paths;
+    paths.vertexPath = "Shader/shadow_depth_instanced_vertex.glsl";
+    paths.fragmentPath = "Shader/shadow_depth_frag.glsl";
+    style.shaderHandle = enrollShader(paths);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::ShadowDepthInstanced)] =
+      createStyle(style);
+  }
+
   _builtinStylesReady = true;
+}
+
+TextureHandle
+Renderer::whiteTexture()
+{
+  if (_whiteTextureHandle.isValid() || _backend == nullptr ||
+      !_backend->TexturesDrawWhenCreated()) {
+    return _whiteTextureHandle;
+  }
+  const std::array<unsigned char, 4> white{ 255, 255, 255, 255 };
+  TextureOptions options;
+  options.filter = TextureFilter::Nearest;
+  options.wrapX = TextureWrap::ClampToEdge;
+  options.wrapY = TextureWrap::ClampToEdge;
+  _whiteTextureHandle = enrollTexture(white.data(), 1, 1, 4, options);
+  return _whiteTextureHandle;
 }
 
 RenderStyleHandle

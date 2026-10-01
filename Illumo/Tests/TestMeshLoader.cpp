@@ -46,6 +46,36 @@ testMeshLoaderBasicMemory()
 }
 
 static void
+testMeshLoaderGeneratesMissingNormals()
+{
+  testSection("MeshLoader: OBJ without normals gets generated normals");
+
+  // A triangle in the XZ plane: its generated normal is along Y, never the
+  // +Z default a vertex has before any normal is known.
+  const std::string objContent = "v 0.0 0.0 0.0\n"
+                                 "v 0.0 0.0 1.0\n"
+                                 "v 1.0 0.0 0.0\n"
+                                 "f 1 2 3\n";
+  MeshLoadOptions options;
+  options.generateNormalsIfMissing = true;
+  const MeshLoadResult generated =
+    MeshLoader::loadFromMemory(objContent, options);
+  testTrue(g, generated.success, "Normal-less triangle loaded");
+  bool alongY = generated.mesh.vertices.size() == 3;
+  for (const MeshVertex& vertex : generated.mesh.vertices) {
+    alongY = alongY && std::abs(std::abs(vertex.normal.y) - 1.0f) < 0.001f;
+  }
+  testTrue(g, alongY, "Generated normals follow the face, not +Z");
+
+  options.generateNormalsIfMissing = false;
+  const MeshLoadResult kept = MeshLoader::loadFromMemory(objContent, options);
+  testTrue(g,
+           kept.success &&
+             std::abs(kept.mesh.vertices[0].normal.z - 1.0f) < 0.001f,
+           "Without generation, missing normals keep the +Z default");
+}
+
+static void
 testMeshLoaderQuadTriangulation()
 {
   testSection("MeshLoader: quad triangulation and options");
@@ -113,6 +143,33 @@ testMeshDataUtilities()
              flattened.size(),
              3u * 8u,
              "Flattened buffer has 24 floats (3 vertices * 8)");
+}
+
+static void
+testMeshLoaderAttributeBounds()
+{
+  testSection(
+    "MeshLoader: reject invalid attribute references transactionally");
+  const std::string vertices = "v 0 0 0\nv 1 0 0\nv 0 1 0\n";
+  const std::string invalid[] = { "f 1 2 4\n",
+                                  "vn 0 0 1\nf 1//2 2//2 3//2\n",
+                                  "f 1//1 2//1 3//1\n",
+                                  "vt 0 0\nf 1/2 2/2 3/2\n",
+                                  "f 1/1 2/1 3/1\n",
+                                  "f 1 2 2147483647\n",
+                                  "o valid\nf 1 2 3\no invalid\nf 1 2 4\n" };
+  for (const std::string& suffix : invalid) {
+    const MeshLoadResult result = MeshLoader::loadFromMemory(vertices + suffix);
+    testTrue(
+      g, !result.success && !result.error.empty(), "invalid reference fails");
+    testTrue(g,
+             result.mesh.vertices.empty() && result.mesh.indices.empty() &&
+               result.mesh.submeshes.empty() && result.mesh.materials.empty(),
+             "rejected mesh contains no partially converted output");
+  }
+  const MeshLoadResult valid =
+    MeshLoader::loadFromMemory(vertices + "f -3 -2 -1\n");
+  testTrue(g, valid.success, "valid relative OBJ references remain supported");
 }
 
 static void
@@ -245,8 +302,14 @@ registerMeshLoaderTests(IllumoTestRegistry& registry)
   registry.add("Illumo.MeshLoader.QuadTriangulation", []() {
     return runMeshLoaderCase(testMeshLoaderQuadTriangulation);
   });
+  registry.add("Illumo.MeshLoader.GeneratesMissingNormals", []() {
+    return runMeshLoaderCase(testMeshLoaderGeneratesMissingNormals);
+  });
   registry.add("Illumo.MeshLoader.MeshDataUtilities",
                []() { return runMeshLoaderCase(testMeshDataUtilities); });
+  registry.add("Illumo.MeshLoader.AttributeBounds", []() {
+    return runMeshLoaderCase(testMeshLoaderAttributeBounds);
+  });
   registry.add("Illumo.MeshLoader.ErrorHandling",
                []() { return runMeshLoaderCase(testMeshLoaderErrorHandling); });
   registry.add("Illumo.MeshLoader.BackendSwapping", []() {

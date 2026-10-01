@@ -1,7 +1,7 @@
 #include "Game/Canvas.h"
 #include "Game/SparseCellGrid.h"
-#include "Rulesets/GameOfLifeRuleSet.h"
-#include <Illumo/Rendering/Scene.h>
+#include "Rulesets/LifeLikeRuleSet.h"
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -15,7 +15,7 @@ testRenderSceneCanvasTokens()
   HeadlessRenderFixture fixture(1280, 720);
   fixture.env.setVar("CanvasX", 16);
   fixture.env.setVar("CanvasY", 12);
-  Scene scene(&fixture.window, &fixture.camera);
+  DrawList scene(&fixture.window, &fixture.camera);
   Canvas canvas(16, 12, &fixture.window, &fixture.camera, &fixture.renderer);
   scene.AddDrawable(&canvas);
 
@@ -87,7 +87,7 @@ testSparseCellGridPool()
   testTrue(g, grid.getAllocatedChunkCount() >= 1, "chunk allocated");
   testTrue(g, grid.getPoolChunks() >= 1, "pool has chunks");
 
-  GameOfLifeRuleSet rules(nullptr);
+  LifeLikeRuleSet rules("GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
   testTrue(g, grid.advance(rules), "advance succeeds");
   testEqUChar(g, grid.getCell(CellAddress{ -1, 1 }), 0, "blinker left");
   testEqUChar(g, grid.getCell(CellAddress{ 0, 1 }), 0, "blinker middle");

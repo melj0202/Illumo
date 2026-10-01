@@ -5,6 +5,7 @@
 #include <Illumo/Testing/TestRegistry.h>
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -88,6 +89,34 @@ testWindowDimensionOptions()
       g, environment.getVar("WinX").value == "1024", "window width parsed");
     testTrue(
       g, environment.getVar("WinY").value == "768", "window height parsed");
+  }
+  std::filesystem::remove(path, error);
+}
+
+static void
+testGraphicsApiOption()
+{
+  testSection("SysCmdLine: the graphics API option is an engine option");
+  const std::filesystem::path path = environmentPath("graphics-api");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  {
+    EnvVars environment(path);
+    char executable[] = "Host";
+    char option[] = "--graphics-api";
+    char value[] = "vulkan";
+    char* arguments[] = { executable, option, value };
+    const SysCmdLineResult result =
+      SysCmdLine::ParseCommandLine(3, arguments, &environment);
+    testTrue(g, !result.shouldExit(), "a named API continues startup");
+    testTrue(g,
+             environment.getVar("GraphicsAPI").value == "vulkan",
+             "the API name is stored for the host to parse");
+    char* missing[] = { executable, option };
+    testTrue(g,
+             SysCmdLine::ParseCommandLine(2, missing, &environment).action ==
+               SysCmdLineAction::ExitFailure,
+             "a missing API name fails before startup");
   }
   std::filesystem::remove(path, error);
 }
@@ -191,8 +220,10 @@ testHelpAndVersion()
       versionText = capture.text();
     }
     testTrue(g,
-             versionText.find(BuildInfo::VersionNumber) != std::string::npos,
-             "version output uses engine BuildInfo");
+             versionText.find(std::string("Version: ") +
+                              BuildInfo::FullVersion + "\n") !=
+               std::string::npos,
+             "version output shows the full engine version");
   }
   std::filesystem::remove(path, error);
 }
@@ -212,6 +243,7 @@ testStringOptionsAndPositionalArguments()
     config.applicationOptions = {
       { "-m", "path", "LaunchMesh", "Mesh file path" },
       { "--name", "string", "SceneName", "Name of scene" },
+      { "--mount", "paths", "Mounts", "Repeatable package path" },
     };
 
     char executable[] = "TestViewer";
@@ -241,23 +273,61 @@ testStringOptionsAndPositionalArguments()
     testTrue(g,
              environment.getVar("SceneName").value == "StanfordBunny",
              "string option --name parsed");
+
+    char mountOption[] = "--mount";
+    char firstMount[] = "packages/a";
+    char secondMount[] = "b.ilpk";
+    char* mountArgs[] = {
+      executable, mountOption, firstMount, mountOption, secondMount
+    };
+    SysCmdLine::ParseCommandLine(5, mountArgs, &environment, config);
+    testTrue(g,
+             environment.getVar("Mounts").value == "packages/a\nb.ilpk",
+             "a paths option repeats, one value per line");
   }
   std::filesystem::remove(path, error);
+}
+
+static bool
+isDigit(char character)
+{
+  return character >= '0' && character <= '9';
 }
 
 static void
 testBuildInfoMetadata()
 {
-  testSection("BuildInfo: engine-owned version metadata");
+  testSection("BuildInfo: generated vYY.MM_B version");
+  const std::string release = BuildInfo::Release;
   testTrue(g,
-           std::string(BuildInfo::VersionNumber) == "0.1",
-           "version number remains compatible");
+           release.size() == 5 && isDigit(release[0]) && isDigit(release[1]) &&
+             release[2] == '.' && isDigit(release[3]) && isDigit(release[4]),
+           "release is YY.MM");
+
+  // The build is stamped from the repository's VERSION.txt file.
+  std::ifstream versionFile(std::filesystem::path(ILLUMO_ENGINE_ASSETS) / ".." /
+                            ".." / "VERSION.txt");
+  std::string fileRelease;
+  versionFile >> fileRelease;
+  testTrue(g, fileRelease == release, "release matches the VERSION.txt file");
+
+  const std::string shortVersion = BuildInfo::VersionNumber;
   testTrue(g,
-           std::string(BuildInfo::BuildDateShort) == "9/13/24",
-           "build date remains compatible");
+           shortVersion ==
+             "v" + release + "_" + std::to_string(BuildInfo::BuildNumber),
+           "short version is v<release>_<build>");
+
+  const std::string commit = BuildInfo::Commit;
+  const std::string identity =
+    (commit.empty() ? std::string("unknown") : commit) +
+    (BuildInfo::Dirty ? ", dirty" : "");
   testTrue(g,
-           std::string(BuildInfo::BuildTimestamp) == "16:58",
-           "build timestamp remains compatible");
+           std::string(BuildInfo::FullVersion) ==
+             shortVersion + " (" + identity + ")",
+           "full version adds the commit and dirty state");
+  testTrue(g,
+           !commit.empty() || BuildInfo::BuildNumber == 0,
+           "a build number comes only from Git history");
 }
 
 static int
@@ -275,6 +345,8 @@ registerSysCmdLineTests(IllumoTestRegistry& registry)
                []() { return runSysCmdLineCase(testArgumentValidators); });
   registry.add("Illumo.SysCmdLine.WindowDimensionOptions",
                []() { return runSysCmdLineCase(testWindowDimensionOptions); });
+  registry.add("Illumo.SysCmdLine.GraphicsApiOption",
+               []() { return runSysCmdLineCase(testGraphicsApiOption); });
   registry.add("Illumo.SysCmdLine.InvalidWindowDimensions",
                []() { return runSysCmdLineCase(testInvalidWindowDimensions); });
   registry.add("Illumo.SysCmdLine.HelpAndVersion",

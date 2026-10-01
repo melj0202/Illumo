@@ -1,25 +1,32 @@
 #include <Illumo/Engine/Illumo.h>
 
+#include "Rendering/BackendConfig.h"
 #include "Rendering/OpenGL/CreateOpenGLBackend.h"
 #include "Rendering/RenderWindow.h"
-#include <Illumo/Engine/IModule.h>
+#include "Rendering/Vulkan/CreateVulkanBackend.h"
+#include <Illumo/Foundation/Profile.h>
+#include <Illumo/Platform/PathText.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/RenderPass.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/Scene.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
-#include <exception>
+#include <array>
 #include <filesystem>
 #include <glm/fwd.hpp>
-#include <tracy/Tracy.hpp>
 #include <utility>
+
+// The window size applyHostDefaults seeds as "WinX"/"WinY" (keep them in
+// step), and the fallback for a saved size that cannot open a window.
+static constexpr int kDefaultWindowWidth = 1280;
+static constexpr int kDefaultWindowHeight = 720;
 
 static void
 cleanupBackendAfterInitializationFailure(
@@ -28,38 +35,42 @@ cleanupBackendAfterInitializationFailure(
   if (backend == nullptr || !*backend) {
     return;
   }
-  try {
-    (*backend)->Shutdown();
-  } catch (const std::exception& exception) {
-    try {
-      Logger::LogError(
-        std::string("Illumo backend cleanup failed after initialization: ") +
-        exception.what());
-    } catch (...) {
-    }
-  } catch (...) {
-    try {
-      Logger::LogError(
-        "Illumo backend cleanup failed with an unknown error after "
-        "initialization");
-    } catch (...) {
-    }
-  }
+  (*backend)->Shutdown();
   backend->reset();
+}
+
+static std::unique_ptr<IBackend>
+createBackend(IRenderWindow* window, BackendDef api)
+{
+  if (api == BackendDef::VULKAN) {
+    return CreateVulkanBackend(window);
+  }
+  return CreateOpenGLBackend(window);
+}
+
+static const char*
+backendDisplayName(BackendDef api)
+{
+  return api == BackendDef::VULKAN ? "Vulkan" : "OpenGL";
 }
 
 Illumo::Illumo(IllumoConfig config)
   : m_applicationName(config.applicationName.empty() ? "Illumo"
                                                      : config.applicationName)
-  , m_windowFactory(CreateRenderWindow)
-  , m_backendFactory(CreateOpenGLBackend)
+  , m_windowFactory(CreateRenderWindowFor)
+  , m_backendFactory(createBackend)
 {
-  const std::filesystem::path environmentPath =
-    config.environmentPath.empty()
-      ? EnvVars::ApplicationConfigPath()
-      : std::filesystem::path(config.environmentPath);
+  std::filesystem::path environmentPath = EnvVars::ApplicationConfigPath();
+  if (!config.environmentPath.empty() &&
+      !pathFromUtf8(config.environmentPath, &environmentPath)) {
+    Logger::LogWarning("The settings path is not valid UTF-8; using " +
+                       pathToUtf8(environmentPath));
+  }
   m_environment = std::make_unique<EnvVars>(environmentPath);
   applyHostDefaults();
+  // The configured log level applies from here, before the console exists,
+  // so window and GPU startup messages are not filtered by the fallback.
+  Logger::setContext(m_environment.get(), nullptr);
 }
 
 Illumo::~Illumo()
@@ -95,9 +106,9 @@ Illumo::applyHostDefaults()
     const char* value;
   };
   const DefaultValue defaults[] = {
-    { "fps", "60" },           { "vsync", "true" }, { "WinX", "1280" },
-    { "WinY", "720" },         { "showFPS", "0" },  { "logLevel", "2" },
-    { "fullscreen", "false" },
+    { "fps", "60" },     { "vsync", "true" },       { "WinX", "1280" },
+    { "WinY", "720" },   { "showFPS", "0" },        { "showMemory", "0" },
+    { "logLevel", "2" }, { "fullscreen", "false" },
   };
   for (const DefaultValue& defaultValue : defaults) {
     if (m_environment->getVar(defaultValue.name).value.empty()) {
@@ -113,247 +124,135 @@ Illumo::initialize()
     Logger::LogWarning("Illumo::initialize called more than once; ignoring");
     return true;
   }
+  ILLUMO_PROFILE_ZONE("Illumo.Initialize");
 
-  try {
-    const int initialWindowWidth =
-      static_cast<int>(m_environment->getVar("WinX").valueAsLong);
-    const int initialWindowHeight =
-      static_cast<int>(m_environment->getVar("WinY").valueAsLong);
-    m_window = m_windowFactory(initialWindowWidth,
-                               initialWindowHeight,
-                               m_applicationName,
-                               m_environment.get());
-    if (!m_window) {
-      Logger::LogError("Illumo failed to create its render window");
-      releaseServices();
-      return false;
-    }
-
-    m_camera = std::make_unique<Camera>(
-      glm::vec2(0.0f, 0.0f), 1.0f, m_environment.get());
-    std::unique_ptr<IBackend> backend = m_backendFactory(m_window.get());
-    if (!backend) {
-      Logger::LogError("Illumo failed to create its rendering backend");
-      releaseServices();
-      return false;
-    }
-    bool backendInitialized = false;
-    try {
-      backendInitialized = backend->Initialize();
-    } catch (const std::exception& exception) {
-      Logger::LogError(
-        std::string("Illumo rendering backend threw during initialization: ") +
-        exception.what());
-      cleanupBackendAfterInitializationFailure(&backend);
-      releaseServices();
-      return false;
-    } catch (...) {
-      Logger::LogError(
-        "Illumo rendering backend threw an unknown initialization error");
-      cleanupBackendAfterInitializationFailure(&backend);
-      releaseServices();
-      return false;
-    }
-    if (!backendInitialized) {
-      Logger::LogError("Illumo failed to initialize its rendering backend");
-      cleanupBackendAfterInitializationFailure(&backend);
-      releaseServices();
-      return false;
-    }
+  int initialWindowWidth =
+    static_cast<int>(m_environment->getVar("WinX").valueAsLong);
+  int initialWindowHeight =
+    static_cast<int>(m_environment->getVar("WinY").valueAsLong);
+  // A settings file saved with a minimized window (0x0) or edited by hand
+  // must not stop the window from opening.
+  if (initialWindowWidth <= 0 || initialWindowHeight <= 0) {
+    Logger::LogWarning("Ignoring the saved window size " +
+                       std::to_string(initialWindowWidth) + "x" +
+                       std::to_string(initialWindowHeight) + "; using " +
+                       std::to_string(kDefaultWindowWidth) + "x" +
+                       std::to_string(kDefaultWindowHeight));
+    initialWindowWidth = kDefaultWindowWidth;
+    initialWindowHeight = kDefaultWindowHeight;
+    m_environment->setVar("WinX", initialWindowWidth);
+    m_environment->setVar("WinY", initialWindowHeight);
+  }
+  BackendDef requestedApi = BackendDef::OPENGL;
+  const std::string& requestedName = m_environment->getVar("GraphicsAPI").value;
+  if (!requestedName.empty() &&
+      !parseBackendDef(requestedName, &requestedApi)) {
+    Logger::LogWarning("GraphicsAPI '" + requestedName +
+                       "' names no rendering backend; using OpenGL");
+  } else if (!isBackendImplemented(requestedApi)) {
+    Logger::LogWarning("GraphicsAPI " + TokenToString(requestedApi) +
+                       " is not available in this build; using OpenGL");
+    requestedApi = BackendDef::OPENGL;
+  }
+  m_camera =
+    std::make_unique<Camera>(glm::vec2(0.0f, 0.0f), 1.0f, m_environment.get());
+  std::unique_ptr<IBackend> backend;
+  bool started = startGraphics(
+    requestedApi, initialWindowWidth, initialWindowHeight, &backend);
+  if (!started && requestedApi != BackendDef::OPENGL) {
+    // The preference stays saved, so a later launch tries it again.
+    Logger::LogWarning(std::string(backendDisplayName(requestedApi)) +
+                       " could not start; falling back to OpenGL");
+    started = startGraphics(
+      BackendDef::OPENGL, initialWindowWidth, initialWindowHeight, &backend);
+  }
+  if (!started) {
+    releaseServices();
+    return false;
+  }
+  {
+    ILLUMO_PROFILE_ZONE("Illumo.CreateRenderer");
     m_renderer = std::make_unique<Renderer>(
       m_window.get(), m_environment.get(), m_camera.get(), std::move(backend));
     m_renderer->ensureBuiltinStyles();
-    m_assetManager = std::make_unique<AssetManager>(m_renderer.get());
-    m_commandRegistry = std::make_unique<CommandRegistry>();
-    m_commandLine = std::make_unique<CommandLine>(m_environment.get(),
-                                                  m_commandRegistry.get(),
-                                                  m_window.get(),
-                                                  m_renderer.get(),
-                                                  m_applicationName);
-    Logger::setContext(m_environment.get(), m_commandLine.get());
-    m_inputManager =
-      std::make_unique<InputManager>(m_window->getWindowInstance());
-    m_scene = std::make_unique<Scene>(m_window.get(), m_camera.get());
-    GLString::setRenderWindow(m_window.get());
-
-    m_context.envVars = m_environment.get();
-    m_context.window = m_window.get();
-    m_context.commandLine = m_commandLine.get();
-    m_context.inputManager = m_inputManager.get();
-    m_context.renderer = m_renderer.get();
-    m_context.assetManager = m_assetManager.get();
-    m_context.camera = m_camera.get();
-    m_context.commandRegistry = m_commandRegistry.get();
-    m_context.scene = m_scene.get();
-    m_context.moduleHost = this;
-    m_initialized = true;
-    return true;
-  } catch (const std::exception& exception) {
-    Logger::LogError(std::string("Illumo initialization failed: ") +
-                     exception.what());
-  } catch (...) {
-    Logger::LogError("Illumo initialization failed with an unknown error");
   }
-  releaseServices();
-  return false;
-}
+  Logger::LogTrace("Renderer ready with built-in styles");
+  m_assetManager = std::make_unique<AssetManager>(m_renderer.get());
+  Logger::LogTrace("Asset manager ready");
+  m_commandRegistry = std::make_unique<CommandRegistry>();
+  m_commandLine = std::make_unique<CommandLine>(m_environment.get(),
+                                                m_commandRegistry.get(),
+                                                m_window.get(),
+                                                m_renderer.get(),
+                                                m_applicationName);
+  // Attaching the console replays everything logged so far into it.
+  Logger::setContext(m_environment.get(), m_commandLine.get());
+  Logger::LogTrace("Developer console attached");
+  m_inputManager =
+    std::make_unique<InputManager>(m_window->getWindowInstance());
+  Logger::LogTrace("Input manager ready");
+  m_scene = std::make_unique<DrawList>(m_window.get(), m_camera.get());
+  m_motionBlurPipelineConfigured = false;
+  GLString::setRenderWindow(m_window.get());
 
-void
-Illumo::addModule(std::unique_ptr<IModule> module,
-                  ModuleRequirement requirement)
-{
-  RegisteredModule registration;
-  registration.module = std::move(module);
-  registration.requirement = requirement;
-  m_modules.push_back(std::move(registration));
-}
-
-bool
-Illumo::startModules()
-{
-  if (!m_initialized) {
-    Logger::LogError("Illumo modules cannot start before initialization");
-    return false;
-  }
-  if (m_modulesStarted) {
-    Logger::LogWarning("Illumo::startModules called more than once; ignoring");
-    return true;
-  }
-
-  std::vector<RegisteredModule>::iterator registration = m_modules.begin();
-  while (registration != m_modules.end()) {
-    bool accepted = false;
-    bool startThrew = false;
-    try {
-      accepted =
-        registration->module && registration->module->Start(&m_context);
-    } catch (const std::exception& exception) {
-      Logger::LogError(std::string("An Illumo module threw during startup: ") +
-                       exception.what());
-      startThrew = true;
-    } catch (...) {
-      Logger::LogError("An Illumo module threw an unknown startup error");
-      startThrew = true;
-    }
-    if (accepted) {
-      registration->started = true;
-      ++registration;
-      continue;
-    }
-    if (startThrew) {
-      stopModule(*registration, true);
-    }
-    const ModuleRequirement requirement = registration->requirement;
-    registration = m_modules.erase(registration);
-    if (requirement == ModuleRequirement::Optional) {
-      Logger::LogWarning("An optional Illumo module did not start");
-      continue;
-    }
-
-    Logger::LogError("A required Illumo module did not start; rolling back");
-    rollbackStartedModules();
-    return false;
-  }
-
-  m_modulesStarted = true;
+  m_context.envVars = m_environment.get();
+  m_context.window = m_window.get();
+  m_context.commandLine = m_commandLine.get();
+  m_context.inputManager = m_inputManager.get();
+  m_context.renderer = m_renderer.get();
+  m_context.assetManager = m_assetManager.get();
+  m_context.camera = m_camera.get();
+  m_context.commandRegistry = m_commandRegistry.get();
+  m_context.scene = m_scene.get();
+  m_context.frameProfiler = &m_frameProfiler;
+  m_initialized = true;
+  Logger::LogInfo("Engine services initialized (renderer, assets, console, "
+                  "input, scene)");
   return true;
 }
 
-void
-Illumo::RequestTransition(std::unique_ptr<IModule> nextModule)
-{
-  m_pendingModuleTransition = std::move(nextModule);
-}
-
 bool
-Illumo::HasPendingTransition() const
+Illumo::startGraphics(BackendDef api,
+                      int width,
+                      int height,
+                      std::unique_ptr<IBackend>* backend)
 {
-  return m_pendingModuleTransition != nullptr;
-}
-
-void
-Illumo::applyPendingModuleTransition()
-{
-  if (!m_pendingModuleTransition) {
-    return;
+  {
+    ILLUMO_PROFILE_ZONE("Illumo.CreateWindow");
+    m_window = m_windowFactory(
+      width, height, m_applicationName, m_environment.get(), api);
   }
-
-  std::unique_ptr<IModule> nextModule = std::move(m_pendingModuleTransition);
-
-  for (std::vector<RegisteredModule>::iterator it = m_modules.begin();
-       it != m_modules.end();) {
-    if (it->requirement == ModuleRequirement::Required) {
-      stopModule(*it, false);
-      it = m_modules.erase(it);
-    } else {
-      ++it;
-    }
+  if (!m_window) {
+    Logger::LogError(std::string("Illumo failed to create its render window "
+                                 "for ") +
+                     backendDisplayName(api));
+    return false;
   }
-
-  if (m_inputManager != nullptr) {
-    m_inputManager->clearKeyQueue();
-    m_inputManager->clearCharQueue();
+  const std::array<int, 2> windowSize = m_window->getWindowDimensions();
+  Logger::LogInfo("Render window ready: " + std::to_string(windowSize[0]) +
+                  "x" + std::to_string(windowSize[1]) + ", monitor " +
+                  std::to_string(m_window->getRefreshRate()) + " Hz");
+  *backend = m_backendFactory(m_window.get(), api);
+  if (!*backend) {
+    Logger::LogError(std::string("Illumo failed to create its ") +
+                     backendDisplayName(api) + " rendering backend");
+    m_window.reset();
+    return false;
   }
-
-  if (m_scene != nullptr) {
-    m_scene->ClearDrawables();
+  bool backendInitialized = false;
+  {
+    ILLUMO_PROFILE_ZONE("Illumo.InitializeBackend");
+    backendInitialized = (*backend)->Initialize();
   }
-
-  bool accepted = false;
-  try {
-    accepted = nextModule && nextModule->Start(&m_context);
-  } catch (const std::exception& exception) {
-    Logger::LogError(
-      std::string("A transitioned module threw during startup: ") +
-      exception.what());
-    accepted = false;
-  } catch (...) {
-    Logger::LogError("A transitioned module threw an unknown startup error");
-    accepted = false;
+  if (!backendInitialized) {
+    Logger::LogError(std::string("Illumo failed to initialize its ") +
+                     backendDisplayName(api) + " rendering backend");
+    cleanupBackendAfterInitializationFailure(backend);
+    m_window.reset();
+    return false;
   }
-
-  if (!accepted) {
-    Logger::LogError(
-      "A transitioned required module failed to start; closing application");
-    if (nextModule) {
-      try {
-        nextModule->Exit();
-      } catch (...) {
-      }
-    }
-    if (m_window != nullptr) {
-      m_window->requestClose();
-    }
-    return;
-  }
-
-  RegisteredModule registration;
-  registration.module = std::move(nextModule);
-  registration.requirement = ModuleRequirement::Required;
-  registration.started = true;
-  m_modules.insert(m_modules.begin(), std::move(registration));
-}
-
-void
-Illumo::updateStartedModules(ModuleRequirement requirement, double dt)
-{
-  for (RegisteredModule& registration : m_modules) {
-    if (registration.started && registration.module &&
-        registration.requirement == requirement) {
-      registration.module->Update(dt);
-    }
-  }
-}
-
-void
-Illumo::dispatchStartedModules(ModuleRequirement requirement)
-{
-  for (RegisteredModule& registration : m_modules) {
-    if (registration.started && registration.module &&
-        registration.requirement == requirement) {
-      registration.module->DispatchDrawables(m_scene.get());
-    }
-  }
+  Logger::LogInfo(std::string("Rendering backend: ") + backendDisplayName(api));
+  return true;
 }
 
 void
@@ -384,10 +283,9 @@ Illumo::processGlobalHotkeys()
           if (m_environment != nullptr) {
             const bool current =
               m_environment->getVar("fullscreen").valueAsBool;
-            m_environment->setVar("fullscreen", !current);
             if (m_commandLine != nullptr) {
               m_commandLine->logSuccess(std::string("Fullscreen: ") +
-                                        (!current ? "on" : "off"));
+                                        (current ? "on" : "off"));
             }
           }
         }
@@ -423,27 +321,30 @@ Illumo::processGlobalHotkeys()
 }
 
 void
-Illumo::update(double dt)
+Illumo::beginUpdate(double dt)
 {
-  if (!m_initialized || !m_modulesStarted) {
+  if (!m_initialized) {
     return;
   }
-  if (m_pendingModuleTransition != nullptr) {
-    applyPendingModuleTransition();
-  }
-  ZoneScoped;
+  ILLUMO_PROFILE_ZONE("Illumo.BeginUpdate");
+  m_frameProfiler.mark(FramePhase::Input);
   m_inputManager->update();
   processGlobalHotkeys();
+  m_frameProfiler.mark(FramePhase::Camera);
   m_camera->Update(static_cast<float>(dt));
-  // Optional overlays (DebugModule) consume global console input first.
-  updateStartedModules(ModuleRequirement::Optional, dt);
-  updateStartedModules(ModuleRequirement::Required, dt);
+}
+
+void
+Illumo::endUpdate()
+{
+  if (!m_initialized) {
+    return;
+  }
+  m_frameProfiler.mark(FramePhase::Other);
   // Key/char queues are per-frame events. Unconsumed leftovers must not
   // retrigger on the next update.
-  if (m_inputManager != nullptr) {
-    m_inputManager->clearKeyQueue();
-    m_inputManager->clearCharQueue();
-  }
+  m_inputManager->clearKeyQueue();
+  m_inputManager->clearCharQueue();
 }
 
 void
@@ -475,8 +376,7 @@ Illumo::configureScenePipeline()
     }
 
     if (m_motionBlurPipelineConfigured && m_configuredBlurAmount == amount &&
-        m_configuredBlurMax == maxVel && m_configuredBlurSamples == samples &&
-        m_scene->hasCustomPasses(RenderLayerId::World)) {
+        m_configuredBlurMax == maxVel && m_configuredBlurSamples == samples) {
       return;
     }
 
@@ -545,86 +445,75 @@ Illumo::configureScenePipeline()
     std::vector<RenderPassDesc> worldPasses;
     worldPasses.push_back(std::move(geomPass));
     worldPasses.push_back(std::move(postPass));
-    m_scene->SetLayerPasses(RenderLayerId::World, std::move(worldPasses));
+    m_scene->SetDefaultLayerPasses(RenderLayerId::World,
+                                   std::move(worldPasses));
   } else {
     m_motionBlurPipelineConfigured = false;
-    if (m_scene->hasCustomPasses(RenderLayerId::World)) {
-      m_scene->ClearLayerPasses(RenderLayerId::World);
-    }
+    m_scene->SetDefaultLayerPasses(RenderLayerId::World, {});
   }
 }
 
-void
-Illumo::render()
+DrawList*
+Illumo::beginRender()
 {
-  if (!m_initialized || !m_modulesStarted) {
-    return;
+  if (!m_initialized) {
+    return nullptr;
   }
-  ZoneScopedN("Illumo.Render");
+  ILLUMO_PROFILE_ZONE("Illumo.BeginRender");
+  m_frameProfiler.mark(FramePhase::ScenePreparation);
   configureScenePipeline();
   m_scene->ClearDrawables();
-  // Product content first; optional overlays (console, FPS, demo) on top.
-  dispatchStartedModules(ModuleRequirement::Required);
-  dispatchStartedModules(ModuleRequirement::Optional);
+  return m_scene.get();
+}
 
-  m_assetManager->pump();
-  m_renderer->BeginFrame();
+void
+Illumo::endRender()
+{
+  if (!m_initialized) {
+    return;
+  }
+  ILLUMO_PROFILE_ZONE("Illumo.Render");
+  m_frameProfiler.mark(FramePhase::Assets);
   {
-    ZoneScopedN("Illumo.RenderScene");
+    ILLUMO_PROFILE_ZONE("Illumo.AssetPump");
+    m_assetManager->pump();
+  }
+  m_frameProfiler.mark(FramePhase::Commands);
+  {
+    ILLUMO_PROFILE_ZONE("Illumo.BeginFrame");
+    m_renderer->BeginFrame();
+  }
+  {
+    ILLUMO_PROFILE_ZONE("Illumo.RenderScene");
     m_renderer->RenderScene(m_scene.get(), m_camera.get());
   }
   {
-    ZoneScopedN("Illumo.EndFrame");
-    m_renderer->EndFrame();
-  }
-}
-
-void
-Illumo::stopModule(RegisteredModule& registration, bool force) noexcept
-{
-  if ((!registration.started && !force) || !registration.module) {
-    return;
-  }
-  registration.started = false;
-  try {
-    registration.module->Exit();
-  } catch (const std::exception& exception) {
-    try {
-      Logger::LogError(std::string("An Illumo module threw during exit: ") +
-                       exception.what());
-    } catch (...) {
-    }
-  } catch (...) {
-    try {
-      Logger::LogError("An Illumo module threw an unknown exit error");
-    } catch (...) {
+    ILLUMO_PROFILE_ZONE("Illumo.EndFrame");
+    if (m_frameProfiler.recording()) {
+      FrameProfiler::TimePoint presentationStart;
+      m_renderer->EndFrame(&presentationStart);
+      m_frameProfiler.mark(FramePhase::Presentation, presentationStart);
+    } else {
+      m_renderer->EndFrame();
     }
   }
-}
-
-void
-Illumo::rollbackStartedModules() noexcept
-{
-  for (std::vector<RegisteredModule>::reverse_iterator it = m_modules.rbegin();
-       it != m_modules.rend();
-       ++it) {
-    stopModule(*it, false);
-  }
+  m_frameProfiler.mark(FramePhase::Other);
 }
 
 void
 Illumo::shutdown() noexcept
 {
-  m_pendingModuleTransition.reset();
-  rollbackStartedModules();
-  m_modules.clear();
-  m_modulesStarted = false;
+  const bool wasRunning = m_initialized;
   releaseServices();
+  if (wasRunning) {
+    Logger::LogTrace("Engine services released");
+  }
 }
 
 void
 Illumo::releaseServices()
 {
+  ILLUMO_PROFILE_ZONE("Illumo.ReleaseServices");
   GLString::setRenderWindow(nullptr);
   m_scene.reset();
   m_inputManager.reset();
@@ -661,4 +550,13 @@ bool
 Illumo::shouldClose() const
 {
   return !m_window || m_window->shouldWindowClose();
+}
+
+void
+Illumo::deferClose()
+{
+  if (m_window) {
+    m_window->cancelCloseRequest();
+    m_window->clearRestartRequest();
+  }
 }

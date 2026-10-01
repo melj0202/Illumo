@@ -1,7 +1,11 @@
 #pragma once
+#include <cstddef>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <vector>
 
 /*
     This class describes a logger class that writes messages to a file,
@@ -15,6 +19,8 @@
         3 = Error, warning, and info logging
         4 = Error, warning, info, and trace logging
 
+    Messages logged before the first console attaches (platform, window and
+    GPU startup) are kept, bounded, and replayed into that console.
 */
 
 class IEnvVars;
@@ -23,7 +29,9 @@ class CommandLine;
 class Logger
 {
 public:
-  Logger(IEnvVars* ev, CommandLine* cl);
+  Logger(IEnvVars* ev,
+         CommandLine* cl,
+         const std::filesystem::path& filePath = {});
   ~Logger();
 
   void operator=(const Logger&) = delete;
@@ -62,19 +70,55 @@ public:
   static void LogWWarning(const wchar_t* /*message*/) {};
   static void LogWInfo(const wchar_t* /*message*/) {};
   static void LogW(const wchar_t* /*message*/) {};
-  static bool initLogger(IEnvVars* ev = nullptr, CommandLine* cl = nullptr);
+  static bool initLogger(IEnvVars* ev = nullptr,
+                         CommandLine* cl = nullptr,
+                         const std::filesystem::path& filePath = {});
   static void setContext(IEnvVars* ev, CommandLine* cl);
   static void shutdownLogger();
+  // Console tools can reserve stdout for machine-readable results.
+  static void setConsoleToStderr(bool enabled) { consoleToStderr = enabled; }
   static CommandLine* getCommandLine()
   {
     return instance ? instance->commandLine : nullptr;
   }
 
+  // The file every message is appended to (empty before initLogger).
+  static std::filesystem::path getLogFilePath()
+  {
+    return instance ? instance->logFilePath : std::filesystem::path();
+  }
+
   std::ofstream logFileStream;
 
+  static constexpr std::size_t kStartupBacklogLimit = 256;
+
 private:
+  enum class Level
+  {
+    Error,
+    Warning,
+    Info,
+    Plain,
+    Trace
+  };
+  struct BacklogEntry
+  {
+    Level level;
+    std::string text;
+  };
+
+  static inline bool consoleToStderr = false;
   static long getSafeLogLevel();
-  static Logger* instance;
+  static void write(Level level, const char* message);
+  static void sendToConsole(CommandLine* console,
+                            Level level,
+                            const std::string& text);
+  void attachConsole(CommandLine* console);
+  static std::unique_ptr<Logger> instance;
   IEnvVars* envVars;
   CommandLine* commandLine;
+  std::filesystem::path logFilePath;
+  bool consoleEverAttached = false;
+  std::vector<BacklogEntry> startupBacklog;
+  std::size_t startupBacklogDropped = 0;
 };

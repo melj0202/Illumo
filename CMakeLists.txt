@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 
 project(IllumoWorkspace LANGUAGES C CXX)
 
@@ -12,6 +12,12 @@ add_subdirectory(IllEd)
 add_subdirectory(IllMeshViewer)
 
 if(BUILD_TESTING)
+  # The workspace builds without exceptions; see cmake/CheckNoExceptions.cmake.
+  add_test(NAME Illumo.Build.NoExceptions
+    COMMAND ${CMAKE_COMMAND} "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CheckNoExceptions.cmake")
+  set_tests_properties(Illumo.Build.NoExceptions PROPERTIES
+    LABELS "Illumo;IllumoWorkspace")
   add_custom_target(IllumoRunTests ALL
     COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG>
       -L IllumoWorkspace --output-on-failure
@@ -23,25 +29,13 @@ if(BUILD_TESTING)
   )
 endif()
 
+# The WASM programs: each directory has a GuestTargets.cmake and a
+# PackageTargets.cmake (cmake/IllumoWasm.cmake).
+set(ILLUMO_PROGRAMS IllumoGame IllEd IllMeshViewer)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/IllumoWasm.cmake")
+
 if(ILLUMO_ENABLE_COVERAGE)
-  find_program(ILLUMO_LLVM_PROFDATA_EXECUTABLE NAMES llvm-profdata REQUIRED)
-  find_program(ILLUMO_LLVM_COV_EXECUTABLE NAMES llvm-cov REQUIRED)
-  add_custom_target(IllumoCoverage
-    COMMAND ${CMAKE_COMMAND}
-      "-DTEST_BINARY_ILLUMO=$<TARGET_FILE:IllumoTests>"
-      "-DTEST_BINARY_GAME=$<TARGET_FILE:IllumoGameTests>"
-      "-DBINARY_DIR=${CMAKE_BINARY_DIR}"
-      "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
-      "-DCONFIG=$<CONFIG>"
-      "-DLLVM_PROFDATA=${ILLUMO_LLVM_PROFDATA_EXECUTABLE}"
-      "-DLLVM_COV=${ILLUMO_LLVM_COV_EXECUTABLE}"
-      "-DMINIMUM_LINE_COVERAGE=85"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunWorkspaceCoverage.cmake"
-    DEPENDS IllumoTestsDiscover IllumoGameTestsDiscover
-      IllumoPublicHeaderSmoke
-    USES_TERMINAL
-    COMMENT "Running combined Illumo workspace coverage"
-  )
+  illumo_add_workspace_coverage()
 endif()
 
 if(ILLUMO_ENABLE_CLANG_TIDY)

@@ -1,44 +1,43 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 
 add_library(IllMeshViewerCore STATIC
   Source/MeshViewerCamera.cpp
   Source/MeshViewerConfig.cpp
-  Source/MeshViewerModule.cpp
+  Source/MeshViewerScene.cpp
+  Source/MeshViewerScenePanels.cpp
+  Source/MeshViewerPanels.cpp
+  Source/MeshViewerPlatformNative.cpp
   Source/MeshViewerUi.cpp
-  Source/IllMeshViewerApplication.cpp
 )
 
 target_include_directories(IllMeshViewerCore PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 target_include_directories(IllMeshViewerCore SYSTEM PRIVATE
-  "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
-target_link_libraries(IllMeshViewerCore PUBLIC Illumo::Illumo)
+  "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.14.1/public")
+target_link_libraries(IllMeshViewerCore PUBLIC Illumo::Illumo Illumo::Content)
 illumo_configure_runtime_target(IllMeshViewerCore)
 
-add_executable(IllMeshViewer $<TARGET_OBJECTS:IllumoPlatformEntry>)
-target_link_libraries(IllMeshViewer PRIVATE IllMeshViewerCore Illumo::Illumo)
-illumo_configure_runtime_target(IllMeshViewer)
-illumo_stage_runtime(IllMeshViewer)
-illumo_stage_default_file(IllMeshViewer
-  "${CMAKE_CURRENT_SOURCE_DIR}/envvars.json" envvars.json)
-illumo_stage_msvc_asan(IllMeshViewer)
+# IllMeshViewer ships only as the WASM package apps/meshviewer, played by
+# IllumoRuntime: GuestTargets.cmake builds its module and PackageTargets.cmake
+# stages it. IllMeshViewerCore remains the native test oracle.
 
 if(BUILD_TESTING)
   add_executable(IllMeshViewerTests
     Tests/TestMain.cpp
     Tests/TestMeshViewerCamera.cpp
     Tests/TestMeshViewerConfig.cpp
-    Tests/TestMeshViewerModule.cpp
+    Tests/TestMeshViewerScene.cpp
+    Tests/TestMeshViewerPanels.cpp
     Tests/TestMeshViewerUi.cpp
   )
   target_compile_definitions(IllMeshViewerTests PRIVATE ILLUMO_TESTING)
   target_include_directories(IllMeshViewerTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
   target_include_directories(IllMeshViewerTests SYSTEM PRIVATE
-    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.13.1/public")
+    "${ILLUMO_LIBRARY_SOURCE_DIR}/thirdparty/tracy-0.14.1/public")
   target_link_libraries(IllMeshViewerTests PRIVATE IllMeshViewerCore Illumo::TestSupport)
   illumo_configure_runtime_target(IllMeshViewerTests)
   illumo_discover_test_runner(IllMeshViewerTests IllMeshViewer)
   illumo_stage_msvc_asan(IllMeshViewerTests)
-  add_dependencies(IllMeshViewerTests IllMeshViewerRuntimeStage)
+  illumo_stage_runtime(IllMeshViewerTests)
 endif()

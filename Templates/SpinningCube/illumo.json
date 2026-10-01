@@ -1,0 +1,13 @@
+{
+  "format": "ilpk",
+  "format_version": 1,
+  "id": "@PROJECT_ID@",
+  "title": "@PROJECT_NAME@",
+  "kind": "app",
+  "app": {
+    "module": "@PROJECT_NAME@.wasm",
+    "memoryMiB": 512,
+    "metering": "epoch",
+    "deadlineMilliseconds": 10000
+  }
+}

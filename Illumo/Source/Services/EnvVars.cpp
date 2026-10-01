@@ -1,13 +1,18 @@
+#include <Illumo/Platform/PathText.h>
 #include <Illumo/Services/EnvVars.h>
+#include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
-#include <nlohmann/json.hpp>
+#include <sstream>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#elif defined(__linux__)
+#include <unistd.h>
 #endif
 
 std::filesystem::path
@@ -24,138 +29,72 @@ EnvVars::ApplicationConfigPath()
     executablePath.resize(pathLength);
     return std::filesystem::path(executablePath).parent_path() / "envvars.json";
   }
+#elif defined(__linux__)
+  char executablePath[4096];
+  const ssize_t pathLength =
+    ::readlink("/proc/self/exe", executablePath, sizeof(executablePath) - 1);
+  if (pathLength > 0 &&
+      static_cast<size_t>(pathLength) < sizeof(executablePath) - 1) {
+    executablePath[pathLength] = '\0';
+    return std::filesystem::path(executablePath).parent_path() / "envvars.json";
+  }
 #endif
-  return std::filesystem::current_path() / "envvars.json";
+  std::error_code error;
+  const std::filesystem::path directory = std::filesystem::current_path(error);
+  return (error ? std::filesystem::path(".") : directory) / "envvars.json";
+}
+
+// Settings load before, and save after, the logger's lifetime; without a
+// logger the problem still reaches stderr.
+static void
+reportSettingsProblem(const std::string& text)
+{
+  if (Logger::getLogFilePath().empty()) {
+    std::fputs(("EnvVars: " + text + "\n").c_str(), stderr);
+    return;
+  }
+  Logger::LogWarning(text);
 }
 
 void
 EnvVars::load()
 {
-  std::ifstream file(m_filePath);
-  if (!file.is_open()) {
+  m_persistenceEligible = false;
+  std::error_code error;
+  const bool exists = std::filesystem::exists(m_filePath, error);
+  if (!exists && !error) {
+    m_persistenceEligible = true;
     return;
   }
-  nlohmann::json j;
-  try {
-    file >> j;
-    for (auto it = j.begin(); it != j.end(); ++it) {
-      std::string key = it.key();
-      auto item = it.value();
-      if (item.is_string()) {
-        setVar(key, item.get<std::string>());
-      } else if (item.is_object()) {
-        setVar(key, item.value("value", ""));
-      }
-    }
-  } catch (...) {
-    // Ignore JSON parsing errors
+  std::ifstream file(m_filePath);
+  if (error || !file.is_open()) {
+    reportSettingsProblem("Settings file " + pathToUtf8(m_filePath) +
+                          " is unreadable; using defaults and preserving it");
+    return;
   }
-  file.close();
+  std::ostringstream contents;
+  contents << file.rdbuf();
+  if (file.bad() || contents.bad() || !loadText(contents.str())) {
+    reportSettingsProblem("Settings file " + pathToUtf8(m_filePath) +
+                          " is not a valid settings object; using defaults "
+                          "and preserving it");
+    return;
+  }
+  m_persistenceEligible = true;
 }
 
 void
 EnvVars::save()
 {
-  nlohmann::json j;
-  for (const auto& pair : m_vars) {
-    j[pair.first] = pair.second.value;
+  if (!m_persistenceEligible) {
+    return;
   }
+  const std::string serialized = saveText();
   std::ofstream file(m_filePath);
-  if (file.is_open()) {
-    file << j.dump(1);
-    file.close();
+  file << serialized;
+  file.close();
+  if (!file) {
+    reportSettingsProblem("Settings could not be saved to " +
+                          pathToUtf8(m_filePath));
   }
-}
-
-void
-EnvVars::setVar(const std::string& key, const std::string& value)
-{
-  EnvVar var;
-  var.value = value;
-
-  try {
-    var.valueAsLong = std::stol(value);
-  } catch (...) {
-    var.valueAsLong = 0L;
-  }
-
-  try {
-    var.valueAsDouble = std::stod(value);
-  } catch (...) {
-    var.valueAsDouble = 0.0;
-  }
-
-  std::string lowerValue = value;
-  std::transform(lowerValue.begin(),
-                 lowerValue.end(),
-                 lowerValue.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
-  var.valueAsBool = (lowerValue == "true" || lowerValue == "1" ||
-                     lowerValue == "yes" || lowerValue == "on");
-
-  m_vars[key] = var;
-}
-
-void
-EnvVars::setVar(const std::string& key, const double& value)
-{
-  setVar(key, std::to_string(value));
-}
-
-void
-EnvVars::setVar(const std::string& key, const int& value)
-{
-  setVar(key, std::to_string(value));
-}
-
-void
-EnvVars::setVar(const std::string& key, const long& value)
-{
-  setVar(key, std::to_string(value));
-}
-
-void
-EnvVars::setVar(const std::string& key, const bool& value)
-{
-  setVar(key, std::to_string(value));
-}
-
-void
-EnvVars::setVar(const std::string& key, const unsigned int& value)
-{
-  setVar(key, std::to_string(value));
-}
-
-void
-EnvVars::setVar(const std::string& key, const unsigned long& value)
-{
-  setVar(key, std::to_string(value));
-}
-
-void
-EnvVars::setVar(const std::string& key, const unsigned long long& value)
-{
-  setVar(key, std::to_string(value));
-}
-
-void
-EnvVars::setVar(const std::string& key, const char& value)
-{
-  setVar(key, std::to_string(value));
-}
-
-void
-EnvVars::setVar(const std::string& key, const char* value)
-{
-  setVar(key, std::string(value));
-}
-const EnvVar&
-EnvVars::getVar(const std::string& key)
-{
-  auto it = m_vars.find(key);
-  if (it != m_vars.end()) {
-    return it->second;
-  }
-  static const EnvVar defaultVar = { "", 0L, 0.0, false };
-  return defaultVar;
 }

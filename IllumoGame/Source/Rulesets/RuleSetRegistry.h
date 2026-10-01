@@ -1,0 +1,217 @@
+#pragma once
+
+#include "RuleSet.h"
+#include <array>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+enum class RuleFamily
+{
+  LifeLike,
+  Generations,
+  MooreTable,
+  Cyclic,
+  SpeciesLife,
+  LargerThanLife,
+  Hodgepodge,
+  Turmite,
+  LatticeGas,
+  Dominance,
+  Elementary1D,
+  VonNeumannTable,
+  Sandpile,
+  Lenia
+};
+
+enum class RuleSeedPattern
+{
+  Automatic,
+  Glider,
+  SingleCell,
+  Wire,
+  ActiveSoup,
+  PhaseSoup,
+  SpeciesSoup,
+  ExcitableBreak,
+  TurmiteSwarm,
+  ParticleCloud,
+  // Exact starter stamped from `seedRle` (Golly multistate RLE).
+  Rle,
+  // Lenia starter from `seedRle` in Lenia's RLE, whose cell values 0..255
+  // scale onto the family's intensity levels (Lenia families only).
+  LeniaRle
+};
+
+// Radial kernel shell core and growth mapping shapes from Bert Chan's Lenia:
+// polynomial (4r(1-r))^4 and (1-(u-mu)^2/9sigma^2)^4, exponential bumps, and
+// rectangular steps.
+enum class LeniaFunction
+{
+  Polynomial,
+  Exponential,
+  Step
+};
+
+// Resolution of the normalized potential in [0, 1] that indexes a Lenia
+// rule's compiled growth table (kLeniaPotentialBins + 1 entries).
+constexpr std::uint64_t kLeniaPotentialBins = 16384u;
+// Fixed-point scale of compiled growth deltas, in 1/256 of a level.
+constexpr int kLeniaDeltaScale = 256;
+
+struct RuleSeedCell
+{
+  int x = 0;
+  int y = 0;
+  unsigned char state = 0u;
+};
+
+struct RuleSetDefinition
+{
+  // A ruleset owns transition behavior and references one cell family.
+  std::string id;
+  std::string name;
+  std::string familyId;
+  bool builtIn = false;
+  std::string rule; // e.g. "B3/S23"
+  unsigned int birthMask = 0u;
+  unsigned int surviveMask = 0u;
+  unsigned int ruleNumber = 0u;
+  unsigned int cyclicThreshold = 1u;
+  unsigned int cyclicStep = 1u;
+  // Cyclic only: background state 1 never advances and is not a phase, so a
+  // seeded region cannot invade the infinite background.
+  bool inertBackground = false;
+  unsigned int neighborhoodRadius = 1u;
+  unsigned int birthMinimum = 3u;
+  unsigned int birthMaximum = 3u;
+  unsigned int survivalMinimum = 2u;
+  unsigned int survivalMaximum = 3u;
+  unsigned int infectionDivisor = 2u;
+  unsigned int illDivisor = 3u;
+  unsigned int infectionIncrement = 1u;
+  unsigned int dominanceThreshold = 1u;
+  std::vector<unsigned int> dominancePreyOffsets;
+  std::string turnSequence;
+  RuleSet::ExtendedNeighborhoodShape extendedNeighborhoodShape =
+    RuleSet::ExtendedNeighborhoodShape::Square;
+  bool includeCenter = false;
+  // Von Neumann rule table in Golly @TABLE syntax (`var` lines and
+  // C,N,E,S,W,C' transitions). Table states use Golly numbering, where 0 is
+  // the quiescent state; the compiler swaps 0 and 1 into Illumo's encoding.
+  std::string tableSymmetry = "none";
+  std::vector<std::string> ruleTable;
+  // Lenia: kernel radius is neighborhoodRadius; one update advances time by
+  // 1/leniaTimeSteps. Peaks are the kernel ring heights (Lenia's beta).
+  double leniaMu = 0.15;
+  double leniaSigma = 0.015;
+  unsigned int leniaTimeSteps = 10u;
+  std::vector<double> leniaPeaks{ 1.0 };
+  LeniaFunction leniaKernelCore = LeniaFunction::Polynomial;
+  LeniaFunction leniaGrowth = LeniaFunction::Polynomial;
+  RuleSeedPattern seedPattern = RuleSeedPattern::Automatic;
+  unsigned int seedRadius = 18u;
+  unsigned int seedDensity = 42u;
+  // Golly multistate RLE for RuleSeedPattern::Rle, in Golly numbering.
+  std::string seedRle;
+  // Compiled transition artifacts; these are not serialized into ruleset data.
+  bool hasTransitionTable = false;
+  unsigned int transitionTableStateCount = 0u;
+  RuleSet::TransitionTable transitionTable{};
+  std::array<unsigned char, 8> elementaryTransitions{};
+  // Dense stateCount^5 lookup indexed by center, north, east, south, west in
+  // Illumo encoding.
+  std::vector<unsigned char> vonNeumannTransitions;
+  // Lenia integer kernel, its weight total, and the growth delta per
+  // potential bin in 1/kLeniaDeltaScale levels.
+  std::vector<RuleSet::KernelTap> leniaKernelTaps;
+  std::uint64_t leniaKernelWeightTotal = 0u;
+  std::vector<std::int32_t> leniaGrowthDeltas;
+};
+
+struct RuleFamilyDefinition
+{
+  std::string id;
+  std::string name;
+  bool builtIn = false;
+  RuleFamily kind = RuleFamily::LifeLike;
+  unsigned int stateCount = 2u;
+  std::vector<std::string> stateNames;
+  std::vector<std::array<unsigned char, 3>> stateColors;
+};
+
+class RuleSetRegistry
+{
+public:
+  static RuleSetRegistry& instance();
+
+  static std::string normalizeId(std::string id);
+  static bool parseFamily(const std::string& value, RuleFamily& family);
+  static const char* familyName(RuleFamily family);
+  static bool parseSeedPattern(const std::string& value,
+                               RuleSeedPattern& pattern);
+  static const char* seedPatternName(RuleSeedPattern pattern);
+  static bool parseLifeLikeRuleString(const std::string& ruleStr,
+                                      unsigned int& outBirth,
+                                      unsigned int& outSurvive);
+  // Decodes Golly multistate RLE ('.'/'b' = 0, 'o' = 1, 'A'..'X' = 1..24)
+  // into non-background cells already mapped to Illumo encoding.
+  static bool decodeSeedRle(const std::string& text,
+                            unsigned int stateCount,
+                            std::vector<RuleSeedCell>& cells);
+  // Decodes Lenia RLE ('.' = 0, 'A'..'X' = 1..24, 'p'..'y' prefixes add
+  // 24-value pages up to 255) and rounds each value onto the family's
+  // levels, returning non-background cells in Illumo encoding.
+  static bool decodeLeniaSeedRle(const std::string& text,
+                                 unsigned int stateCount,
+                                 std::vector<RuleSeedCell>& cells);
+  // Lenia intensity encoding: background state 1 is level 0, states
+  // 2..n-1 are levels 1..n-2, and state 0 is the full level n-1.
+  static unsigned int leniaLevel(unsigned char state, unsigned int stateCount);
+  static unsigned char leniaState(unsigned int level, unsigned int stateCount);
+  static bool parseLeniaFunction(const std::string& value,
+                                 LeniaFunction& function);
+  static const char* leniaFunctionName(LeniaFunction function);
+
+  RuleSetRegistry();
+  RuleSetRegistry(const RuleSetRegistry&) = default;
+  RuleSetRegistry& operator=(const RuleSetRegistry&) = default;
+  RuleSetRegistry(RuleSetRegistry&&) noexcept = default;
+  RuleSetRegistry& operator=(RuleSetRegistry&&) noexcept = default;
+
+  bool registerFamily(const RuleFamilyDefinition& definition);
+  bool registerRule(const RuleSetDefinition& def);
+  bool loadFromText(const std::string& text);
+  bool loadFamiliesFromText(const std::string& text);
+  bool loadFromCatalogTexts(const std::string& familiesText,
+                            const std::string& rulesText);
+  bool loadRulePackage(const std::string& text);
+  void clear();
+
+  bool isKnownFamily(const std::string& id) const;
+  bool isKnownRule(const std::string& id) const;
+  std::vector<std::string> getKnownFamilies() const;
+  std::vector<std::string> getKnownRules() const;
+  std::vector<std::string> getKnownRules(const std::string& familyId) const;
+  const RuleFamilyDefinition* getFamilyDefinition(const std::string& id) const;
+  const RuleSetDefinition* getRuleSetDefinition(const std::string& id) const;
+  const std::vector<RuleFamilyDefinition>& getFamilyDefinitions() const
+  {
+    return families;
+  }
+  const std::vector<RuleSetDefinition>& getDefinitions() const { return rules; }
+  static std::string serializeFamilies(
+    const std::vector<RuleFamilyDefinition>& definitions);
+  static std::string serializeCatalog(
+    const std::vector<RuleFamilyDefinition>& families,
+    const std::vector<RuleSetDefinition>& definitions);
+  static std::string serializeRulePackage(const RuleFamilyDefinition& family,
+                                          const RuleSetDefinition& definition);
+
+  std::unique_ptr<RuleSet> createRuleSet(const std::string& id) const;
+
+private:
+  std::vector<RuleFamilyDefinition> families;
+  std::vector<RuleSetDefinition> rules;
+};

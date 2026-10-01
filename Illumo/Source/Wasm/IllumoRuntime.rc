@@ -1,0 +1,5 @@
+// GLFW registers its window class with the icon resource named GLFW_ICON, so
+// this one icon is the executable's icon in Explorer and every IllumoRuntime
+// window's title bar, taskbar and Alt+Tab icon. Regenerate the .ico with
+// tools/make_brand_assets.py.
+GLFW_ICON ICON "IllumoRuntime.ico"

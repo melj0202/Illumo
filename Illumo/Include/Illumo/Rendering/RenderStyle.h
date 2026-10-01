@@ -18,6 +18,14 @@ enum class RenderStyleId : unsigned char
   LitMesh = 5,     // 3D lit meshes with Blinn-Phong, PCF shadows, motion blur
   ShadowDepth = 6, // Depth-only shadow mapping pass
   MotionBlur = 7,  // Deferred screen-space motion blur post-process
+  Skybox = 8,      // 3D cubemap skybox
+  // LitMesh and ShadowDepth for instanced draws: per-instance model and tint
+  // attributes, camera and shadow state from Renderer's FrameUniforms block.
+  LitMeshInstanced = 9,
+  ShadowDepthInstanced = 10,
+  // Resolves a two-texel-per-cell canvas fade texture to one colour per cell
+  // (Renderer::pushCanvasFadeResolve, D-R32).
+  CanvasFade = 11,
   Count
 };
 

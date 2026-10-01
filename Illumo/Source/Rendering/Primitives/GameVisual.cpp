@@ -1,3 +1,4 @@
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/IMesh.h>
@@ -8,9 +9,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <limits>
 
 static void
 includeBounds(bool& any,
@@ -37,6 +40,68 @@ includeBounds(bool& any,
   maxY = std::max(maxY, y1);
 }
 
+static Rect2
+normalizedRect(const Rect2& rect)
+{
+  if (!std::isfinite(rect.x) || !std::isfinite(rect.y) ||
+      !std::isfinite(rect.w) || !std::isfinite(rect.h)) {
+    return Rect2{};
+  }
+  const float x0 = std::min(rect.x, rect.x + rect.w);
+  const float y0 = std::min(rect.y, rect.y + rect.h);
+  const float x1 = std::max(rect.x, rect.x + rect.w);
+  const float y1 = std::max(rect.y, rect.y + rect.h);
+  return Rect2{ x0, y0, x1 - x0, y1 - y0 };
+}
+
+static Rect2
+intersectRects(const Rect2& left, const Rect2& right)
+{
+  const float x0 = std::max(left.x, right.x);
+  const float y0 = std::max(left.y, right.y);
+  const float x1 = std::min(left.x + left.w, right.x + right.w);
+  const float y1 = std::min(left.y + left.h, right.y + right.h);
+  return Rect2{ x0, y0, std::max(0.0f, x1 - x0), std::max(0.0f, y1 - y0) };
+}
+
+static bool
+sameRect(const Rect2& left, const Rect2& right)
+{
+  return left.x == right.x && left.y == right.y && left.w == right.w &&
+         left.h == right.h;
+}
+
+// What every GameVisual prepared this thread did in one frame, plotted once
+// when the next frame's first visual prepares.
+struct GameVisualFrameTotals
+{
+  uint64_t frameSerial = 0;
+  size_t visuals = 0;
+  size_t rebuilds = 0;
+  size_t items = 0;
+  size_t batches = 0;
+  size_t quads = 0;
+};
+
+static thread_local GameVisualFrameTotals s_frameTotals;
+
+static void
+beginGameVisualFrameTotals(uint64_t frameSerial)
+{
+  if (frameSerial == s_frameTotals.frameSerial) {
+    return;
+  }
+  if (s_frameTotals.frameSerial != 0) {
+    ILLUMO_PROFILE_PLOT("GameVisual.Visuals", s_frameTotals.visuals);
+    ILLUMO_PROFILE_PLOT("GameVisual.Rebuilds", s_frameTotals.rebuilds);
+    ILLUMO_PROFILE_PLOT("GameVisual.Items", s_frameTotals.items);
+    ILLUMO_PROFILE_PLOT("GameVisual.Batches", s_frameTotals.batches);
+    ILLUMO_PROFILE_PLOT("GameVisual.Quads", s_frameTotals.quads);
+  }
+  s_frameTotals = GameVisualFrameTotals{};
+  s_frameTotals.frameSerial = frameSerial;
+}
+
 GameVisual::GameVisual(unsigned int maxQuads)
   : maxQuadCount(maxQuads == 0 ? 1 : maxQuads)
 {
@@ -47,7 +112,11 @@ GameVisual::GameVisual(unsigned int maxQuads)
 
 GameVisual::~GameVisual()
 {
-  if (renderer != nullptr) {
+  if (proxied && renderer != nullptr && !rendererLifetime.expired() &&
+      renderer->getBackend() != nullptr) {
+    renderer->getBackend()->ForgetVisual(*this);
+  }
+  if (renderer != nullptr && !rendererLifetime.expired()) {
     if (shapeMeshHandle.isValid()) {
       renderer->destroyMesh(shapeMeshHandle);
     }
@@ -61,7 +130,15 @@ GameVisual::~GameVisual()
 void
 GameVisual::setRenderer(Renderer* value)
 {
+  if (renderer != nullptr &&
+      (renderer != value || rendererLifetime.expired())) {
+    Logger::LogError("GameVisual cannot change its resource-owning renderer");
+    return;
+  }
   renderer = value;
+  if (renderer != nullptr) {
+    rendererLifetime = renderer->getLifetimeIdentity();
+  }
   if (!gpuReady && renderer != nullptr) {
     enrollGpuResources();
   }
@@ -91,17 +168,41 @@ GameVisual::setSpace(PrimitiveSpace value)
 void
 GameVisual::setTransform(const Transform2D& value)
 {
+  // Layout code sets the transform every frame; only a change rebuilds.
+  if (value.x == transform.x && value.y == transform.y &&
+      value.scaleX == transform.scaleX && value.scaleY == transform.scaleY &&
+      value.rotationRadians == transform.rotationRadians &&
+      value.pivotX == transform.pivotX && value.pivotY == transform.pivotY) {
+    return;
+  }
   transform = value;
   markDirty();
 }
 
 void
+GameVisual::setPixelClipRect(const Rect2& value)
+{
+  const Rect2 normalized = normalizedRect(value);
+  if (!pixelClipEnabled || !sameRect(pixelClipRect, normalized)) {
+    pixelClipRect = normalized;
+    pixelClipEnabled = true;
+    markDirty();
+  }
+}
+
+void
+GameVisual::clearPixelClipRect()
+{
+  if (pixelClipEnabled) {
+    pixelClipEnabled = false;
+    markDirty();
+  }
+}
+
+void
 GameVisual::prepare(Renderer* value)
 {
-  if (value != nullptr) {
-    renderer = value;
-  }
-  enrollGpuResources();
+  setRenderer(value);
 }
 
 void
@@ -109,10 +210,176 @@ GameVisual::clearPrimitives()
 {
   shapes.clear();
   sprites.clear();
+  // Text is usually rebuilt every frame: keep the cleared strings so the
+  // next addText calls reuse their capacity instead of allocating.
+  for (TextPrimitive& text : texts) {
+    if (spareTextContent.size() >= kSpareTextContent) {
+      break;
+    }
+    if (text.content.capacity() > std::string().capacity()) {
+      spareTextContent.push_back(std::move(text.content));
+    }
+  }
   texts.clear();
   items.clear();
   nextSequence = 0;
+  freeShapes.clear();
+  freeSprites.clear();
+  freeTexts.clear();
   markDirty();
+}
+
+bool
+GameVisual::setItem(size_t index, const GameVisualItem& value)
+{
+  return std::visit(
+    [this, index](const auto& primitive) { return setItem(index, primitive); },
+    value);
+}
+
+bool
+GameVisual::setItem(size_t index, const ShapePrimitive& value)
+{
+  return placeItem(index, VisualItemKind::Shape, shapes, freeShapes, value);
+}
+
+bool
+GameVisual::setItem(size_t index, const SpritePrimitive& value)
+{
+  return placeItem(index, VisualItemKind::Sprite, sprites, freeSprites, value);
+}
+
+bool
+GameVisual::setItem(size_t index, const TextPrimitive& value)
+{
+  return placeItem(index, VisualItemKind::Text, texts, freeTexts, value);
+}
+
+template<typename Primitive>
+bool
+GameVisual::placeItem(size_t index,
+                      VisualItemKind kind,
+                      std::vector<Primitive>& list,
+                      std::vector<size_t>& freeSlots,
+                      const Primitive& value)
+{
+  if (index > items.size()) {
+    return false;
+  }
+  if (index < items.size() && items[index].kind == kind) {
+    list[items[index].index] = value;
+    markDirty();
+    return true;
+  }
+  VisualItem item;
+  item.kind = kind;
+  // A free slot of this kind is reused, so edited visuals stop growing.
+  if (!freeSlots.empty()) {
+    item.index = freeSlots.back();
+    freeSlots.pop_back();
+    list[item.index] = value;
+  } else {
+    list.push_back(value);
+    item.index = list.size() - 1;
+  }
+  if (index == items.size()) {
+    item.sequence = nextSequence++;
+    items.push_back(item);
+  } else {
+    // A different kind: the old primitive is hidden and the item keeps its
+    // place in painter order.
+    item.sequence = items[index].sequence;
+    orphan(items[index]);
+    items[index] = item;
+  }
+  markDirty();
+  return true;
+}
+bool
+GameVisual::insertItems(size_t index, size_t count)
+{
+  if (index > items.size() || count == 0) {
+    return false;
+  }
+  // Hidden placeholders that setItem replaces; painter order follows the
+  // item list, so every sequence is renumbered to its new position.
+  ShapePrimitive placeholder;
+  placeholder.visible = false;
+  std::vector<VisualItem> added(count);
+  for (VisualItem& item : added) {
+    item.kind = VisualItemKind::Shape;
+    if (!freeShapes.empty()) {
+      item.index = freeShapes.back();
+      freeShapes.pop_back();
+      shapes[item.index] = placeholder;
+    } else {
+      shapes.push_back(placeholder);
+      item.index = shapes.size() - 1;
+    }
+  }
+  items.insert(items.begin() + static_cast<std::ptrdiff_t>(index),
+               added.begin(),
+               added.end());
+  for (size_t position = 0; position < items.size(); ++position) {
+    items[position].sequence = position;
+  }
+  nextSequence = items.size();
+  markDirty();
+  return true;
+}
+
+void
+GameVisual::removeItems(size_t first, size_t count)
+{
+  if (first >= items.size() || count == 0) {
+    return;
+  }
+  const size_t last = std::min(items.size(), first + count);
+  for (size_t index = first; index < last; ++index) {
+    orphan(items[index]);
+  }
+  items.erase(items.begin() + static_cast<std::ptrdiff_t>(first),
+              items.begin() + static_cast<std::ptrdiff_t>(last));
+  markDirty();
+}
+
+void
+GameVisual::orphan(const VisualItem& item)
+{
+  if (item.kind == VisualItemKind::Shape) {
+    shapes[item.index].visible = false;
+    freeShapes.push_back(item.index);
+  } else if (item.kind == VisualItemKind::Sprite) {
+    sprites[item.index].visible = false;
+    freeSprites.push_back(item.index);
+  } else {
+    texts[item.index].visible = false;
+    texts[item.index].content.clear();
+    texts[item.index].font.reset();
+    texts[item.index].heavyFont.reset();
+    freeTexts.push_back(item.index);
+  }
+}
+
+void
+GameVisual::setOpacity(float value)
+{
+  const float next =
+    std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 1.0f;
+  if (next != opacity) {
+    opacity = next;
+    markDirty();
+  }
+}
+
+ColorRgba
+GameVisual::faded(ColorRgba color) const
+{
+  if (opacity < 1.0f) {
+    color.a = static_cast<unsigned char>(
+      std::lround(static_cast<float>(color.a) * opacity));
+  }
+  return color;
 }
 
 size_t
@@ -215,6 +482,79 @@ GameVisual::addFilledTriangle(float x0,
 }
 
 size_t
+GameVisual::addGradientQuad(float x0,
+                            float y0,
+                            float x1,
+                            float y1,
+                            float x2,
+                            float y2,
+                            float x3,
+                            float y3,
+                            ColorRgba c0,
+                            ColorRgba c1,
+                            ColorRgba c2,
+                            ColorRgba c3)
+{
+  ShapePrimitive shape;
+  shape.kind = ShapeKind::GradientQuad;
+  shape.x0 = x0;
+  shape.y0 = y0;
+  shape.x1 = x1;
+  shape.y1 = y1;
+  shape.x2 = x2;
+  shape.y2 = y2;
+  shape.x3 = x3;
+  shape.y3 = y3;
+  const float minX = std::min(std::min(x0, x1), std::min(x2, x3));
+  const float minY = std::min(std::min(y0, y1), std::min(y2, y3));
+  const float maxX = std::max(std::max(x0, x1), std::max(x2, x3));
+  const float maxY = std::max(std::max(y0, y1), std::max(y2, y3));
+  shape.rect = { minX, minY, maxX - minX, maxY - minY };
+  shape.vertexColors = { c0, c1, c2, c3 };
+  shape.color = c0;
+  return appendShape(shape);
+}
+
+size_t
+GameVisual::addGradientRect(float x,
+                            float y,
+                            float w,
+                            float h,
+                            ColorRgba topLeft,
+                            ColorRgba topRight,
+                            ColorRgba bottomRight,
+                            ColorRgba bottomLeft)
+{
+  return addGradientQuad(x,
+                         y,
+                         x + w,
+                         y,
+                         x + w,
+                         y + h,
+                         x,
+                         y + h,
+                         topLeft,
+                         topRight,
+                         bottomRight,
+                         bottomLeft);
+}
+
+size_t
+GameVisual::addGradientTriangle(float x0,
+                                float y0,
+                                float x1,
+                                float y1,
+                                float x2,
+                                float y2,
+                                ColorRgba c0,
+                                ColorRgba c1,
+                                ColorRgba c2)
+{
+  // The degenerate fourth vertex repeats vertex 2, so (2,3,0) has no area.
+  return addGradientQuad(x0, y0, x1, y1, x2, y2, x2, y2, c0, c1, c2, c2);
+}
+
+size_t
 GameVisual::appendShape(const ShapePrimitive& shape)
 {
   shapes.push_back(shape);
@@ -291,13 +631,16 @@ GameVisual::addText(const std::string& content,
                     float sizePt,
                     ColorRgba color)
 {
-  TextPrimitive text;
-  text.content = content;
+  TextPrimitive& text = texts.emplace_back();
+  if (!spareTextContent.empty()) {
+    text.content = std::move(spareTextContent.back());
+    spareTextContent.pop_back();
+  }
+  text.content.assign(content);
   text.x = x;
   text.y = y;
   text.sizePt = sizePt;
   text.color = color;
-  texts.push_back(text);
   VisualItem item;
   item.kind = VisualItemKind::Text;
   item.index = texts.size() - 1;
@@ -337,6 +680,100 @@ GameVisual::getText(size_t index)
   return &texts[index];
 }
 
+const ShapePrimitive*
+GameVisual::getShape(size_t index) const
+{
+  return index < shapes.size() ? &shapes[index] : nullptr;
+}
+
+const TextPrimitive*
+GameVisual::getText(size_t index) const
+{
+  return index < texts.size() ? &texts[index] : nullptr;
+}
+
+const SpritePrimitive*
+GameVisual::getSprite(size_t index) const
+{
+  return index < sprites.size() ? &sprites[index] : nullptr;
+}
+
+GameVisual::PrimitiveRef
+GameVisual::itemAt(size_t index) const
+{
+  PrimitiveRef ref;
+  if (index < items.size()) {
+    const VisualItem& item = items[index];
+    ref.index = item.index;
+    ref.kind = item.kind == VisualItemKind::Shape    ? PrimitiveKind::Shape
+               : item.kind == VisualItemKind::Sprite ? PrimitiveKind::Sprite
+                                                     : PrimitiveKind::Text;
+  }
+  return ref;
+}
+
+std::array<int, 2>
+GameVisual::frameDimensions(Renderer* value, bool* fromFrame) const
+{
+  const Renderer::FrameContext& frameContext = value->getFrameContext();
+  std::array<int, 2> dimensions{ 1280, 720 };
+  *fromFrame =
+    frameContext.active && window != nullptr && window == value->getWindow();
+  if (*fromFrame) {
+    dimensions = frameContext.windowDimensions;
+  } else if (window != nullptr) {
+    dimensions = window->getWindowDimensions();
+  }
+  return dimensions;
+}
+
+std::array<float, 2>
+GameVisual::pixelResolution(Renderer* value) const
+{
+  bool fromFrame = false;
+  const std::array<int, 2> dimensions = frameDimensions(value, &fromFrame);
+  const float uiScale = value->getUiScale();
+  const float width = static_cast<float>(dimensions[0]);
+  const float height = static_cast<float>(dimensions[1]);
+  return { uiScale > 0.0f ? width / uiScale : width,
+           uiScale > 0.0f ? height / uiScale : height };
+}
+
+bool
+GameVisual::drawsWithFrameCamera(Renderer* value) const
+{
+  bool fromFrame = false;
+  frameDimensions(value, &fromFrame);
+  const Renderer::FrameContext& frameContext = value->getFrameContext();
+  return camera != nullptr && fromFrame && frameContext.hasWorldMvp &&
+         frameContext.worldCamera == camera;
+}
+
+std::vector<GameVisual::PrimitiveRef>
+GameVisual::paintOrder() const
+{
+  std::vector<VisualItem> ordered = items;
+  std::stable_sort(ordered.begin(),
+                   ordered.end(),
+                   [this](const VisualItem& a, const VisualItem& b) {
+                     const int leftOrder = drawOrder(a);
+                     const int rightOrder = drawOrder(b);
+                     return leftOrder == rightOrder ? a.sequence < b.sequence
+                                                    : leftOrder < rightOrder;
+                   });
+  std::vector<PrimitiveRef> result;
+  result.reserve(ordered.size());
+  for (const VisualItem& item : ordered) {
+    PrimitiveRef ref;
+    ref.index = item.index;
+    ref.kind = item.kind == VisualItemKind::Shape    ? PrimitiveKind::Shape
+               : item.kind == VisualItemKind::Sprite ? PrimitiveKind::Sprite
+                                                     : PrimitiveKind::Text;
+    result.push_back(ref);
+  }
+  return result;
+}
+
 std::vector<unsigned int>
 GameVisual::buildIndices(unsigned int capacity) const
 {
@@ -363,6 +800,7 @@ GameVisual::enrollGpuResources()
   }
 
   renderer->ensureBuiltinStyles();
+  renderer->whiteTexture();
   const std::vector<unsigned int> indices = buildIndices(quadCapacity);
   const size_t shapeBytes =
     static_cast<size_t>(quadCapacity) * 4 * sizeof(ShapeVertex);
@@ -379,6 +817,16 @@ GameVisual::enrollGpuResources()
                                 indices.size() * sizeof(unsigned int),
                                 MeshVertexLayout::Pos3Color4U8Uv2);
   gpuReady = shapeMeshHandle.isValid() && spriteMeshHandle.isValid();
+  if (!gpuReady) {
+    if (shapeMeshHandle.isValid()) {
+      renderer->destroyMesh(shapeMeshHandle);
+    }
+    if (spriteMeshHandle.isValid()) {
+      renderer->destroyMesh(spriteMeshHandle);
+    }
+    shapeMeshHandle = {};
+    spriteMeshHandle = {};
+  }
   gpuQuadCapacity = gpuReady ? quadCapacity : 0;
   geometryDirty = true;
 }
@@ -390,6 +838,7 @@ GameVisual::ensureCpuCapacity(unsigned int required)
     return true;
   }
   if (required > maxQuadCount) {
+    geometryTruncated = true;
     if (!capacityWarningLogged) {
       capacityWarningLogged = true;
       Logger::LogWarning("GameVisual reached its configured quad safety limit");
@@ -574,24 +1023,91 @@ GameVisual::pushShapeQuad(Point2 p0,
                           Point2 p3,
                           ColorRgba color)
 {
+  const std::array<ColorRgba, 4> colors = { color, color, color, color };
+  return pushShapeQuadColors(p0, p1, p2, p3, colors);
+}
+
+bool
+GameVisual::pushShapeQuadColors(Point2 p0,
+                                Point2 p1,
+                                Point2 p2,
+                                Point2 p3,
+                                const std::array<ColorRgba, 4>& colors)
+{
+  if (quadOutsideCullRect(p0, p1, p2, p3)) {
+    return true;
+  }
   if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount + 1)) {
     return false;
   }
   const unsigned int base = shapeQuadCount * 4;
-  shapeVerts[base + 0] = {
-    p0.x, p0.y, 0.0f, color.r, color.g, color.b, color.a
-  };
-  shapeVerts[base + 1] = {
-    p1.x, p1.y, 0.0f, color.r, color.g, color.b, color.a
-  };
-  shapeVerts[base + 2] = {
-    p2.x, p2.y, 0.0f, color.r, color.g, color.b, color.a
-  };
-  shapeVerts[base + 3] = {
-    p3.x, p3.y, 0.0f, color.r, color.g, color.b, color.a
-  };
+  const Point2 points[4] = { p0, p1, p2, p3 };
+  for (unsigned int corner = 0; corner < 4; ++corner) {
+    const ColorRgba color = faded(colors[corner]);
+    shapeVerts[base + corner] = { points[corner].x, points[corner].y, 0.0f,
+                                  color.r,          color.g,          color.b,
+                                  color.a };
+  }
   shapeQuadCount += 1;
   return true;
+}
+
+unsigned int
+GameVisual::moveShapeQuadsToSprites(unsigned int first)
+{
+  // Both arrays hold quadCapacity quads and every push checked the combined
+  // count, so the moved quads fit in the sprite vertices.
+  const unsigned int spriteFirst = spriteQuadCount;
+  const unsigned int count = shapeQuadCount - first;
+  const size_t from = static_cast<size_t>(first) * 4;
+  const size_t to = static_cast<size_t>(spriteFirst) * 4;
+  for (size_t vertex = 0; vertex < static_cast<size_t>(count) * 4; ++vertex) {
+    const ShapeVertex& shape = shapeVerts[from + vertex];
+    spriteVerts[to + vertex] = { shape.x, shape.y, shape.z, shape.r, shape.g,
+                                 shape.b, shape.a, 0.5f,    0.5f };
+  }
+  shapeQuadCount = first;
+  spriteQuadCount += count;
+  return spriteFirst;
+}
+
+bool
+GameVisual::pushGradientQuad(const ShapePrimitive& shape,
+                             const Rect2& hostBounds)
+{
+  const Rect2 bounds = shape.rect;
+  const Point2 local[4] = { { shape.x0, shape.y0 },
+                            { shape.x1, shape.y1 },
+                            { shape.x2, shape.y2 },
+                            { shape.x3, shape.y3 } };
+  Point2 points[4];
+  for (int corner = 0; corner < 4; ++corner) {
+    points[corner] = applyHostTransform(
+      transformPoint(local[corner], bounds, shape.transform), hostBounds);
+  }
+  return pushShapeQuadColors(
+    points[0], points[1], points[2], points[3], shape.vertexColors);
+}
+
+bool
+GameVisual::quadOutsideCullRect(Point2 p0,
+                                Point2 p1,
+                                Point2 p2,
+                                Point2 p3) const
+{
+  if (!geometryCullEnabled) {
+    return false;
+  }
+  if (geometryCullRect.w <= 0.0f || geometryCullRect.h <= 0.0f) {
+    return true;
+  }
+  const float minX = std::min(std::min(p0.x, p1.x), std::min(p2.x, p3.x));
+  const float minY = std::min(std::min(p0.y, p1.y), std::min(p2.y, p3.y));
+  const float maxX = std::max(std::max(p0.x, p1.x), std::max(p2.x, p3.x));
+  const float maxY = std::max(std::max(p0.y, p1.y), std::max(p2.y, p3.y));
+  return maxX <= geometryCullRect.x || maxY <= geometryCullRect.y ||
+         minX >= geometryCullRect.x + geometryCullRect.w ||
+         minY >= geometryCullRect.y + geometryCullRect.h;
 }
 
 bool
@@ -674,9 +1190,6 @@ bool
 GameVisual::pushSpriteQuad(const SpritePrimitive& sprite,
                            const Rect2& hostBounds)
 {
-  if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount + 1)) {
-    return false;
-  }
   const Rect2 bounds = sprite.rect;
   Point2 p0 = transformPoint({ bounds.x, bounds.y }, bounds, sprite.transform);
   Point2 p1 =
@@ -690,6 +1203,13 @@ GameVisual::pushSpriteQuad(const SpritePrimitive& sprite,
   p2 = applyHostTransform(p2, hostBounds);
   p3 = applyHostTransform(p3, hostBounds);
 
+  if (quadOutsideCullRect(p0, p1, p2, p3)) {
+    return true;
+  }
+  if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount + 1)) {
+    return false;
+  }
+
   float u0 = sprite.region.u0;
   float v0 = sprite.region.v0;
   float u1 = sprite.region.u1;
@@ -701,7 +1221,7 @@ GameVisual::pushSpriteQuad(const SpritePrimitive& sprite,
     std::swap(v0, v1);
   }
   const unsigned int base = spriteQuadCount * 4;
-  const ColorRgba color = sprite.tint;
+  const ColorRgba color = faded(sprite.tint);
   spriteVerts[base + 0] = { p0.x,    p0.y,    0.0f, color.r, color.g,
                             color.b, color.a, u0,   v0 };
   spriteVerts[base + 1] = { p1.x,    p1.y,    0.0f, color.r, color.g,
@@ -715,21 +1235,31 @@ GameVisual::pushSpriteQuad(const SpritePrimitive& sprite,
 }
 
 bool
-GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
+GameVisual::pushTextRun(const TextPrimitive& text,
+                        const Font& font,
+                        const Font* partner,
+                        float blend,
+                        float alpha,
+                        const Rect2& hostBounds)
 {
   if (text.content.empty()) {
     return true;
   }
-  std::shared_ptr<Font> font = text.font ? text.font : Font::getDefaultFont();
-  if (font == nullptr) {
-    return true;
-  }
 
-  const float scale = font->getMetrics().pixelSize > 0.0f
-                        ? (text.sizePt / font->getMetrics().pixelSize)
+  const float scale = font.getMetrics().pixelSize > 0.0f
+                        ? (text.sizePt / font.getMetrics().pixelSize)
                         : 1.0f;
-  const float lineHeight = font->getLineHeight(text.sizePt);
-  const float ascender = font->getAscender(text.sizePt);
+  const float lineHeight = font.getLineHeight(text.sizePt);
+  const float ascender = font.getAscender(text.sizePt);
+  ColorRgba color = text.color;
+  color.a = static_cast<unsigned char>(std::lround(
+    static_cast<float>(color.a) * std::clamp(alpha, 0.0f, 1.0f) * opacity));
+  const float stretchX =
+    std::isfinite(text.stretchX) && text.stretchX > 0.0f ? text.stretchX : 1.0f;
+  const float stretchY =
+    std::isfinite(text.stretchY) && text.stretchY > 0.0f ? text.stretchY : 1.0f;
+  const bool stretched = stretchX != 1.0f || stretchY != 1.0f;
+  const float baseline = text.y + ascender;
 
   float penX = 0.0f;
   float penY = 0.0f;
@@ -741,27 +1271,45 @@ GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
       penY += lineHeight;
       continue;
     }
-    const GlyphInfo* glyph =
-      font->getGlyph(static_cast<char32_t>(static_cast<unsigned char>(ch)));
+    const char32_t codepoint =
+      static_cast<char32_t>(static_cast<unsigned char>(ch));
+    const GlyphInfo* glyph = font.getGlyph(codepoint);
     if (glyph == nullptr) {
       continue;
     }
+    const float ownAdvance = glyph->advanceX * scale;
+    float advance = ownAdvance;
+    if (partner != nullptr) {
+      advance += (partner->getAdvance(codepoint, text.sizePt) - ownAdvance) *
+                 std::clamp(blend, 0.0f, 1.0f);
+    }
     if (glyph->visible && glyph->width > 0.0f && glyph->height > 0.0f) {
-      if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount + 1)) {
-        return false;
+      float x0 =
+        text.x + penX + glyph->bearingX * scale + (advance - ownAdvance) * 0.5f;
+      float y0 = text.y + penY + (ascender - glyph->bearingY * scale);
+      float x1 = x0 + glyph->width * scale;
+      float y1 = y0 + glyph->height * scale;
+      if (stretched) {
+        x0 = text.x + (x0 - text.x) * stretchX;
+        x1 = text.x + (x1 - text.x) * stretchX;
+        y0 = baseline + (y0 - baseline) * stretchY;
+        y1 = baseline + (y1 - baseline) * stretchY;
       }
-      const float x0 = text.x + penX + glyph->bearingX * scale;
-      const float y0 = text.y + penY + (ascender - glyph->bearingY * scale);
-      const float x1 = x0 + glyph->width * scale;
-      const float y1 = y0 + glyph->height * scale;
 
       Point2 p0 = applyHostTransform({ x0, y0 }, hostBounds);
       Point2 p1 = applyHostTransform({ x1, y0 }, hostBounds);
       Point2 p2 = applyHostTransform({ x1, y1 }, hostBounds);
       Point2 p3 = applyHostTransform({ x0, y1 }, hostBounds);
 
+      if (quadOutsideCullRect(p0, p1, p2, p3)) {
+        penX += advance;
+        continue;
+      }
+      if (!ensureCpuCapacity(shapeQuadCount + spriteQuadCount + 1)) {
+        return false;
+      }
+
       const unsigned int base = spriteQuadCount * 4;
-      const ColorRgba color = text.color;
       spriteVerts[base + 0] = { p0.x,    p0.y,    0.0f,      color.r,  color.g,
                                 color.b, color.a, glyph->u0, glyph->v0 };
       spriteVerts[base + 1] = { p1.x,    p1.y,    0.0f,      color.r,  color.g,
@@ -772,13 +1320,59 @@ GameVisual::pushTextRun(const TextPrimitive& text, const Rect2& hostBounds)
                                 color.b, color.a, glyph->u0, glyph->v1 };
       spriteQuadCount += 1;
     }
-    penX += glyph->advanceX * scale;
+    penX += advance;
   }
   return true;
 }
 
+// The bounds of vertices, or unbounded when any coordinate is NaN, so such a
+// piece overlaps everything and never moves.
+template<typename Vertex, typename Bounds>
+static void
+measureVertices(const Vertex* vertices, size_t count, Bounds* bounds)
+{
+  float minX = vertices[0].x;
+  float minY = vertices[0].y;
+  float maxX = minX;
+  float maxY = minY;
+  bool finite = true;
+  for (size_t index = 0; index < count; ++index) {
+    const float x = vertices[index].x;
+    const float y = vertices[index].y;
+    minX = x < minX ? x : minX;
+    minY = y < minY ? y : minY;
+    maxX = x > maxX ? x : maxX;
+    maxY = y > maxY ? y : maxY;
+    finite = finite && x == x && y == y;
+  }
+  if (finite) {
+    *bounds = { minX, minY, maxX, maxY };
+  } else {
+    *bounds = { std::numeric_limits<float>::lowest(),
+                std::numeric_limits<float>::lowest(),
+                std::numeric_limits<float>::max(),
+                std::numeric_limits<float>::max() };
+  }
+}
+
+GameVisual::Bounds2
+GameVisual::vertexBounds(const ShapeVertex* vertices, size_t count)
+{
+  Bounds2 bounds;
+  measureVertices(vertices, count, &bounds);
+  return bounds;
+}
+
+GameVisual::Bounds2
+GameVisual::vertexBounds(const SpriteVertex* vertices, size_t count)
+{
+  Bounds2 bounds;
+  measureVertices(vertices, count, &bounds);
+  return bounds;
+}
+
 void
-GameVisual::appendBatch(BatchKind kind,
+GameVisual::appendPiece(BatchKind kind,
                         RenderStyleHandle styleHandle,
                         TextureHandle textureHandle,
                         unsigned int firstQuad,
@@ -787,8 +1381,10 @@ GameVisual::appendBatch(BatchKind kind,
   if (quadCount == 0) {
     return;
   }
-  if (!drawBatches.empty()) {
-    DrawBatch& last = drawBatches.back();
+  // Consecutive pieces of one key extend a run, as adjacent batches always
+  // merged; runs are what batches form from.
+  if (!pieces.empty()) {
+    Piece& last = pieces.back();
     if (last.kind == kind && last.styleHandle == styleHandle &&
         last.textureHandle == textureHandle &&
         last.firstQuad + last.quadCount == firstQuad) {
@@ -796,31 +1392,279 @@ GameVisual::appendBatch(BatchKind kind,
       return;
     }
   }
-  DrawBatch batch;
-  batch.kind = kind;
-  batch.styleHandle = styleHandle;
-  batch.textureHandle = textureHandle;
-  batch.firstQuad = firstQuad;
-  batch.quadCount = quadCount;
-  drawBatches.push_back(batch);
+  Piece piece;
+  piece.kind = kind;
+  piece.styleHandle = styleHandle;
+  piece.textureHandle = textureHandle;
+  piece.firstQuad = firstQuad;
+  piece.quadCount = quadCount;
+  pieces.push_back(piece);
+}
+static bool
+boundsApart(float aMinX,
+            float aMinY,
+            float aMaxX,
+            float aMaxY,
+            float bMinX,
+            float bMinY,
+            float bMaxX,
+            float bMaxY)
+{
+  return aMaxX < bMinX || bMaxX < aMinX || aMaxY < bMinY || bMaxY < aMinY;
+}
+
+bool
+GameVisual::overlapsBatch(const DrawBatch& batch, const Bounds2& bounds)
+{
+  const Bounds2& all = batch.bounds;
+  if (boundsApart(all.minX,
+                  all.minY,
+                  all.maxX,
+                  all.maxY,
+                  bounds.minX,
+                  bounds.minY,
+                  bounds.maxX,
+                  bounds.maxY)) {
+    return false;
+  }
+  const Bounds2& older = batch.olderBounds;
+  if (batch.hasOlder && !boundsApart(older.minX,
+                                     older.minY,
+                                     older.maxX,
+                                     older.maxY,
+                                     bounds.minX,
+                                     bounds.minY,
+                                     bounds.maxX,
+                                     bounds.maxY)) {
+    return true;
+  }
+  for (unsigned int index = 0; index < batch.recentCount; ++index) {
+    const Bounds2& recent = batch.recent[index];
+    if (!boundsApart(recent.minX,
+                     recent.minY,
+                     recent.maxX,
+                     recent.maxY,
+                     bounds.minX,
+                     bounds.minY,
+                     bounds.maxX,
+                     bounds.maxY)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void
+unite(float* minX,
+      float* minY,
+      float* maxX,
+      float* maxY,
+      float otherMinX,
+      float otherMinY,
+      float otherMaxX,
+      float otherMaxY)
+{
+  *minX = std::min(*minX, otherMinX);
+  *minY = std::min(*minY, otherMinY);
+  *maxX = std::max(*maxX, otherMaxX);
+  *maxY = std::max(*maxY, otherMaxY);
 }
 
 void
-GameVisual::rebuildGeometry()
+GameVisual::addToBatch(DrawBatch& batch, const Bounds2& bounds)
 {
+  unite(&batch.bounds.minX,
+        &batch.bounds.minY,
+        &batch.bounds.maxX,
+        &batch.bounds.maxY,
+        bounds.minX,
+        bounds.minY,
+        bounds.maxX,
+        bounds.maxY);
+  if (batch.recentCount < DrawBatch::kRecentPieces) {
+    batch.recent[batch.recentCount++] = bounds;
+    return;
+  }
+  // The oldest exact box folds into the box around older pieces.
+  const Bounds2& evicted = batch.recent[batch.recentNext];
+  if (!batch.hasOlder) {
+    batch.olderBounds = evicted;
+    batch.hasOlder = true;
+  } else {
+    unite(&batch.olderBounds.minX,
+          &batch.olderBounds.minY,
+          &batch.olderBounds.maxX,
+          &batch.olderBounds.maxY,
+          evicted.minX,
+          evicted.minY,
+          evicted.maxX,
+          evicted.maxY);
+  }
+  batch.recent[batch.recentNext] = bounds;
+  batch.recentNext = (batch.recentNext + 1) % DrawBatch::kRecentPieces;
+}
+// Each piece joins the latest batch with its style, texture and kind unless
+// a batch drawn after that one overlaps it; otherwise it starts a batch.
+// Moving a draw earlier past draws it does not overlap leaves every pixel's
+// sequence of writes, and so the image, unchanged. Touching bounds count as
+// overlapping; a batch's extent is conservative (see DrawBatch). The look-back
+// is bounded so rebuilds stay linear.
+void
+GameVisual::formBatches()
+{
+  ILLUMO_PROFILE_ZONE("GameVisual.formBatches");
+  static constexpr size_t kLookBack = 64;
+  drawBatches.clear();
+  if (pieces.size() == 1) {
+    // One run is one batch; no bounds are needed.
+    DrawBatch batch;
+    batch.kind = pieces[0].kind;
+    batch.styleHandle = pieces[0].styleHandle;
+    batch.textureHandle = pieces[0].textureHandle;
+    batch.firstQuad = pieces[0].firstQuad;
+    batch.quadCount = pieces[0].quadCount;
+    drawBatches.push_back(batch);
+    return;
+  }
+  for (Piece& piece : pieces) {
+    const size_t first = static_cast<size_t>(piece.firstQuad) * 4;
+    const size_t count = static_cast<size_t>(piece.quadCount) * 4;
+    piece.bounds = piece.kind == BatchKind::Shape
+                     ? vertexBounds(shapeVerts.data() + first, count)
+                     : vertexBounds(spriteVerts.data() + first, count);
+  }
+  bool reordered = false;
+  for (unsigned int index = 0; index < pieces.size(); ++index) {
+    const Piece& piece = pieces[index];
+    // The latest batch it could join, by key alone; then it may join only if
+    // nothing drawn after that batch overlaps it. Pieces with no partner in
+    // the window skip the overlap tests entirely.
+    size_t target = drawBatches.size();
+    const size_t stop =
+      drawBatches.size() > kLookBack ? drawBatches.size() - kLookBack : 0;
+    for (size_t candidate = drawBatches.size(); candidate > stop; --candidate) {
+      const DrawBatch& batch = drawBatches[candidate - 1];
+      if (batch.kind == piece.kind && batch.styleHandle == piece.styleHandle &&
+          batch.textureHandle == piece.textureHandle) {
+        target = candidate - 1;
+        break;
+      }
+    }
+    for (size_t later = target + 1; later < drawBatches.size(); ++later) {
+      if (overlapsBatch(drawBatches[later], piece.bounds)) {
+        target = drawBatches.size();
+        break;
+      }
+    }
+    if (target == drawBatches.size()) {
+      DrawBatch batch;
+      batch.kind = piece.kind;
+      batch.styleHandle = piece.styleHandle;
+      batch.textureHandle = piece.textureHandle;
+      batch.firstQuad = piece.firstQuad;
+      batch.quadCount = piece.quadCount;
+      batch.bounds = piece.bounds;
+      batch.recent[0] = piece.bounds;
+      batch.recentCount = 1;
+      batch.firstPiece = index;
+      batch.lastPiece = index;
+      drawBatches.push_back(batch);
+      continue;
+    }
+    DrawBatch& batch = drawBatches[target];
+    reordered = reordered || target + 1 != drawBatches.size();
+    pieces[batch.lastPiece].next = index;
+    batch.lastPiece = index;
+    batch.quadCount += piece.quadCount;
+    addToBatch(batch, piece.bounds);
+  }
+  if (!reordered) {
+    // Every batch's pieces are already contiguous, in batch order.
+    return;
+  }
+  ILLUMO_PROFILE_ZONE("GameVisual.rewriteBatches");
+  // Rewrite the vertices batch by batch so each batch is one range.
+  shapeScratch.resize(shapeVerts.size());
+  spriteScratch.resize(spriteVerts.size());
+  unsigned int shapeCursor = 0;
+  unsigned int spriteCursor = 0;
+  for (DrawBatch& batch : drawBatches) {
+    unsigned int& cursor =
+      batch.kind == BatchKind::Shape ? shapeCursor : spriteCursor;
+    batch.firstQuad = cursor;
+    unsigned int index = batch.firstPiece;
+    while (true) {
+      const Piece& piece = pieces[index];
+      const size_t from = static_cast<size_t>(piece.firstQuad) * 4;
+      const size_t count = static_cast<size_t>(piece.quadCount) * 4;
+      const size_t to = static_cast<size_t>(cursor) * 4;
+      if (batch.kind == BatchKind::Shape) {
+        std::copy(shapeVerts.begin() + static_cast<std::ptrdiff_t>(from),
+                  shapeVerts.begin() +
+                    static_cast<std::ptrdiff_t>(from + count),
+                  shapeScratch.begin() + static_cast<std::ptrdiff_t>(to));
+      } else {
+        std::copy(spriteVerts.begin() + static_cast<std::ptrdiff_t>(from),
+                  spriteVerts.begin() +
+                    static_cast<std::ptrdiff_t>(from + count),
+                  spriteScratch.begin() + static_cast<std::ptrdiff_t>(to));
+      }
+      cursor += piece.quadCount;
+      if (index == batch.lastPiece) {
+        break;
+      }
+      index = piece.next;
+    }
+  }
+  shapeVerts.swap(shapeScratch);
+  spriteVerts.swap(spriteScratch);
+}
+void
+GameVisual::rebuildGeometry(const Rect2* cullRect)
+{
+  ILLUMO_PROFILE_ZONE("GameVisual.rebuildGeometry");
+  s_frameTotals.rebuilds += 1;
+  pendingFontGeometry = false;
+  geometryTruncated = false;
   shapeQuadCount = 0;
   spriteQuadCount = 0;
   drawBatches.clear();
+  pieces.clear();
+  geometryCullEnabled = cullRect != nullptr;
+  if (cullRect != nullptr) {
+    geometryCullRect = *cullRect;
+  }
   const Rect2 hostBounds = contentBounds();
-  std::vector<VisualItem> ordered = items;
-  std::stable_sort(ordered.begin(),
-                   ordered.end(),
-                   [this](const VisualItem& a, const VisualItem& b) {
-                     const int leftOrder = drawOrder(a);
-                     const int rightOrder = drawOrder(b);
-                     return leftOrder == rightOrder ? a.sequence < b.sequence
-                                                    : leftOrder < rightOrder;
-                   });
+  // Sequences are unique, so (draw order, sequence) is a strict total order:
+  // an unstable sort gives the stable order without a temporary buffer.
+  std::vector<VisualItem>& ordered = orderedItems;
+  ordered.assign(items.begin(), items.end());
+  std::sort(ordered.begin(),
+            ordered.end(),
+            [this](const VisualItem& a, const VisualItem& b) {
+              const int leftOrder = drawOrder(a);
+              const int rightOrder = drawOrder(b);
+              return leftOrder == rightOrder ? a.sequence < b.sequence
+                                             : leftOrder < rightOrder;
+            });
+  // Built-in shapes draw as sprites of a white texel, so shapes, sprites and
+  // text share one pipeline and neighbours differ only by texture (D-R35).
+  // A large visual of shapes alone keeps the narrower shape vertices: it
+  // switches pipeline at most at its ends, and widening its vertices costs
+  // more than that.
+  static constexpr size_t kSpriteShapeItems = 64;
+  const TextureHandle whiteTexture =
+    renderer != nullptr ? renderer->whiteTexture() : TextureHandle{};
+  const RenderStyleHandle spriteStyle =
+    renderer != nullptr ? renderer->getBuiltinStyleHandle(RenderStyleId::Sprite)
+                        : RenderStyleHandle{};
+  bool shapesAsSprites = whiteTexture.isValid() && spriteStyle.isValid();
+  if (shapesAsSprites && ordered.size() > kSpriteShapeItems) {
+    shapesAsSprites =
+      std::any_of(ordered.begin(), ordered.end(), [](const VisualItem& item) {
+        return item.kind != VisualItemKind::Shape;
+      });
+  }
 
   for (size_t itemIndex = 0; itemIndex < ordered.size(); ++itemIndex) {
     const VisualItem& item = ordered[itemIndex];
@@ -837,7 +1681,7 @@ GameVisual::rebuildGeometry()
       if (!pushSpriteQuad(sprite, hostBounds)) {
         break;
       }
-      appendBatch(BatchKind::Sprite,
+      appendPiece(BatchKind::Sprite,
                   styleHandle,
                   sprite.textureHandle,
                   first,
@@ -854,15 +1698,45 @@ GameVisual::rebuildGeometry()
         text.font ? text.font : Font::getDefaultFont();
       TextureHandle fontTex =
         font ? font->getTextureHandle(renderer) : TextureHandle{};
+      if (!font || !font->isValid()) {
+        pendingFontGeometry = true;
+        continue;
+      }
+      // A heavier weight overlays the run until its sample arrives.
+      const Font* heavy = nullptr;
+      TextureHandle heavyTex{};
+      if (text.heavyFont != nullptr && text.heavyFont != font &&
+          text.heavyBlend > 0.0f) {
+        heavyTex = text.heavyFont->getTextureHandle(renderer);
+        if (text.heavyFont->isValid()) {
+          heavy = text.heavyFont.get();
+        } else {
+          pendingFontGeometry = true;
+        }
+      }
+      const float blend =
+        heavy != nullptr ? std::clamp(text.heavyBlend, 0.0f, 1.0f) : 0.0f;
       const unsigned int first = spriteQuadCount;
-      if (!pushTextRun(text, hostBounds)) {
+      if (!pushTextRun(text, *font, heavy, blend, 1.0f, hostBounds)) {
         break;
       }
-      appendBatch(BatchKind::Sprite,
+      appendPiece(BatchKind::Sprite,
                   styleHandle,
                   fontTex,
                   first,
                   spriteQuadCount - first);
+      if (heavy != nullptr) {
+        const unsigned int heavyFirst = spriteQuadCount;
+        if (!pushTextRun(
+              text, *heavy, font.get(), 1.0f - blend, blend, hostBounds)) {
+          break;
+        }
+        appendPiece(BatchKind::Sprite,
+                    styleHandle,
+                    heavyTex,
+                    heavyFirst,
+                    spriteQuadCount - heavyFirst);
+      }
       continue;
     }
 
@@ -910,6 +1784,10 @@ GameVisual::rebuildGeometry()
       if (!pushFilledTriangle(shape, hostBounds)) {
         break;
       }
+    } else if (shape.kind == ShapeKind::GradientQuad) {
+      if (!pushGradientQuad(shape, hostBounds)) {
+        break;
+      }
     } else {
       const Rect2 bounds = shape.rect;
       const float thickness = std::max(shape.lineWidth, 1.0f);
@@ -934,16 +1812,25 @@ GameVisual::rebuildGeometry()
         break;
       }
     }
-    appendBatch(BatchKind::Shape,
+    if (shapesAsSprites && !shape.styleHandle.isValid()) {
+      const unsigned int count = shapeQuadCount - first;
+      const unsigned int spriteFirst = moveShapeQuadsToSprites(first);
+      appendPiece(
+        BatchKind::Sprite, spriteStyle, whiteTexture, spriteFirst, count);
+      continue;
+    }
+    appendPiece(BatchKind::Shape,
                 styleHandle,
                 TextureHandle{},
                 first,
                 shapeQuadCount - first);
   }
 
+  formBatches();
   shapeUploadPending = shapeQuadCount > 0;
   spriteUploadPending = spriteQuadCount > 0;
   geometryDirty = false;
+  geometryRevision += 1;
 }
 
 bool
@@ -952,92 +1839,191 @@ GameVisual::AppendCommands(Renderer* value)
   if (!isVisible()) {
     return true;
   }
+  // A backend whose host keeps visuals takes this one whole: no geometry is
+  // built or uploaded here. The renderer is remembered, without enrolling
+  // meshes, so destruction can reach the backend.
+  if (value != nullptr && !value->isRecording() &&
+      value->getBackend() != nullptr &&
+      (renderer == nullptr ||
+       (renderer == value && !rendererLifetime.expired())) &&
+      value->getBackend()->AppendVisual(*this)) {
+    if (renderer == nullptr) {
+      renderer = value;
+      rendererLifetime = value->getLifetimeIdentity();
+    }
+    proxied = true;
+    return true;
+  }
+  ILLUMO_PROFILE_ZONE("GameVisual.AppendCommands");
+  FrameState state;
+  if (!prepareFrame(value, &state)) {
+    return false;
+  }
+  return emitDraws(value, state);
+}
+
+bool
+GameVisual::prepareFrame(Renderer* value,
+                         FrameState* state,
+                         const FrameOverride* frame)
+{
   if (value == nullptr) {
     return false;
   }
-  if (!gpuReady) {
-    renderer = value;
-    enrollGpuResources();
-  }
-  if (!gpuReady) {
+  if (renderer != nullptr &&
+      (renderer != value || rendererLifetime.expired())) {
+    value->reportFrameError(
+      "GameVisual used with a foreign or expired renderer");
     return false;
   }
-  if (geometryDirty) {
-    rebuildGeometry();
+  if (!gpuReady) {
+    setRenderer(value);
+  }
+  if (!gpuReady) {
+    value->reportFrameError("GameVisual mesh enrollment failed");
+    return false;
+  }
+  const Renderer::FrameContext& frameContext = value->getFrameContext();
+  beginGameVisualFrameTotals(frameContext.frameSerial);
+  bool useFrameDimensions = false;
+  const std::array<int, 2> dimensions =
+    frameDimensions(value, &useFrameDimensions);
+  const float width = static_cast<float>(dimensions[0]);
+  const float height = static_cast<float>(dimensions[1]);
+  const bool usePixels = space == PrimitiveSpace::Pixels;
+  const float uiScale = value->getUiScale();
+  float resolutionX = (usePixels && uiScale > 0.0f) ? width / uiScale : width;
+  float resolutionY = (usePixels && uiScale > 0.0f) ? height / uiScale : height;
+  if (frame != nullptr) {
+    resolutionX = frame->width;
+    resolutionY = frame->height;
+  }
+  Rect2 effectiveCullRect;
+  const Rect2* cullRect = nullptr;
+  if (usePixels) {
+    const Rect2 viewportRect{
+      0.0f, 0.0f, std::max(resolutionX, 0.0f), std::max(resolutionY, 0.0f)
+    };
+    effectiveCullRect = pixelClipEnabled
+                          ? intersectRects(viewportRect, pixelClipRect)
+                          : viewportRect;
+    cullRect = &effectiveCullRect;
+  }
+  const bool cullChanged =
+    (cullRect != nullptr) != geometryCullEnabled ||
+    (cullRect != nullptr && !sameRect(geometryCullRect, *cullRect));
+  if (geometryDirty || cullChanged || pendingFontGeometry) {
+    rebuildGeometry(cullRect);
   }
   if (!ensureGpuCapacity()) {
+    value->reportFrameError("GameVisual mesh capacity update failed");
     return false;
   }
+  if (geometryTruncated) {
+    value->reportFrameError(
+      "GameVisual geometry exceeded its quad safety limit");
+  }
+  state->resolutionX = resolutionX;
+  state->resolutionY = resolutionY;
+  state->geometryRevision = geometryRevision;
+  state->enclosingClip = value->getClipState();
+  state->clip = false;
+  s_frameTotals.visuals += 1;
+  s_frameTotals.items += items.size();
+  s_frameTotals.batches += drawBatches.size();
+  s_frameTotals.quads += shapeQuadCount + spriteQuadCount;
   if (drawBatches.empty()) {
     return true;
   }
 
   if (shapeUploadPending) {
-    value->pushUpdateBuffer(
+    shapeUploadPending = !value->pushUpdateBuffer(
       shapeMeshHandle,
       0,
       static_cast<unsigned int>(shapeQuadCount * 4 * sizeof(ShapeVertex)),
       shapeVerts.data());
-    shapeUploadPending = false;
   }
   if (spriteUploadPending) {
-    value->pushUpdateBuffer(
+    spriteUploadPending = !value->pushUpdateBuffer(
       spriteMeshHandle,
       0,
       static_cast<unsigned int>(spriteQuadCount * 4 * sizeof(SpriteVertex)),
       spriteVerts.data());
-    spriteUploadPending = false;
   }
 
-  const Renderer::FrameContext& frameContext = value->getFrameContext();
-  std::array<int, 2> dimensions{ 1280, 720 };
-  const bool useFrameDimensions =
-    frameContext.active && window != nullptr && window == value->getWindow();
-  if (useFrameDimensions) {
-    dimensions = frameContext.windowDimensions;
-  } else if (window != nullptr) {
-    dimensions = window->getWindowDimensions();
-  }
-  const float width = static_cast<float>(dimensions[0]);
-  const float height = static_cast<float>(dimensions[1]);
-  const bool usePixels = space == PrimitiveSpace::Pixels;
-  const float uiScale = value != nullptr ? value->getUiScale() : 1.0f;
-  const float resolutionX =
-    (usePixels && uiScale > 0.0f) ? width / uiScale : width;
-  const float resolutionY =
-    (usePixels && uiScale > 0.0f) ? height / uiScale : height;
-  float mvp[16] = {
-    1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
-  };
-  if (space == PrimitiveSpace::World && camera != nullptr &&
-      window != nullptr) {
+  float* mvp = state->mvp.data();
+  state->mvp = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+  if (space == PrimitiveSpace::World && frame != nullptr) {
+    if (frame->hasWorldMvp) {
+      state->mvp = frame->worldMvp;
+    }
+  } else if (space == PrimitiveSpace::World && camera != nullptr &&
+             window != nullptr) {
     const bool useFrameMvp = useFrameDimensions && frameContext.hasWorldMvp &&
                              frameContext.worldCamera == camera;
     if (useFrameMvp) {
-      std::memcpy(mvp, frameContext.worldMvp.data(), sizeof(mvp));
+      std::memcpy(mvp, frameContext.worldMvp.data(), sizeof(float) * 16);
     } else {
       const float aspect =
         static_cast<float>(dimensions[0]) /
         static_cast<float>(dimensions[1] > 0 ? dimensions[1] : 1);
       const glm::mat4 matrix = camera->GetMVPMatrix(aspect);
-      std::memcpy(mvp, &matrix[0][0], sizeof(mvp));
+      std::memcpy(mvp, &matrix[0][0], sizeof(float) * 16);
     }
   } else {
     const Matrix4 overlay =
       WorldLook::overlayProjection(resolutionX, resolutionY);
-    std::memcpy(mvp, glm::value_ptr(overlay), sizeof(mvp));
+    std::memcpy(mvp, glm::value_ptr(overlay), sizeof(float) * 16);
   }
 
+  if (usePixels && pixelClipEnabled) {
+    const std::array<int, 4> viewport = value->getCurrentPassViewport();
+    const double scaleX =
+      resolutionX > 0.0f ? static_cast<double>(viewport[2]) / resolutionX : 0.0;
+    const double scaleY =
+      resolutionY > 0.0f ? static_cast<double>(viewport[3]) / resolutionY : 0.0;
+    const int left =
+      viewport[0] + static_cast<int>(std::floor(effectiveCullRect.x * scaleX));
+    const int right =
+      viewport[0] + static_cast<int>(std::ceil(
+                      (effectiveCullRect.x + effectiveCullRect.w) * scaleX));
+    const int top = viewport[1] + viewport[3] -
+                    static_cast<int>(std::floor(effectiveCullRect.y * scaleY));
+    const int bottom = viewport[1] + viewport[3] -
+                       static_cast<int>(std::ceil(
+                         (effectiveCullRect.y + effectiveCullRect.h) * scaleY));
+    state->clip = true;
+    state->clipRect = {
+      left, bottom, std::max(0, right - left), std::max(0, top - bottom)
+    };
+  }
+  return true;
+}
+
+bool
+GameVisual::emitDraws(Renderer* value, const FrameState& state)
+{
+  if (drawBatches.empty()) {
+    return true;
+  }
+  if (state.clip) {
+    value->pushClipRect(state.clipRect[0],
+                        state.clipRect[1],
+                        state.clipRect[2],
+                        state.clipRect[3]);
+  }
+  bool appended = true;
   for (size_t i = 0; i < drawBatches.size(); ++i) {
     const DrawBatch& batch = drawBatches[i];
     if (!value->bindStyle(batch.styleHandle)) {
-      return false;
+      appended = false;
+      break;
     }
     value->pushSetMesh(batch.kind == BatchKind::Shape ? shapeMeshHandle
                                                       : spriteMeshHandle);
     value->pushUniformVec2(
-      WorldLook::kResolutionUniform, resolutionX, resolutionY);
-    value->pushUniformMat4(WorldLook::kMvpUniform, mvp);
+      WorldLook::kResolutionUniform, state.resolutionX, state.resolutionY);
+    value->pushUniformMat4(WorldLook::kMvpUniform, state.mvp.data());
     if (batch.kind == BatchKind::Sprite) {
       value->pushUniformInt(WorldLook::kTextureUniform,
                             WorldLook::kTextureUnit);
@@ -1045,5 +2031,8 @@ GameVisual::AppendCommands(Renderer* value)
     }
     value->pushDrawIndexed(batch.quadCount * 6, batch.firstQuad * 6);
   }
-  return true;
+  if (state.clip) {
+    value->popClipRect();
+  }
+  return appended;
 }

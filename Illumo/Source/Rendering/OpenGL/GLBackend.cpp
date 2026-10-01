@@ -4,13 +4,15 @@
 #include "GLTexture.h"
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/CommandQueue.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Services/Logger.h>
+#include <algorithm>
 #include <cstring>
+#include <limits>
 #include <string>
-#include <tracy/Tracy.hpp>
 
 GLBackend::GLBackend(IRenderWindow* window)
   : device(new GLDevice())
@@ -30,29 +32,330 @@ GLBackend::Initialize()
   glewExperimental = true;
   const GLenum err = glewInit();
   if (GLEW_OK != err) {
-    Logger::LogError("Failed to initialize glew");
+    Logger::LogError(std::string("Failed to initialize GLEW: ") +
+                     reinterpret_cast<const char*>(glewGetErrorString(err)));
     return false;
   }
-  Logger::LogTrace("Glew initialized");
+  Logger::LogTrace(std::string("GLEW ") +
+                   reinterpret_cast<const char*>(glewGetString(GLEW_VERSION)));
   glEnable(GL_MULTISAMPLE);
-  const GLubyte* versionGL = glGetString(GL_VERSION);
-  std::string versionStr =
-    versionGL ? reinterpret_cast<const char*>(versionGL) : "Unknown";
-  std::string fullGLString = "OpenGL Context: " + versionStr;
-  Logger::LogInfo(fullGLString.c_str());
+  if (window != nullptr) {
+    GLFWwindow* glfwWindow = window->getWindowInstance();
+    if (glfwWindow != nullptr) {
+      int framebufferWidth = 0;
+      int framebufferHeight = 0;
+      glfwGetFramebufferSize(glfwWindow, &framebufferWidth, &framebufferHeight);
+      glViewport(0, 0, framebufferWidth, framebufferHeight);
+    }
+  }
+  logContextDescription();
   return true;
+}
+
+// glGetString may return null on a broken context; never build a string
+// from it directly.
+static std::string
+glText(GLenum name)
+{
+  const GLubyte* text = glGetString(name);
+  return text != nullptr ? reinterpret_cast<const char*>(text) : "unknown";
+}
+
+void
+GLBackend::logContextDescription()
+{
+  Logger::LogInfo("GPU: " + glText(GL_RENDERER) + " (" + glText(GL_VENDOR) +
+                  ")");
+  Logger::LogInfo("OpenGL context: " + glText(GL_VERSION) + ", GLSL " +
+                  glText(GL_SHADING_LANGUAGE_VERSION));
+  GLint maxTextureSize = 0;
+  GLint maxTextureUnits = 0;
+  GLint samples = 0;
+  glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+  glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxTextureUnits);
+  glGetIntegerv(GL_SAMPLES, &samples);
+  Logger::LogTrace("GPU limits: " + std::to_string(maxTextureSize) +
+                   " px textures, " + std::to_string(maxTextureUnits) +
+                   " texture units, " + std::to_string(samples) +
+                   "x multisampling");
+  // Only query vendor memory extensions the driver advertises; an
+  // unsupported enum would leave a GL error for the first frame to trip on.
+  GLint memoryKiB = 0;
+  if (GLEW_NVX_gpu_memory_info) {
+    glGetIntegerv(GL_GPU_MEMORY_INFO_DEDICATED_VIDMEM_NVX, &memoryKiB);
+    if (memoryKiB > 0) {
+      Logger::LogInfo("Video memory: " + std::to_string(memoryKiB / 1024) +
+                      " MiB dedicated");
+    }
+  } else if (GLEW_ATI_meminfo) {
+    GLint freeMemoryKiB[4] = {};
+    glGetIntegerv(GL_TEXTURE_FREE_MEMORY_ATI, freeMemoryKiB);
+    if (freeMemoryKiB[0] > 0) {
+      Logger::LogInfo(
+        "Video memory: " + std::to_string(freeMemoryKiB[0] / 1024) +
+        " MiB free for textures");
+    }
+  }
+  // Bounded: a lost context can report errors indefinitely.
+  for (int drained = 0; drained < 16 && glGetError() != GL_NO_ERROR;
+       ++drained) {
+  }
 }
 
 void
 GLBackend::BeginFrame()
 {
+  device->resetFrameStats();
+  m_rejectionsAtFrameStart = commandQueue->GetTotalRejected();
+  device->resetFrameError();
+}
+
+FrameReadback
+GLBackend::readBackbuffer(int width, int height)
+{
+  ILLUMO_PROFILE_ZONE("GLBackend.readBackbuffer");
+  FrameReadback result;
+  if (width < 1 || height < 1 || width > 4096 || height > 4096) {
+    result.error = "Readback dimensions must be within 1..4096";
+    return result;
+  }
+  if (commandQueue->GetTotalRejected() != m_rejectionsAtFrameStart) {
+    result.error = "Frame rejected commands at the queue safety ceiling";
+    return result;
+  }
+  if (!device->frameError().empty()) {
+    result.error = device->frameError();
+    return result;
+  }
+  if (glGetError() != GL_NO_ERROR) {
+    result.error = "OpenGL error during frame preparation or submission";
+    return result;
+  }
+  GLint framebuffer = 0;
+  GLint packBuffer = 0;
+  GLint alignment = 0;
+  GLint rowLength = 0;
+  GLint skipRows = 0;
+  GLint skipPixels = 0;
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &framebuffer);
+  glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &packBuffer);
+  glGetIntegerv(GL_PACK_ALIGNMENT, &alignment);
+  glGetIntegerv(GL_PACK_ROW_LENGTH, &rowLength);
+  glGetIntegerv(GL_PACK_SKIP_ROWS, &skipRows);
+  glGetIntegerv(GL_PACK_SKIP_PIXELS, &skipPixels);
+  const size_t rowBytes = static_cast<size_t>(width) * 4;
+  result.pixels.resize(rowBytes * static_cast<size_t>(height));
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+  GLint readBuffer = 0;
+  glGetIntegerv(GL_READ_BUFFER, &readBuffer);
+  glReadBuffer(GL_BACK);
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+  glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+  glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+  glReadPixels(
+    0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, result.pixels.data());
+  const GLenum error = glGetError();
+  glReadBuffer(static_cast<GLenum>(readBuffer));
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(framebuffer));
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(packBuffer));
+  glPixelStorei(GL_PACK_ALIGNMENT, alignment);
+  glPixelStorei(GL_PACK_ROW_LENGTH, rowLength);
+  glPixelStorei(GL_PACK_SKIP_ROWS, skipRows);
+  glPixelStorei(GL_PACK_SKIP_PIXELS, skipPixels);
+  if (error != GL_NO_ERROR) {
+    result.pixels.clear();
+    result.error =
+      "OpenGL backbuffer readback failed: " + std::to_string(error);
+    return result;
+  }
+  for (int row = 0; row < height / 2; ++row) {
+    unsigned char* top =
+      result.pixels.data() + static_cast<size_t>(row) * rowBytes;
+    unsigned char* bottom =
+      result.pixels.data() + static_cast<size_t>(height - row - 1) * rowBytes;
+    std::swap_ranges(top, top + rowBytes, bottom);
+  }
+  result.width = width;
+  result.height = height;
+  return result;
+}
+
+void
+GLBackend::releaseReadbackSlot(ReadbackSlot& slot)
+{
+  if (slot.fence != nullptr) {
+    glDeleteSync(slot.fence);
+    slot.fence = nullptr;
+  }
+  if (slot.buffer != 0) {
+    glDeleteBuffers(1, &slot.buffer);
+    slot.buffer = 0;
+  }
+  slot.width = 0;
+  slot.height = 0;
+}
+
+bool
+GLBackend::requestFramebufferReadback(std::uint32_t stream,
+                                      FramebufferHandle framebuffer,
+                                      int width,
+                                      int height)
+{
+  ILLUMO_PROFILE_ZONE("GLBackend.requestFramebufferReadback");
+  std::unordered_map<uint32_t, GLFramebufferResourceEntry>::const_iterator
+    target = _framebufferRegistryLookup.find(framebuffer.slot);
+  if (!IsFramebufferValid(framebuffer) ||
+      target == _framebufferRegistryLookup.end() ||
+      target->second.colorTextures.empty() || width < 1 || height < 1 ||
+      width > target->second.width || height > target->second.height) {
+    return false;
+  }
+  ReadbackStream& readback = _readbackStreams[stream];
+  ReadbackSlot* available = nullptr;
+  for (ReadbackSlot& slot : readback.slots) {
+    if (slot.fence == nullptr) {
+      available = &slot;
+      break;
+    }
+  }
+  if (available == nullptr) {
+    return false;
+  }
+  const GLsizeiptr bytes =
+    static_cast<GLsizeiptr>(width) * static_cast<GLsizeiptr>(height) * 4;
+  GLint previousFramebuffer = 0;
+  GLint previousPack = 0;
+  GLint alignment = 0;
+  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousFramebuffer);
+  glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &previousPack);
+  glGetIntegerv(GL_PACK_ALIGNMENT, &alignment);
+  if (available->buffer == 0) {
+    glGenBuffers(1, &available->buffer);
+  }
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, available->buffer);
+  if (available->width != width || available->height != height) {
+    glBufferData(GL_PIXEL_PACK_BUFFER, bytes, nullptr, GL_STREAM_READ);
+  }
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, target->second.fboId);
+  glReadBuffer(GL_COLOR_ATTACHMENT0);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  // With a pack buffer bound the pointer is an offset into it.
+  glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  available->fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+  available->width = width;
+  available->height = height;
+  available->order = ++_readbackOrder;
+  glPixelStorei(GL_PACK_ALIGNMENT, alignment);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                    static_cast<GLuint>(previousFramebuffer));
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(previousPack));
+  if (glGetError() != GL_NO_ERROR || available->fence == nullptr) {
+    releaseReadbackSlot(*available);
+    return false;
+  }
+  return true;
+}
+
+bool
+GLBackend::takeFramebufferReadback(std::uint32_t stream,
+                                   bool wait,
+                                   FrameReadback& out)
+{
+  ILLUMO_PROFILE_ZONE("GLBackend.takeFramebufferReadback");
+  out = FrameReadback{};
+  std::unordered_map<std::uint32_t, ReadbackStream>::iterator found =
+    _readbackStreams.find(stream);
+  if (found == _readbackStreams.end()) {
+    out.error = "No readback is pending";
+    return false;
+  }
+  ReadbackSlot* oldest = nullptr;
+  for (ReadbackSlot& slot : found->second.slots) {
+    if (slot.fence != nullptr &&
+        (oldest == nullptr || slot.order < oldest->order)) {
+      oldest = &slot;
+    }
+  }
+  if (oldest == nullptr) {
+    out.error = "No readback is pending";
+    return false;
+  }
+  // One second bounds a blocking wait; a lost GPU must not hang the frame.
+  const GLuint64 timeout = wait ? 1000000000ull : 0ull;
+  const GLenum status =
+    glClientWaitSync(oldest->fence, GL_SYNC_FLUSH_COMMANDS_BIT, timeout);
+  if (status == GL_TIMEOUT_EXPIRED) {
+    out.error = "Readback is not complete yet";
+    return false;
+  }
+  if (status == GL_WAIT_FAILED) {
+    releaseReadbackSlot(*oldest);
+    out.error = "Readback wait failed";
+    return false;
+  }
+  glDeleteSync(oldest->fence);
+  oldest->fence = nullptr;
+  GLint previousPack = 0;
+  glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &previousPack);
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, oldest->buffer);
+  const size_t rowBytes = static_cast<size_t>(oldest->width) * 4;
+  const size_t bytes = rowBytes * static_cast<size_t>(oldest->height);
+  const unsigned char* mapped = static_cast<const unsigned char*>(
+    glMapBufferRange(GL_PIXEL_PACK_BUFFER,
+                     0,
+                     static_cast<GLsizeiptr>(bytes),
+                     GL_MAP_READ_BIT));
+  if (mapped == nullptr) {
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(previousPack));
+    out.error = "Readback buffer could not be mapped";
+    return false;
+  }
+  out.pixels.resize(bytes);
+  // GL rows run bottom-up; callers get top-down rows.
+  for (int row = 0; row < oldest->height; ++row) {
+    std::memcpy(out.pixels.data() + static_cast<size_t>(row) * rowBytes,
+                mapped +
+                  static_cast<size_t>(oldest->height - 1 - row) * rowBytes,
+                rowBytes);
+  }
+  glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+  glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(previousPack));
+  out.width = oldest->width;
+  out.height = oldest->height;
+  return true;
+}
+
+void
+GLBackend::releaseReadbackStream(std::uint32_t stream)
+{
+  std::unordered_map<std::uint32_t, ReadbackStream>::iterator found =
+    _readbackStreams.find(stream);
+  if (found == _readbackStreams.end()) {
+    return;
+  }
+  for (ReadbackSlot& slot : found->second.slots) {
+    releaseReadbackSlot(slot);
+  }
+  _readbackStreams.erase(found);
 }
 
 void
 GLBackend::EndFrame()
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.EndFrame");
+  const GLFrameStats& stats = device->frameStats();
+  ILLUMO_PROFILE_PLOT("GL.Submits", stats.submits);
+  ILLUMO_PROFILE_PLOT("GL.Commands", stats.commands);
+  ILLUMO_PROFILE_PLOT("GL.RecordedLists", stats.recordedLists);
+  ILLUMO_PROFILE_PLOT("GL.RecordedCommands", stats.recordedCommands);
+  ILLUMO_PROFILE_PLOT("GL.DrawCalls", stats.drawCalls);
+  ILLUMO_PROFILE_PLOT("GL.UploadBytes", stats.uploadBytes);
+  ILLUMO_PROFILE_PLOT("GL.CommandQueueHighWater",
+                      commandQueue->GetHighWaterMark());
   {
-    ZoneScopedN("GLBackend.swapBuffers");
+    ILLUMO_PROFILE_ZONE("GLBackend.swapBuffers");
     window->swapBuffers();
   }
   static long frameCount = 0;
@@ -70,12 +373,13 @@ GLBackend::EndFrame()
 void
 GLBackend::SubmitCommandQueue()
 {
-  ZoneScopedN("GLBackend.SubmitCommandQueue");
+  ILLUMO_PROFILE_ZONE("GLBackend.SubmitCommandQueue");
   GLResourceTables tables;
   tables.meshes = &_vaoRegistryLookup;
   tables.programs = &_programRegistryLookup;
   tables.textures = &_textureRegistryLookup;
   tables.framebuffers = &_framebufferRegistryLookup;
+  tables.buffers = &_bufferRegistryLookup;
   device->ExecuteCommandQueue(*commandQueue, tables);
 }
 
@@ -94,6 +398,13 @@ GLBackend::ClearCommandQueue()
 void
 GLBackend::Shutdown()
 {
+  if (device != nullptr) {
+    Logger::LogTrace(
+      "OpenGL backend releasing " + std::to_string(_vaoRegistryLookup.size()) +
+      " meshes, " + std::to_string(_programRegistryLookup.size()) +
+      " shaders, " + std::to_string(_textureRegistryLookup.size()) +
+      " textures");
+  }
   for (std::unordered_map<uint32_t, GLMeshResourceEntry>::iterator it =
          _vaoRegistryLookup.begin();
        it != _vaoRegistryLookup.end();
@@ -127,6 +438,16 @@ GLBackend::Shutdown()
   _textureRegistryLookup.clear();
   textureHandles.clear();
 
+  for (std::unordered_map<std::uint32_t, ReadbackStream>::iterator it =
+         _readbackStreams.begin();
+       it != _readbackStreams.end();
+       ++it) {
+    for (ReadbackSlot& slot : it->second.slots) {
+      releaseReadbackSlot(slot);
+    }
+  }
+  _readbackStreams.clear();
+
   for (std::unordered_map<uint32_t, GLFramebufferResourceEntry>::iterator it =
          _framebufferRegistryLookup.begin();
        it != _framebufferRegistryLookup.end();
@@ -137,6 +458,17 @@ GLBackend::Shutdown()
   }
   _framebufferRegistryLookup.clear();
   framebufferHandles.clear();
+
+  for (std::unordered_map<uint32_t, GLBufferResourceEntry>::iterator it =
+         _bufferRegistryLookup.begin();
+       it != _bufferRegistryLookup.end();
+       ++it) {
+    if (it->second.bufferId != 0) {
+      glDeleteBuffers(1, &it->second.bufferId);
+    }
+  }
+  _bufferRegistryLookup.clear();
+  bufferHandles.clear();
 
   delete device;
   device = nullptr;
@@ -166,11 +498,19 @@ GLBackend::CreateMesh(const void* vertices,
                       MeshVertexLayout layout,
                       bool dynamic)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.CreateMesh");
   MeshHandle handle = meshHandles.allocate();
   GLMeshResourceEntry entry;
   entry.generation = handle.generation;
   entry.resource = std::make_unique<GLMesh>(
     vertices, vertexSize, indices, indexSize, layout, dynamic);
+  if (!entry.resource->isValid()) {
+    Logger::LogWarning("CreateMesh: the GPU mesh could not be created (" +
+                       std::to_string(vertexSize) + " vertex bytes, " +
+                       std::to_string(indexSize) + " index bytes)");
+    meshHandles.release(handle);
+    return {};
+  }
   _vaoRegistryLookup[handle.slot] = std::move(entry);
   return handle;
 }
@@ -184,6 +524,7 @@ GLBackend::ReplaceMesh(MeshHandle handle,
                        MeshVertexLayout layout,
                        bool dynamic)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.ReplaceMesh");
   std::unordered_map<uint32_t, GLMeshResourceEntry>::iterator it =
     _vaoRegistryLookup.find(handle.slot);
   if (it == _vaoRegistryLookup.end() ||
@@ -193,6 +534,11 @@ GLBackend::ReplaceMesh(MeshHandle handle,
   }
   std::unique_ptr<GLMesh> replacement = std::make_unique<GLMesh>(
     vertices, vertexSize, indices, indexSize, layout, dynamic);
+  if (!replacement->isValid()) {
+    Logger::LogWarning(
+      "ReplaceMesh: the replacement mesh is invalid; keeping the old one");
+    return false;
+  }
   if (it->second.resource) {
     it->second.resource->Destroy();
   }
@@ -229,14 +575,19 @@ GLBackend::IsMeshValid(MeshHandle handle) const
 ShaderHandle
 GLBackend::CreateShaderProgram(const ShaderPaths& paths)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.CreateShaderProgram");
   ShaderHandle handle = shaderHandles.allocate();
   GLShaderResourceEntry entry;
   entry.generation = handle.generation;
   entry.resource = std::make_unique<GLShaderProgram>(paths);
   if (!entry.resource->isValid()) {
+    Logger::LogError("Shader program " + paths.vertexPath + " + " +
+                     paths.fragmentPath + " is unusable");
     shaderHandles.release(handle);
     return ShaderHandle{};
   }
+  Logger::LogTrace("Shader program built from " + paths.vertexPath + " + " +
+                   paths.fragmentPath);
   _programRegistryLookup[handle.slot] = std::move(entry);
   return handle;
 }
@@ -244,6 +595,7 @@ GLBackend::CreateShaderProgram(const ShaderPaths& paths)
 ShaderHandle
 GLBackend::CreateShaderProgram(const ShaderSources& sources)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.CreateShaderProgram");
   ShaderHandle handle = shaderHandles.allocate();
   GLShaderResourceEntry entry;
   entry.generation = handle.generation;
@@ -260,6 +612,7 @@ bool
 GLBackend::ReplaceShaderProgram(ShaderHandle handle,
                                 const ShaderSources& sources)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.ReplaceShaderProgram");
   std::unordered_map<uint32_t, GLShaderResourceEntry>::iterator it =
     _programRegistryLookup.find(handle.slot);
   if (it == _programRegistryLookup.end() ||
@@ -270,6 +623,8 @@ GLBackend::ReplaceShaderProgram(ShaderHandle handle,
   std::unique_ptr<GLShaderProgram> replacement =
     std::make_unique<GLShaderProgram>(sources);
   if (!replacement->isValid()) {
+    Logger::LogWarning("ReplaceShaderProgram: the new program is unusable; "
+                       "keeping the previous one");
     replacement->Destroy();
     return false;
   }
@@ -324,7 +679,10 @@ GLBackend::CreateTexture(const unsigned char* data,
                          int channels,
                          const TextureOptions& options)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.CreateTexture");
   if (data == nullptr || width <= 0 || height <= 0) {
+    Logger::LogWarning("CreateTexture: missing pixels or invalid size " +
+                       std::to_string(width) + "x" + std::to_string(height));
     return TextureHandle{};
   }
   TextureHandle handle = textureHandles.allocate();
@@ -332,6 +690,49 @@ GLBackend::CreateTexture(const unsigned char* data,
   entry.generation = handle.generation;
   entry.resource =
     std::make_unique<GLTexture>(data, width, height, channels, options);
+  if (entry.resource->getID() == 0) {
+    Logger::LogWarning("CreateTexture: the GPU texture could not be created (" +
+                       std::to_string(width) + "x" + std::to_string(height) +
+                       ", " + std::to_string(channels) + " channels)");
+    textureHandles.release(handle);
+    return {};
+  }
+  _textureRegistryLookup[handle.slot] = std::move(entry);
+  return handle;
+}
+
+TextureHandle
+GLBackend::CreateCubemap(const std::array<const unsigned char*, 6>& facesData,
+                         int width,
+                         int height,
+                         int channels)
+{
+  ILLUMO_PROFILE_ZONE("GLBackend.CreateCubemap");
+  for (size_t i = 0; i < 6; ++i) {
+    if (facesData[i] == nullptr) {
+      Logger::LogWarning("CreateCubemap: face " + std::to_string(i) +
+                         " has no pixels");
+      return TextureHandle{};
+    }
+  }
+  if (width <= 0 || height <= 0 || width != height ||
+      (channels != 1 && channels != 3 && channels != 4)) {
+    Logger::LogWarning("CreateCubemap: faces must be square with 1, 3 or 4 "
+                       "channels (got " +
+                       std::to_string(width) + "x" + std::to_string(height) +
+                       ", " + std::to_string(channels) + " channels)");
+    return TextureHandle{};
+  }
+  TextureHandle handle = textureHandles.allocate();
+  GLTextureResourceEntry entry;
+  entry.generation = handle.generation;
+  entry.resource =
+    std::make_unique<GLTexture>(facesData, width, height, channels);
+  if (entry.resource->getID() == 0) {
+    Logger::LogWarning("CreateCubemap: the GPU cubemap could not be created");
+    textureHandles.release(handle);
+    return {};
+  }
   _textureRegistryLookup[handle.slot] = std::move(entry);
   return handle;
 }
@@ -344,6 +745,7 @@ GLBackend::ReplaceTexture(TextureHandle handle,
                           int channels,
                           const TextureOptions& options)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.ReplaceTexture");
   std::unordered_map<uint32_t, GLTextureResourceEntry>::iterator it =
     _textureRegistryLookup.find(handle.slot);
   if (it == _textureRegistryLookup.end() ||
@@ -351,14 +753,48 @@ GLBackend::ReplaceTexture(TextureHandle handle,
     Logger::LogWarning("ReplaceTexture: stale texture handle ignored");
     return false;
   }
-  if (data == nullptr || width <= 0 || height <= 0) {
+  if (!it->second.resource || it->second.resource->isCubemap() ||
+      data == nullptr || width <= 0 || height <= 0) {
     Logger::LogWarning("ReplaceTexture: invalid texture data ignored");
     return false;
   }
   std::unique_ptr<GLTexture> replacement =
     std::make_unique<GLTexture>(data, width, height, channels, options);
+  if (replacement->getID() == 0) {
+    return false;
+  }
   if (it->second.resource) {
     it->second.resource->Destroy();
+  }
+  it->second.resource = std::move(replacement);
+  return true;
+}
+
+bool
+GLBackend::ReplaceCubemap(TextureHandle handle,
+                          const std::array<const unsigned char*, 6>& faces,
+                          int width,
+                          int height,
+                          int channels)
+{
+  ILLUMO_PROFILE_ZONE("GLBackend.ReplaceCubemap");
+  std::unordered_map<uint32_t, GLTextureResourceEntry>::iterator it =
+    _textureRegistryLookup.find(handle.slot);
+  if (it == _textureRegistryLookup.end() ||
+      it->second.generation != handle.generation || !it->second.resource ||
+      !it->second.resource->isCubemap() || width <= 0 || width != height ||
+      (channels != 1 && channels != 3 && channels != 4)) {
+    return false;
+  }
+  for (const unsigned char* face : faces) {
+    if (face == nullptr) {
+      return false;
+    }
+  }
+  std::unique_ptr<GLTexture> replacement =
+    std::make_unique<GLTexture>(faces, width, height, channels);
+  if (replacement->getID() == 0) {
+    return false;
   }
   it->second.resource = std::move(replacement);
   return true;
@@ -412,6 +848,7 @@ FramebufferHandle
 GLBackend::CreateFramebuffer(const FramebufferDesc& desc,
                              FramebufferAttachments* outAttachments)
 {
+  ILLUMO_PROFILE_ZONE("GLBackend.CreateFramebuffer");
   if (desc.width <= 0 || desc.height <= 0) {
     Logger::LogError("CreateFramebuffer: invalid dimensions");
     return FramebufferHandle{};
@@ -586,5 +1023,60 @@ GLBackend::IsFramebufferValid(FramebufferHandle handle) const
     _framebufferRegistryLookup.find(handle.slot);
   return framebufferHandles.isCurrent(handle) &&
          it != _framebufferRegistryLookup.end() &&
+         it->second.generation == handle.generation;
+}
+
+BufferHandle
+GLBackend::CreateBuffer(BufferUsage usage, size_t capacityBytes)
+{
+  if (capacityBytes == 0 ||
+      capacityBytes >
+        static_cast<size_t>(std::numeric_limits<GLsizeiptr>::max())) {
+    return {};
+  }
+  const GLenum target =
+    usage == BufferUsage::Uniform ? GL_UNIFORM_BUFFER : GL_ARRAY_BUFFER;
+  GLuint id = 0;
+  glGenBuffers(1, &id);
+  if (id == 0) {
+    return {};
+  }
+  glBindBuffer(target, id);
+  glBufferData(
+    target, static_cast<GLsizeiptr>(capacityBytes), nullptr, GL_DYNAMIC_DRAW);
+  glBindBuffer(target, 0);
+  const BufferHandle handle = bufferHandles.allocate();
+  GLBufferResourceEntry entry;
+  entry.generation = handle.generation;
+  entry.bufferId = id;
+  entry.usage = usage;
+  entry.capacity = capacityBytes;
+  _bufferRegistryLookup[handle.slot] = entry;
+  return handle;
+}
+
+bool
+GLBackend::DestroyBuffer(BufferHandle handle)
+{
+  std::unordered_map<uint32_t, GLBufferResourceEntry>::iterator it =
+    _bufferRegistryLookup.find(handle.slot);
+  if (it == _bufferRegistryLookup.end() ||
+      it->second.generation != handle.generation) {
+    Logger::LogWarning("DestroyBuffer: stale buffer handle ignored");
+    return false;
+  }
+  if (it->second.bufferId != 0) {
+    glDeleteBuffers(1, &it->second.bufferId);
+  }
+  _bufferRegistryLookup.erase(it);
+  return bufferHandles.release(handle);
+}
+
+bool
+GLBackend::IsBufferValid(BufferHandle handle) const
+{
+  std::unordered_map<uint32_t, GLBufferResourceEntry>::const_iterator it =
+    _bufferRegistryLookup.find(handle.slot);
+  return bufferHandles.isCurrent(handle) && it != _bufferRegistryLookup.end() &&
          it->second.generation == handle.generation;
 }

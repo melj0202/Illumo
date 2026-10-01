@@ -8,11 +8,13 @@
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <Illumo/Scene/Transform3D.h>
 #include <cstddef>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <vector>
 
 class Camera;
 class Renderer;
+struct MeshAssetInfo;
 
 enum class MeshFacing : unsigned char
 {
@@ -55,6 +57,8 @@ public:
   float getShadowRadius() const { return shadowRadius; }
   void setLightDistance(float distance);
   float getLightDistance() const { return lightDistance; }
+  void setShadowCasterDistance(float distance);
+  float getShadowCasterDistance() const { return shadowCasterDistance; }
   void setShadowBias(float bias);
   float getShadowBias() const { return shadowBias; }
   void setShadowSlopeScale(float scale);
@@ -107,13 +111,27 @@ public:
                        int segments = 24);
   void addMesh(const MeshData& mesh,
                ColorRgba tint = ColorRgba{ 255, 255, 255, 255 });
+  // Non-owning managed binding. The acquiring owner must keep the matching
+  // AssetManager reference alive until this binding is cleared or unused.
+  void setMeshAsset(const MeshAssetInfo& asset,
+                    ColorRgba tint = ColorRgba{ 255, 255, 255, 255 });
+  void clearMeshAsset();
+  MeshHandle getMeshAssetHandle() const { return meshAssetHandle; }
 
   size_t spriteCount() const { return sprites.size(); }
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
+  void CollectShadowCasters(Renderer* renderer) override;
+  void AppendShadowCommands(Renderer* renderer) override;
   void appendSceneCommands(Renderer* renderer,
                            const Matrix4& worldTransform) override;
+  bool getSceneLocalBounds(AxisAlignedBounds3* bounds) const override;
+  uint64_t getSceneBoundsRevision() const override { return boundsRevision; }
+  void collectSceneShadowCasters(Renderer* renderer,
+                                 const Matrix4& worldTransform) override;
+  void appendSceneShadowCommands(Renderer* renderer,
+                                 const Matrix4& worldTransform) override;
 
 private:
   struct ColorVertex
@@ -172,26 +190,29 @@ private:
   std::vector<LitVertex> triangleVertices;
   std::vector<unsigned int> triangleIndices;
   std::vector<ColorVertex> lineDrawVertices;
-  std::vector<LitVertex> triangleDrawVertices;
   std::vector<unsigned int> lineMeshIndices;
-  std::vector<unsigned int> triangleMeshIndices;
   std::vector<SpriteItem> sprites;
   std::vector<SpriteVertex> spriteVertices;
   std::vector<unsigned int> spriteMeshIndices;
   MeshHandle lineMeshHandle{};
   MeshHandle triangleMeshHandle{};
   MeshHandle spriteMeshHandle{};
+  MeshHandle meshAssetHandle{};
+  unsigned int meshAssetIndexCount = 0;
+  ColorRgba meshAssetTint{ 255, 255, 255, 255 };
+  glm::vec3 meshAssetBoundsMin = glm::vec3(0.0f);
+  glm::vec3 meshAssetBoundsMax = glm::vec3(0.0f);
+  bool meshAssetBoundsValid = false;
   RenderStyleHandle lineStyleHandle{};
   RenderStyleHandle triangleStyleHandle{};
   RenderStyleHandle spriteStyleHandle{};
   RenderStyleHandle litMeshStyleHandle{};
-  RenderStyleHandle shadowDepthStyleHandle{};
-  FramebufferHandle shadowFboHandle{};
-  TextureHandle shadowDepthTextureHandle{};
   size_t lineMeshCapacity = 0;
-  size_t triangleMeshCapacity = 0;
+  size_t triangleVertexCapacity = 0;
+  size_t triangleIndexCapacity = 0;
   size_t spriteMeshCapacity = 0;
   bool geometryDirty = true;
+  uint64_t boundsRevision = 1;
   bool lineUploadPending = false;
   bool triangleUploadPending = false;
   bool spriteUploadPending = false;
@@ -201,37 +222,55 @@ private:
   bool motionBlurEnabled = true;
   bool hasPreviousMvp = false;
   glm::mat4 previousColoredMvp = glm::mat4(1.0f);
+  uint64_t previousFrameSerial = 0;
   float motionBlurAmount = 0.5f;
   float motionBlurMax = 0.2f;
+  glm::vec3 lineBoundsMin = glm::vec3(0.0f);
+  glm::vec3 lineBoundsMax = glm::vec3(0.0f);
+  bool lineBoundsValid = false;
+  glm::vec3 triangleBoundsMin = glm::vec3(0.0f);
+  glm::vec3 triangleBoundsMax = glm::vec3(0.0f);
+  bool triangleBoundsValid = false;
+  glm::vec3 spriteBoundsMin = glm::vec3(0.0f);
+  glm::vec3 spriteBoundsMax = glm::vec3(0.0f);
+  bool spriteBoundsValid = false;
+  bool geometryBoundsReliable = true;
   glm::vec3 lightDirection = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
   glm::vec3 lightColor = glm::vec3(1.0f, 0.95f, 0.9f);
   glm::vec3 ambientColor = glm::vec3(0.2f, 0.22f, 0.25f);
   int shadowMapSize = 1024;
-  int enrolledShadowMapSize = 0;
   float shadowRadius = 2.5f;
   float lightDistance = 8.0f;
+  float shadowCasterDistance = 100.0f;
   float shadowBias = 0.001f;
   float shadowSlopeScale = 0.004f;
   float shadowNormalOffset = 0.015f;
 
   void ensureStyles();
-  void ensureShadowResources(Renderer* renderer);
-  bool appendCommandsWithWorld(Renderer* renderer, const glm::mat4& nodeWorld);
+  bool prepareForCommands(Renderer* renderer);
+  void collectShadowCasterWithWorld(Renderer* renderer,
+                                    const glm::mat4& nodeWorld);
+  void appendShadowCommandsWithWorld(Renderer* renderer,
+                                     const glm::mat4& nodeWorld);
+  bool appendCommandsWithWorld(Renderer* renderer,
+                               const glm::mat4& nodeWorld,
+                               bool cameraCull = true);
+  bool getLocalShadowBounds(AxisAlignedBounds3* bounds) const;
+  bool getWorldShadowBounds(const glm::mat4& nodeWorld,
+                            AxisAlignedBounds3* bounds) const;
   void rebuildMeshes();
   bool ensureMeshCapacity(MeshHandle* meshHandle,
                           std::vector<unsigned int>* meshIndices,
                           size_t* capacity,
                           size_t required,
                           MeshVertexLayout layout);
+  bool ensureTriangleMeshCapacity(size_t requiredVertices,
+                                  size_t requiredIndices);
   static void expandIndexedVertices(const std::vector<ColorVertex>& vertices,
                                     const std::vector<unsigned int>& indices,
                                     std::vector<ColorVertex>* drawVertices);
-  static void expandIndexedLitVertices(const std::vector<LitVertex>& vertices,
-                                       const std::vector<unsigned int>& indices,
-                                       std::vector<LitVertex>* drawVertices);
   void releaseMeshes();
   void releaseStyles();
-  void releaseShadowResources();
   bool resolveViewProjection(Renderer* renderer,
                              glm::mat4* viewProjection,
                              glm::mat4* view) const;

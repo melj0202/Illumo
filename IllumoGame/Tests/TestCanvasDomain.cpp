@@ -1,6 +1,6 @@
 // Canvas domain / visual buffer tests (CPU-side; GPU is mock-enrolled only).
 
-#include "Rulesets/GameOfLifeRuleSet.h"
+#include "Rulesets/LifeLikeRuleSet.h"
 #include "TestHarness.h"
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>

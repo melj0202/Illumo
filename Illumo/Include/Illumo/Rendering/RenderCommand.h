@@ -3,8 +3,9 @@
 #include <Illumo/Rendering/ResourceHandle.h>
 
 // Opaque, typed, generational backend handles (never raw GL object names).
-// Data pointers in update payloads must remain valid until SubmitCommandQueue
-// returns.
+// Data pointers in uniform/update payloads must remain valid until
+// SubmitCommandQueue returns. Renderer copies matrix values into retained
+// frame storage before enqueueing them.
 
 enum class CommandType
 {
@@ -30,6 +31,7 @@ enum class CommandType
   // Resource updates (same-frame pointer validity)
   UpdateTexture,
   UpdateBuffer,
+  UpdateIndexBuffer,
 
   // Clear
   ClearScreen,
@@ -42,7 +44,33 @@ enum class CommandType
   Draw,
   DrawIndexed,
   DrawInstanced,
+
+  // GPU buffers and instancing (appended: existing values are unchanged)
+  WriteBuffer,
+  BindUniformBuffer,
+  SetInstanceStream,
+  DrawIndexedInstanced,
+
+  // Runs a RecordedCommandList's tokens in place.
+  ExecuteList,
 };
+
+class RecordedCommandList;
+
+// Per-instance attribute layouts. Mesh attributes use locations 0-3;
+// instance attributes start at location 4.
+enum class InstanceLayout : unsigned char
+{
+  None = 0,
+  // Model mat4 (locations 4-7), previous model mat4 (8-11), tint vec4 (12).
+  LitModelTint = 1,
+};
+
+inline unsigned int
+instanceLayoutStride(InstanceLayout layout)
+{
+  return layout == InstanceLayout::LitModelTint ? 144u : 0u;
+}
 
 struct CmdClearColor
 {
@@ -132,7 +160,7 @@ struct CmdUniformVec4
 struct CmdUniformMat4
 {
   char name[32];
-  float m[16];
+  const float* value;
 };
 
 struct CmdDraw
@@ -178,6 +206,42 @@ struct CmdUpdateBuffer
   const void* data;
 };
 
+// A write at offset zero may discard the buffer's previous contents first.
+struct CmdWriteBuffer
+{
+  BufferHandle handle;
+  unsigned int offsetBytes;
+  unsigned int sizeBytes;
+  const void* data;
+};
+
+struct CmdBindUniformBuffer
+{
+  BufferHandle handle;
+  unsigned int binding;
+};
+
+// Attaches an Instance buffer to the currently bound mesh's vertex arrays.
+struct CmdInstanceStream
+{
+  BufferHandle handle;
+  unsigned int offsetBytes;
+  InstanceLayout layout;
+};
+
+struct CmdDrawIndexedInstanced
+{
+  unsigned int elementCount;
+  unsigned int firstIndex;
+  unsigned int instanceCount;
+};
+
+// The list must stay alive and unchanged until submission returns.
+struct CmdExecuteList
+{
+  const RecordedCommandList* list;
+};
+
 // Tagged-union command token. Trivially copyable for the vector queue.
 struct RenderCommand
 {
@@ -206,5 +270,14 @@ struct RenderCommand
     CmdDrawInstanced drawInstanced;
     CmdUpdateTexture updateTexture;
     CmdUpdateBuffer updateBuffer;
+    CmdUpdateBuffer updateIndexBuffer;
+    CmdWriteBuffer writeBuffer;
+    CmdBindUniformBuffer bindUniformBuffer;
+    CmdInstanceStream instanceStream;
+    CmdDrawIndexedInstanced drawIndexedInstanced;
+    CmdExecuteList executeList;
   };
+  // Append fields to preserve existing positional aggregate initialization.
+  // ClearDepthBuffer, ClearScreen and ClearAll default to the far depth.
+  float clearDepthValue = 1.0f;
 };

@@ -1,12 +1,12 @@
 #include "SimulationRunner.h"
-#include "Rulesets/RuleSet.h"
-#include <chrono>
-#include <tracy/Tracy.hpp>
+#include <Illumo/Foundation/Profile.h>
 #include <utility>
 
 SimulationRunner::SimulationRunner()
-  : worker(&SimulationRunner::workerLoop, this)
 {
+  // The worker can read request/result state as soon as it starts.
+  // Launch only after every member has finished initialization.
+  worker = std::thread(&SimulationRunner::workerLoop, this);
 }
 
 SimulationRunner::~SimulationRunner()
@@ -19,8 +19,14 @@ SimulationRunner::start(SparseCellGrid* workingGrid,
                         const SparseCellGrid* publishedGrid,
                         const RuleSet* ruleSet,
                         SparseGenerationDelta&& mirrorDelta,
-                        bool useMirrorDelta)
+                        bool useMirrorDelta,
+                        std::uint32_t requestedGenerations,
+                        std::uint32_t* acceptedGenerations)
 {
+  ILLUMO_PROFILE_ZONE("SimulationRunner.start");
+  // The worker thread runs one generation per start: several would have it
+  // read the published grid's scratch while this thread uses that grid.
+  (void)requestedGenerations;
   if (workingGrid == nullptr || publishedGrid == nullptr ||
       ruleSet == nullptr) {
     return false;
@@ -36,6 +42,9 @@ SimulationRunner::start(SparseCellGrid* workingGrid,
   requestUsesMirror = useMirrorDelta;
   requestPending = true;
   condition.notify_all();
+  if (acceptedGenerations != nullptr) {
+    *acceptedGenerations = 1u;
+  }
   return true;
 }
 
@@ -46,6 +55,7 @@ SimulationRunner::tryTakeCompleted(SparseCellGrid** completedGrid,
                                    bool* advanceSucceeded,
                                    SimulationRunnerTimings* timings)
 {
+  ILLUMO_PROFILE_ZONE("SimulationRunner.tryTakeCompleted");
   std::lock_guard<std::mutex> lock(mutex);
   if (!completed) {
     return false;
@@ -77,6 +87,7 @@ SimulationRunner::waitAndTakeCompleted(SparseCellGrid** completedGrid,
                                        bool* advanceSucceeded,
                                        SimulationRunnerTimings* timings)
 {
+  ILLUMO_PROFILE_ZONE("SimulationRunner.waitAndTakeCompleted");
   std::unique_lock<std::mutex> lock(mutex);
   if (!requestPending && !running && !completed) {
     return false;
@@ -112,6 +123,27 @@ SimulationRunner::isBusy() const
   return requestPending || running || completed;
 }
 
+bool
+SimulationRunner::canBlock() const
+{
+  return true;
+}
+
+void
+SimulationRunner::retire()
+{
+  ILLUMO_PROFILE_ZONE("SimulationRunner.retire");
+  // The worker finishes within one generation; its result is dropped.
+  SparseGenerationDelta discarded;
+  waitAndTakeCompleted(nullptr, &discarded, nullptr, nullptr, nullptr);
+}
+
+std::string
+SimulationRunner::describeExecution() const
+{
+  return "native worker thread";
+}
+
 void
 SimulationRunner::shutdown()
 {
@@ -141,6 +173,7 @@ SimulationRunner::shutdown()
 void
 SimulationRunner::workerLoop()
 {
+  ILLUMO_PROFILE_THREAD("SimulationRunner");
   for (;;) {
     SparseCellGrid* workingGrid = nullptr;
     const SparseCellGrid* publishedGrid = nullptr;
@@ -162,79 +195,25 @@ SimulationRunner::workerLoop()
       running = true;
     }
 
-    ZoneScopedN("SimulationRunner.generation");
-    const std::chrono::steady_clock::time_point startTime =
-      std::chrono::steady_clock::now();
-    bool advanceSucceeded = false;
+    ILLUMO_PROFILE_ZONE("SimulationRunner.workerGeneration");
     SparseGenerationDelta completedDelta;
-    bool captured = false;
     SimulationRunnerTimings timings;
-    try {
-      const std::chrono::steady_clock::time_point mirrorStart =
-        std::chrono::steady_clock::now();
-      bool synchronized = false;
-      const bool useDirectSourceAdvance = useMirrorDelta &&
-                                          mirrorDelta.fullReplacement &&
-                                          mirrorDelta.fullChunks.empty();
-      if (useMirrorDelta && !useDirectSourceAdvance) {
-        ZoneScopedN("SimulationRunner.applyMirrorDelta");
-        synchronized = workingGrid->applyGenerationDelta(mirrorDelta);
-        timings.usedMirrorDelta = synchronized;
-      }
-      if (!synchronized && !useDirectSourceAdvance) {
-        ZoneScopedN("SimulationRunner.copyPublishedGrid");
-        workingGrid->copyStateFrom(*publishedGrid);
-        timings.usedFullCopy = true;
-      }
-      timings.usedDirectSourceAdvance = useDirectSourceAdvance;
-      timings.mirrorMilliseconds =
-        std::chrono::duration<double, std::milli>(
-          std::chrono::steady_clock::now() - mirrorStart)
-          .count();
-      completedDelta = std::move(mirrorDelta);
-      const std::uint64_t previousRevision = useDirectSourceAdvance
-                                               ? publishedGrid->getRevision()
-                                               : workingGrid->getRevision();
-      const std::chrono::steady_clock::time_point advanceStart =
-        std::chrono::steady_clock::now();
-      advanceSucceeded = useDirectSourceAdvance
-                           ? workingGrid->advanceFrom(*publishedGrid, *ruleSet)
-                           : workingGrid->advance(*ruleSet);
-      timings.advanceMilliseconds =
-        std::chrono::duration<double, std::milli>(
-          std::chrono::steady_clock::now() - advanceStart)
-          .count();
-      const std::chrono::steady_clock::time_point captureStart =
-        std::chrono::steady_clock::now();
-      captured =
-        advanceSucceeded && workingGrid->captureGenerationDelta(
-                              previousRevision, &completedDelta, false);
-      if (captured && !useDirectSourceAdvance &&
-          !completedDelta.fullReplacement) {
-        workingGrid->rememberInactiveGenerationDelta(completedDelta);
-      }
-      timings.captureMilliseconds =
-        std::chrono::duration<double, std::milli>(
-          std::chrono::steady_clock::now() - captureStart)
-          .count();
-    } catch (...) {
-      advanceSucceeded = false;
-      captured = false;
-      completedDelta.clear();
-    }
-    const double elapsedMilliseconds =
-      std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - startTime)
-        .count();
-    timings.totalMilliseconds = elapsedMilliseconds;
+    const bool succeeded = runGeneration(workingGrid,
+                                         publishedGrid,
+                                         ruleSet,
+                                         std::move(mirrorDelta),
+                                         useMirrorDelta,
+                                         1u,
+                                         &completedDelta,
+                                         &timings);
 
     {
       std::lock_guard<std::mutex> lock(mutex);
       resultGrid = workingGrid;
       resultDelta = std::move(completedDelta);
-      resultElapsedMilliseconds = elapsedMilliseconds;
+      resultElapsedMilliseconds = timings.totalMilliseconds;
       resultTimings = timings;
-      resultAdvanceSucceeded = advanceSucceeded && captured;
+      resultAdvanceSucceeded = succeeded;
       running = false;
       completed = true;
       condition.notify_all();

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <typeinfo>
 #include <unordered_map>
 #include <vector>
@@ -37,10 +38,28 @@ struct ChunkAddress
 
 using SparseChunkMask = std::array<std::uint64_t, (16 * 16) / 64>;
 
+// The elementary 1D source row: the maximum Y holding a counted cell and the
+// counted X extent on that row. `found` is false for an empty world.
+struct SparseElementaryRow
+{
+  bool found = false;
+  std::int64_t sourceY = 0;
+  std::int64_t minX = 0;
+  std::int64_t maxX = 0;
+};
+
 struct SparseChunkRecord
 {
   std::int64_t chunkX = 0;
   std::int64_t chunkY = 0;
+  std::array<unsigned char, 16 * 16> cells{};
+};
+
+// A whole-chunk replacement: present with these cells, or removed.
+struct SparseChunkPatch
+{
+  ChunkAddress address;
+  bool present = false;
   std::array<unsigned char, 16 * 16> cells{};
 };
 
@@ -163,6 +182,19 @@ public:
   void clear();
   bool advance(const RuleSet& ruleSet);
   bool advanceFrom(const SparseCellGrid& source, const RuleSet& ruleSet);
+  // Elementary 1D in parts, for simulation lanes: the source row of this grid
+  // (only chunk columns `includeColumn` accepts, when given), the combination
+  // of partial rows, and one generation from a known source row that writes
+  // only destination chunk columns `writesColumn` accepts. advance() equals
+  // advanceElementaryRow(rule, findElementarySourceRow({}), {}).
+  SparseElementaryRow findElementarySourceRow(
+    const std::function<bool(std::int64_t)>& includeColumn) const;
+  static void mergeElementaryRow(SparseElementaryRow* row,
+                                 const SparseElementaryRow& part);
+  bool advanceElementaryRow(
+    const RuleSet& ruleSet,
+    const SparseElementaryRow& row,
+    const std::function<bool(std::int64_t)>& writesColumn);
   void copyStateFrom(const SparseCellGrid& source);
   bool captureGenerationDelta(std::uint64_t previousRevision,
                               SparseGenerationDelta* delta,
@@ -172,6 +204,17 @@ public:
 
   void swap(SparseCellGrid& other) noexcept;
   bool assignChunk(const SparseChunkRecord& record);
+  // The exact one-revision delta that replacing chunks with `patches` makes
+  // (no records and an unchanged revision when nothing differs). Patches must
+  // name distinct canonical chunks; all-background cells mean removal.
+  bool buildPatchDelta(const std::vector<SparseChunkPatch>& patches,
+                       SparseGenerationDelta* delta) const;
+  // Replaces chunks as one revision. The changes journaled by the previous
+  // generation stay journaled beside the patch's own, so the next frontier
+  // still covers every cell that differs from that generation's input.
+  bool applyChunkPatches(const std::vector<SparseChunkPatch>& patches);
+  // Every stored chunk, in unspecified order.
+  void visitChunks(const ChunkVisitor& visitor) const;
   std::vector<SparseChunkRecord> collectChunkRecords() const;
   void collectChunkRecords(std::vector<SparseChunkRecord>* records) const;
   void visitChunksInBounds(const ChunkAddress& minimum,
@@ -182,6 +225,11 @@ public:
                                    const OccupiedChunkVisitor& visitor) const;
   bool visitChangedChunksSince(std::uint64_t previousRevision,
                                const ChangedChunkVisitor& visitor) const;
+  // A stored chunk's cells, or null when the chunk is absent (background).
+  const ChunkCells* findChunkCells(const ChunkAddress& address) const
+  {
+    return findChunk(address);
+  }
 
   static std::int64_t floorDivide(std::int64_t value, std::int64_t divisor);
   static std::int64_t floorModulo(std::int64_t value, std::int64_t divisor);
@@ -227,6 +275,13 @@ public:
 
   std::uint64_t getRevision() const { return revision; }
   std::size_t getAllocatedChunkCount() const { return chunks.size(); }
+  // Non-background cells in the world now, from the maintained aggregate
+  // (no chunk scan). Unlike getLastAdvanceStats(), it is current before any
+  // generation has run and after edits.
+  std::size_t getStoredCellCount() const
+  {
+    return m_chunkStatistics.activeCellCount;
+  }
   const SparseAdvanceStats& getLastAdvanceStats() const
   {
     return lastAdvanceStats;
@@ -346,6 +401,32 @@ private:
   };
   struct ChunkMemoState;
 
+  // Full-state histogram, directional, extended-range and weighted-kernel
+  // rules share one chunk-parallel driver: targets evaluate independently from
+  // per-slot halo windows, then journal and publish serially in target order.
+  enum class IsolatedKernel
+  {
+    StateHistogram,
+    Directional,
+    ExtendedRange,
+    WeightedKernel
+  };
+  struct IsolatedKernelPlan
+  {
+    IsolatedKernel kind = IsolatedKernel::StateHistogram;
+    const RuleSet* ruleSet = nullptr;
+    const SparseCellGrid* source = nullptr;
+    int radius = 1;
+    std::vector<std::ptrdiff_t> offsets;
+    std::vector<std::uint32_t> weights;
+    std::array<std::uint32_t, 256> levels{};
+  };
+  struct IsolatedKernelScratch
+  {
+    std::vector<unsigned char> window;
+    std::vector<std::uint32_t> levels;
+  };
+
   static constexpr std::size_t kParallelTargetThreshold = 32u;
   static constexpr unsigned int kMaxParallelWorkers = 8u;
   static constexpr unsigned int kMaxCandidateWorkers = 4u;
@@ -353,6 +434,10 @@ private:
   static constexpr std::size_t kCandidateNeighborContributionThreshold =
     kCandidateCellsPerChunkThreshold * 8u;
   static constexpr std::size_t kParallelCandidateCellThreshold = 16384u;
+  // Neighbor reads (target cells times per-cell kernel work) above which the
+  // isolated kernels and elementary rows use the worker pool.
+  static constexpr std::size_t kParallelKernelWorkThreshold = 131072u;
+  static constexpr std::size_t kElementaryRowBlock = 65536u;
   static constexpr std::size_t kCandidateCellsPerWorkRange = 2048u;
   static constexpr std::size_t kFrontierScratchPreferredDivisor = 4u;
   static constexpr std::size_t kFrontierScratchTargetLimit = 2048u;
@@ -391,6 +476,8 @@ private:
   std::vector<AddressIndexSlot> m_completeTargetIndex;
   std::uint64_t m_completeTargetGeneration = 0u;
   std::vector<TargetResult> m_completeResults;
+  std::vector<IsolatedKernelScratch> m_kernelScratch;
+  std::vector<unsigned char> m_elementaryRow;
   std::uint64_t m_candidateIndexGeneration = 0u;
   std::uint64_t m_directOutputGeneration = 0u;
   std::uint64_t m_candidateTopologyRevision = 1u;
@@ -401,6 +488,7 @@ private:
   std::uint64_t m_changedChunksRevision = 0u;
   bool m_changedChunksRevisionValid = false;
   const std::type_info* lastRuleType = nullptr;
+  std::string lastRuleTag;
   bool m_frontierInvalid = false;
   std::unique_ptr<SparseWorkerPool> workerPool;
   SparseAdvanceStats lastAdvanceStats;
@@ -410,6 +498,12 @@ private:
   std::vector<ChunkAddress> m_mirrorIncomingAddresses;
   std::vector<AddressIndexSlot> m_mirrorIncomingAddressIndex;
   std::uint64_t m_mirrorIncomingAddressGeneration = 0u;
+  // Retained duplicate check for buildPatchDelta (logically const).
+  mutable std::vector<ChunkAddress> m_patchAddresses;
+  mutable std::vector<AddressIndexSlot> m_patchAddressIndex;
+  mutable std::uint64_t m_patchAddressGeneration = 0u;
+  // Retained delta for applyChunkPatches (lanes patch every generation).
+  SparseGenerationDelta m_patchDelta;
   bool m_backgroundTransitionsStayBinary = false;
   bool m_countedChangeCoversStateChange = false;
   mutable std::unique_ptr<ChunkMemoState> m_chunkMemo;
@@ -447,6 +541,14 @@ private:
                        ChunkMap* target,
                        ChunkStatistics* statistics);
   bool synchronizeInactiveMap(const SparseGenerationDelta& incomingDelta);
+  // Delta application keeps map nodes: erased entries go to the recycled
+  // pool and inserts take from it, allocating only when it is empty.
+  ChunkMap::iterator insertRecycledChunk(ChunkMap* target,
+                                         const ChunkAddress& address,
+                                         const ChunkData& chunk);
+  void recycleChunk(ChunkMap* target, ChunkMap::iterator position);
+  // target = source, reusing target's nodes (and the pool) for the copy.
+  void copyChunkMap(const ChunkMap& source, ChunkMap* target);
   bool prepareNextChunks(std::size_t expectedChunkCount);
   bool prepareDirectChunks(std::size_t expectedChunkCount);
   void recycleNextChunks();
@@ -510,8 +612,34 @@ private:
   std::size_t estimateCompleteAdvanceWork() const;
   bool advanceChangedFrontier(const RuleSet& ruleSet, bool useCandidateScratch);
   bool advanceImpl(const RuleSet& ruleSet, bool allowFrontier);
+  bool advanceStateHistogram(const RuleSet& ruleSet);
+  bool advanceExtendedRange(const RuleSet& ruleSet);
+  bool advanceWeightedKernel(const RuleSet& ruleSet);
+  bool advanceDirectionalNeighborhood(const RuleSet& ruleSet);
+  bool advanceIsolatedKernel(const RuleSet& ruleSet, IsolatedKernel kind);
+  void evaluateIsolatedTarget(const IsolatedKernelPlan& plan,
+                              IsolatedKernelScratch* scratch,
+                              TargetResult* result) const;
+  unsigned int resolveKernelWorkerCount(std::size_t targetCount,
+                                        std::size_t workPerCell) const;
+  unsigned int resolveElementaryWorkerCount(std::size_t cellCount) const;
+  static void storeKernelResultCell(TargetResult* result,
+                                    std::size_t cellIndex,
+                                    unsigned char current,
+                                    unsigned char next);
+  // Copies a target chunk plus a `radius`-cell margin into `window`
+  // (row-major, side kChunkDim + 2 * radius) so full-neighborhood evaluators
+  // index neighbors directly instead of hashing every neighbor lookup.
+  static void fillHaloWindow(const SparseCellGrid& source,
+                             const ChunkAddress& target,
+                             int radius,
+                             std::vector<unsigned char>* window);
   bool advanceToroidal(const RuleSet& ruleSet);
   bool advanceElementarySpaceTime(const RuleSet& ruleSet);
+  bool advanceElementaryFromRow(
+    const RuleSet& ruleSet,
+    const SparseElementaryRow& row,
+    const std::function<bool(std::int64_t)>& writesColumn);
   void enrollToroidalCandidate(const CellAddress& address,
                                bool addNeighborContribution);
   static std::size_t saturatingAdd(std::size_t left, std::size_t right);

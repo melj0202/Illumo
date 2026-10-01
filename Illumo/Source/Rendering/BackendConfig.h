@@ -1,7 +1,8 @@
 #pragma once
 
-#include <Illumo/Services/EnvVars.h>
+#include <Illumo/Services/IEnvVars.h>
 
+#include <cctype>
 #include <string>
 
 enum class BackendDef
@@ -13,23 +14,44 @@ enum class BackendDef
   DIRECTX11
 };
 
-inline BackendDef
-StringToToken(EnvVars* vars)
+// The "GraphicsAPI" setting names the backend a launch starts with, in any
+// letter case. False for a name that is not a backend; *definition is then
+// OPENGL, the default.
+inline bool
+parseBackendDef(const std::string& token, BackendDef* definition)
 {
-  std::string token = vars->getVar("GraphicsAPI").value;
-  if (token == "OPENGL") {
-    return BackendDef::OPENGL;
-  } else if (token == "OPENGL_ES") {
-    return BackendDef::OPENGL_ES;
-  } else if (token == "VULKAN") {
-    return BackendDef::VULKAN;
-  } else if (token == "DIRECTX12") {
-    return BackendDef::DIRECTX12;
-  } else if (token == "DIRECTX11") {
-    return BackendDef::DIRECTX11;
-  } else {
-    return BackendDef::OPENGL;
+  std::string upper = token;
+  for (char& character : upper) {
+    character =
+      static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
   }
+  BackendDef parsed = BackendDef::OPENGL;
+  bool recognized = true;
+  if (upper == "OPENGL") {
+    parsed = BackendDef::OPENGL;
+  } else if (upper == "OPENGL_ES") {
+    parsed = BackendDef::OPENGL_ES;
+  } else if (upper == "VULKAN") {
+    parsed = BackendDef::VULKAN;
+  } else if (upper == "DIRECTX12") {
+    parsed = BackendDef::DIRECTX12;
+  } else if (upper == "DIRECTX11") {
+    parsed = BackendDef::DIRECTX11;
+  } else {
+    recognized = false;
+  }
+  if (definition != nullptr) {
+    *definition = parsed;
+  }
+  return recognized;
+}
+
+inline BackendDef
+StringToToken(IEnvVars* vars)
+{
+  BackendDef definition = BackendDef::OPENGL;
+  parseBackendDef(vars->getVar("GraphicsAPI").value, &definition);
+  return definition;
 }
 
 inline std::string
@@ -49,4 +71,11 @@ TokenToString(BackendDef def)
     default:
       return "OPENGL";
   }
+}
+
+// The backends this build can start; the others parse, then fall back.
+inline bool
+isBackendImplemented(BackendDef def)
+{
+  return def == BackendDef::OPENGL || def == BackendDef::VULKAN;
 }

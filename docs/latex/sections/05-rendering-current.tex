@@ -2,31 +2,36 @@
 \label{sec:rendering-current}
 
 \begin{statusbox}
-\textbf{The reusable 2D renderer foundation plus a narrow debug-3D path is shipped inside Illumo.} Live
+\textbf{Illumo ships world meshes, painter-correct 2D composition, cubemaps,
+and explicit offscreen passes.} Live
 frame path is acquire/enroll + tokens + submit via
 \symbolref{Renderer}/\symbolref{IBackend}.
 Drawables emit tokens through \texttt{AppendCommands}; GL draw submission is
 confined to private \pathref{Illumo/Source/Rendering/OpenGL/} (plus window
-bootstrap). Headless \pathref{Illumo/TestSupport/Include/Illumo/Testing/MockBackend.h}
+bootstrap), and Vulkan's to \pathref{Illumo/Source/Rendering/Vulkan/} (D-R33),
+chosen per launch. Headless \pathref{Illumo/TestSupport/Include/Illumo/Testing/MockBackend.h}
 powers \texttt{IllumoTests}. CanvasView
 presentation is \textbf{a padded camera cache + bounded CPU RGB fade + one RGB
 display texture/quad} with tiled multi-rect uploads (see canonical note in
 \pathref{docs/architecture-consensus.md}).
-No second real GPU API.
+OpenGL and Vulkan execute the same tokens with the same results.
 \end{statusbox}
 
 \subsection{What actually draws frames today}
 \begin{enumerate}
-  \item Modules call \symbolref{DispatchDrawables} and add \symbolref{DrawableBase*}
-        pointers to \symbolref{Scene} \textbf{layers}
-        (\texttt{World} CanvasView, \texttt{UI} console/splash, \texttt{Debug} FPS).
-  \item \symbolref{Illumo::render} pumps completed managed asset work, then
+  \item The program, then the debug overlay, dispatch into the frame's
+        \symbolref{DrawList}, adding \symbolref{DrawableBase*} pointers to its
+        \textbf{layers} (\texttt{World} CanvasView, \texttt{UI} console/splash,
+        \texttt{Debug} FPS). In a guest, the active program scene's
+        \texttt{dispatch} fills the guest's own list.
+  \item \symbolref{Illumo::endRender} pumps completed managed asset work, then
         drives \symbolref{Renderer}:
         \texttt{BeginFrame} $\rightarrow$ \texttt{RenderScene} $\rightarrow$
         \texttt{EndFrame} (swap).
   \item \symbolref{Renderer::RenderScene}:
-        one main pass --- clear + viewport tokens; walk layers
-        World $\rightarrow$ UI $\rightarrow$ Debug; each drawable
+        initial screen clear + viewport tokens; walk layers
+        World $\rightarrow$ UI $\rightarrow$ Debug, using each layer's effective
+        custom passes or ordinary screen rendering; each drawable
         \texttt{AppendCommands}; if a drawable returns false, legacy immediate
         \texttt{Draw()} still runs (hybrid fallback; production drawables return true).
         It captures window dimensions and the primary camera MVP once for that
@@ -35,29 +40,124 @@ No second real GPU API.
         \symbolref{GLDevice::ExecuteCommandQueue} resolves handles and issues GL.
 \end{enumerate}
 
-\subsection{Persistent scene extraction (D-E8)}
-The per-frame \symbolref{Scene} remains a non-owning layered drawable list.
-The separate \symbolref{SceneGraph} owns persistent hierarchy nodes and may be
-added to that list as one World drawable. Consumers hold graph-local
-generational \symbolref{SceneNodeHandle} values rather than node pointers.
-Dirty local transforms are resolved into cached parent-composed world matrices
-with iterative traversal. Enabled and visible subtree state suppresses render
-extraction without destroying persistent nodes. The render traversal uses
-retained private scratch that grows with node count; v1 does not cache a
-flattened render list.
+\subsection{Compiled scene extraction (D-E12/D-R25)}
+The per-frame \symbolref{DrawList} (named \texttt{Scene} until D-E31) stays a
+non-owning drawable list.
+\symbolref{SceneGraph} owns persistent SoA slots and intrusive hierarchy links,
+with graph-local generational handles. Structural edits lazily compile a
+preorder, parent indices, and subtree ranges. Local TRS edits set one dirty bit
+and lower a watermark; one forward pass resolves affected world transforms.
+World queries walk ancestors without consuming compiled dirtiness. Matrix
+input decomposes to TRS; shear and projective matrices are lossy.
 
-Each node may borrow one \symbolref{ISceneRenderAttachment}. During
-deterministic hierarchy pre-order, the graph supplies the resolved world
-matrix and the attachment appends ordinary backend-neutral tokens through
-\symbolref{Renderer}. The graph owns neither the attachment nor GPU resources.
-This keeps persistent world organization separate from per-frame extraction
-and backend execution. The current IllumoGame cellular-automata path does not
-instantiate a graph.
+Nodes hold interned nonunique names, opaque 64-bit payloads, and ordered borrowed
+attachments. Bounds cache by nonzero attachment revision; zero requests polling.
+World boxes transform each attachment before union, and backward refit computes
+subtree boxes. Unknown bounds fail open. A lazy binned-SAH query index has a
+linear correctness fallback; warm queries still poll revisions in linear time.
+The 4,096-entry change journal reports overflow explicitly.
+
+\texttt{SceneGraphDrawable}, not the graph, derives from
+\symbolref{DrawableBase}. It obtains one immutable snapshot per renderer frame
+and consumes its matrices, bounds, and attachment pointers for collection,
+depth, and color. Two graph-owned buffers are reused; ring reuse, attachment
+invalidation, destruction, and graph teardown expire views. The adapter checks
+the view before each callback. Owners invalidate before changing or retiring
+borrowed content and preserve emitted token payloads until submission returns.
+Mutation during extraction is rejected. All callbacks remain main-thread affine.
+
+The shared shadow fit follows caster collection. Camera-missed subtrees skip
+camera tests but retain potential off-camera casters, and depth relevance uses
+snapshot bounds after fitting. This resolves the proposal's early-shadow-flag
+assumption without changing the renderer's shadow policy. The temporary
+\texttt{sceneSnapshotExtraction=0} switch selects guarded direct traversal.
+
+Sibling order is part of the contract (D-E26):
+\texttt{setParent(node, parent, insertBefore)} places a node immediately before
+a current child of \texttt{parent}, or last when \texttt{insertBefore} is null,
+and \texttt{getPreviousSibling} complements \texttt{getNextSibling}. The cycle
+check and Reparented change record apply as for any reparent, and an unchanged
+position records nothing. Scene documents store nodes in graph preorder, so
+sibling order round-trips, and undo can restore a deleted node to its exact
+position.
+
+\subsection{SceneInstance (D-E18/D-E19)}
+Scenes reach the renderer through \symbolref{SceneInstance} in
+\texttt{Illumo::Content}, not through product code. It owns the document
+state, one \symbolref{SceneGraph}, one \symbolref{MeshVisual} per renderable
+component, and the asset references those visuals hold; stable node ids are
+graph names. Each program scene owns one as its \texttt{content()} (D-E31). A
+scene adds \texttt{drawable()} (and \texttt{skybox()} when the environment
+names one) to the frame's \symbolref{DrawList} and calls \texttt{update()} once
+per frame; \texttt{ProgramScene::dispatchContent} does both. Per-node edits (transform, flags, components, reparent with sibling
+position, create, remove) validate first, change only the nodes they touch,
+and invalidate graph snapshots before reconfiguring an attachment; recolors
+and resizes that keep a node's component kinds reconfigure the visual in
+place.
+\begin{itemize}
+  \item \textbf{Primitives:} solid shapes (rect, ellipse, triangle, cube,
+        pyramid, sphere) share one immutable unit mesh per shape and instance,
+        enrolled through \texttt{AssetManager::acquireMesh(MeshData)}; the
+        primitive extent is the visual's model scale and its color the tint.
+        Wire cube and wire sphere stay procedural.
+  \item \textbf{Assets:} mesh, texture, atlas, and cubemap assets load through
+        \symbolref{AssetManager} by normalized virtual path. A missing or
+        failed asset draws a magenta placeholder and records a warning the
+        program can read (\texttt{warnings()}).
+  \item \textbf{Lighting:} the first enabled, visible \texttt{light} component
+        in preorder supplies the one directional light; otherwise the
+        environment sun does. Ambient color and shadow settings are pushed
+        into every visual. 2D scenes are unlit.
+  \item \textbf{Skybox:} the environment's cubemap asset is drawn by a
+        \texttt{SkyboxVisual} that is a separate drawable, not a graph node.
+        \pathref{SkyboxVisual.cpp} moved into the shared guest engine so
+        every guest can use it.
+  \item \textbf{Picking:} \texttt{pickRay} tests attachment local bounds from
+        \texttt{SceneGraph::raycastCandidates} with rotation, scale and
+        effective visibility, preferring the later node in preorder on ties
+        (drawn on top in 2D). Optional pick proxies give empty, light and
+        camera nodes a selectable box.
+\end{itemize}
+Loading 2,000 nodes takes about 3.8\,ms and 1,000 batched transform edits
+about 0.8\,ms in Release (\texttt{Illumo.Content.Bench.Instantiate2000}).
+
+IllEd's \texttt{EditorDocument} edits its \texttt{EditorScene}'s content, one
+\texttt{SceneInstance}, and is the only mutation gateway; the editor adds no
+per-node attachments. IllMeshViewer
+opens scenes through the same class, and IllumoGame's \texttt{render3dTest}
+diagnostic is \pathref{IllumoGame/Scenes/render3d-test.ilsc} instantiated by
+it. Journal overflow resynchronizes bindings without rebuilding nodes. Capture
+fixtures use the adapter; CA storage and UI remain separate. See
+\pathref{docs/scene-graph-v2-design.md},
+\pathref{docs/scene-graph-v2-plan.md}, and
+\pathref{docs/content-packages-and-scenes-design.md} for evidence and gated
+follow-ups.
 
 \subsection{Layers, styles, and drawables (D-R14, D-R18)}
+The initial clear explicitly selects the screen framebuffer and full-window
+viewport. Each ordinary layer reestablishes that target and viewport before
+its drawables, including after an offscreen custom pass. The OpenGL binding
+cache starts unknown on each submission, so the first screen bind is issued
+even if the preceding submission left an offscreen framebuffer active.
+Pass color and depth clear flags are independent. Color-only passes emit a
+color-buffer clear; depth clears carry the requested value. Combined pass
+clears emit both commands. Clear tokens default to depth one, so a later
+default clear does not inherit a custom value from a previous pass.
+
+\symbolref{DrawList} stores host default passes separately from application
+overrides. Nonempty application overrides take precedence, whether installed
+in a scene's \texttt{start}, \texttt{update}, or \texttt{dispatch}. The host
+updates only defaults through \texttt{SetDefaultLayerPasses}, so motion-blur
+toggles and parameter changes cannot erase application passes. An empty
+override, \texttt{ClearLayerPasses}, or \texttt{ResetDefaultPasses} restores
+the current host fallback; without one, rendering uses the ordinary screen
+draw. \texttt{passesIn} and \texttt{hasCustomPasses} describe the effective
+sequence. A scene switch resets all application overrides and clears the
+frame's drawables before the old scene leaves, detaching borrowed callbacks
+while preserving defaults.
 \begin{itemize}
-  \item \textbf{Layer} --- composition bucket / draw order on the default FB
-        (not a multi-target GPU pass).
+  \item \textbf{Layer} --- ordered composition bucket, rendered to the screen
+        by default or through its effective custom pass sequence.
   \item \textbf{RenderStyle} --- Renderer-owned generational registry: shader handle +
         \texttt{PipelineState} defaults (\texttt{Canvas}, \texttt{UiText},
         \texttt{Console}, \texttt{Shape}, \texttt{Sprite}). Canonical Shape/Sprite
@@ -76,37 +176,98 @@ instantiate a graph.
   \item \symbolref{GameVisual} (D-R15) hosts composed
         shape/sprite/text values. Parent and local \texttt{Transform2D},
         normalized pivots, atlas regions/flips, and integer draw order build one
-        stable cross-type stream. Only adjacent compatible items batch, so
-        transparent painter order is never changed by a global texture sort.
+        stable cross-type stream. A run of one style, texture and kind joins
+        the latest earlier batch with that key when nothing drawn in between
+        overlaps it (D-R34), so a list of widgets (background, icon, label
+        each) draws as a few batches while every pixel keeps its painter-order
+        sequence of writes; there is no global texture sort. Shapes without
+        a custom style draw as sprites of the renderer's white texel, so
+        shapes, sprites and text share one pipeline (D-R35); a visual of more
+        than 64 items that are all shapes, and guest recordings, keep the
+        shape mesh.
+        Pixel-space rebuilds conservatively reject quads outside the logical
+        viewport. An optional top-left logical-pixel clip rejects fully
+        excluded quads before upload and uses nested, intersected scissor
+        tokens for partial content; popping the clip restores any outer
+        scissor (D-R23). World-space behavior is unchanged.
         Dynamic buffers reserve 1,024 quads, double as needed, and stop at a
         configurable 65,536 default ceiling.
-  \item \symbolref{MeshVisual} (D-R21) is the world mesh host and
+  \item \symbolref{MeshVisual} (D-R21/D-R24) is the world mesh host and
         \symbolref{ISceneRenderAttachment}: colored lines/triangles, textured
         quads (sprites), optional camera-facing billboards, optional
-        directional lighting with a depth-only shadow pass, and optional
-        object motion blur from the previous clip pose. It clones
+        directional lighting with participation in a scene-level depth-only
+        shadow pass, and optional object motion blur from the previous clip
+        pose. Bounds cover every geometry source immediately after mutation;
+        camera-facing sprites use a view-independent enclosing volume. It clones
         Shape/Sprite styles with depth-tested pipelines and emits
         \texttt{uMVP}. Lit meshes also emit \texttt{WorldLook} light, shadow,
         and motion-blur uniforms from CPU-side drawable state; products
         persist those values through EnvVars rather than having
         \symbolref{MeshVisual} read configuration.
-        Compose complex objects as child scene nodes, each with
-        one attachment. Overlay HUD stays on \symbolref{GameVisual}. Dynamic
-        meshes upload dirty vertices through \texttt{UpdateBuffer}; capacity
-        growth replaces the backing allocation.
+        One host can contain multiple visual items. Use child scene nodes for
+        independent transforms and subtree state; each node may borrow an ordered
+        list of attachments. Overlay HUD stays on \symbolref{GameVisual}. Dynamic
+        procedural meshes upload dirty vertices through \texttt{UpdateBuffer};
+        capacity growth replaces the backing allocation. Immutable imported
+        meshes instead borrow one reference-counted \texttt{MeshHandle} from
+        \symbolref{AssetManager}; multiple visuals reuse the upload while
+        retaining independent transform, tint, lighting, and motion state.
+        The Renderer retains caster descriptors, chooses light settings from
+        the first camera-visible caster, and filters them against a conservative
+        camera-frustum extrusion toward the light. Invalid reconstruction falls
+        back to all casters. A monotonically increasing frame serial resets
+        previous-MVP history when a culled visual re-enters.
 \end{itemize}
 
-\subsection{Managed texture and shader assets (D-R17)}
+\subsection{Managed assets (D-R17/D-R24)}
+Shared fonts cache one atlas handle per live renderer ownership identity,
+not per raw renderer address. The identity is weak in the font cache; expired
+entries are pruned and explicitly retired texture handles are reenrolled.
+Alternating live renderers reuses their separate enrollments. Renderer teardown
+invalidates the identity before backend teardown; GPU ownership stays with the
+backend, and a font never dereferences a retired renderer.
+
 \symbolref{AssetManager} caches canonical file paths plus loading options and
 returns stable typed handles. Duplicate acquisition increments a reference
 count; the final release destroys the backend resource. Initial pending or
-failed requests retain a checkerboard texture or a fallback shader that follows
+failed 2D texture/shader requests retain a checkerboard or fallback shader that follows
 the documented custom-2D binding contract. One owned worker performs file reads
 and stb decoding; \texttt{pump} applies GPU
 replacement on the render thread before frame submission. Failed reloads keep
 the last good object and record an error. Debug builds poll timestamps every
 500\,ms and coalesce requests; explicit reload is available in all builds.
 Shutdown cancels obsolete results and joins the worker before backend teardown.
+
+Static mesh acquisition is synchronous and main-thread affine. The
+\symbolref{MeshLoader} converts a file to CPU \texttt{MeshData};
+\symbolref{AssetManager} canonicalizes the file path plus geometry-affecting
+options, enrolls one immutable backend mesh, and returns its typed handle.
+Duplicate acquisition increments a reference count and final release destroys
+the backend resource. In-memory mesh data can be enrolled once and explicitly
+retained for multiple consumers. Managed mesh metadata supplies the immutable
+vertex/index counts and bounds needed by drawables. Mesh hot reload, materials,
+and automatic instance aggregation remain outside this milestone.
+
+The byte source is an \texttt{IAssetSource}: the file system natively,
+\texttt{VfsAssetSource} over the host file tree in tools and native tests, and
+\texttt{GuestVfsAssets} in guests, where canonical keys are normalized
+absolute virtual paths (D-E24). \texttt{AssetManager::assetSource()} exposes
+the source so a product can read a scene through it. MTL libraries beside an
+OBJ resolve through the same source: \texttt{MeshLoader::materialLibraryNames}
+is the single \texttt{mtllib} scanner, \texttt{AssetManager::acquireMesh}
+reads each named library relative to the OBJ, and the text reaches the loader
+as \texttt{MeshLoadOptions::materialText}. Materials are parsed but still not
+bound.
+
+Cubemaps retain their source kind and all canonical face paths (or the cross
+path). Initial acquisition remains synchronous; reload decoding uses the same
+CPU job path and publishes all six RGBA faces through cubemap replacement.
+Initial success has revision one. Explicit path reload and timestamp polling
+observe every face. Decode timestamps are captured before reading, so a later
+edit remains observable on the next poll. Missing/mismatched faces or rejected
+replacement keep the prior ready resource and revision. Cross extraction and
+orientation are shared by initial load and reload; texture kinds cannot change
+during replacement.
 
 \subsection{CanvasView presentation (bounded RGB fade + dirty rects)}
 \label{sec:canvas-rgb-fade}
@@ -148,6 +309,73 @@ Shutdown cancels obsolete results and joins the worker before backend teardown.
         \pathref{docs/architecture-consensus.md} \S5.6.
 \end{itemize}
 
+\subsection{Instancing, recorded lists and RenderWorld (D-R28, D-R30)}
+\begin{itemize}
+  \item Buffers: backends may create generational instance and uniform
+        buffers (\texttt{BufferHandle}, \texttt{IBackend::CreateBuffer}); the
+        defaults return an invalid handle so recording and test backends need
+        no change. Tokens \texttt{WriteBuffer}, \texttt{BindUniformBuffer},
+        \texttt{SetInstanceStream} and \texttt{DrawIndexedInstanced} fill and
+        use them. Instance attributes occupy locations 4--12
+        (\texttt{InstanceLayout::LitModelTint}: model, previous model, tint;
+        144 bytes).
+  \item Frame block: \symbolref{Renderer} writes one std140
+        \texttt{FrameUniforms} block (view-projection, previous
+        view-projection, light space, shadow state) the first time a drawable
+        calls \texttt{useFrameUniforms()} in a \texttt{RenderScene}. The
+        instanced styles \texttt{LitMeshInstanced} and
+        \texttt{ShadowDepthInstanced} (\pathref{Shader/mesh\_lit\_instanced\_*.glsl},
+        \pathref{Shader/shadow\_depth\_instanced\_vertex.glsl}) read it and
+        otherwise match the lit and shadow-depth math.
+  \item Recorded lists: \texttt{RecordedCommandList} tokens are recorded once
+        through the ordinary push helpers and run in place by one
+        \texttt{ExecuteList} token per list. A list owns its matrices, refuses
+        nested lists, has its own ceiling, and is counted per frame.
+  \item \texttt{RenderWorld}: a World drawable owning persistent instances,
+        materials and one environment behind \texttt{IRenderWorld}. Instances
+        sharing a mesh range and material draw with one instanced call per
+        pass. Per frame it culls against the camera and shadow volume,
+        streams visible instances and patches counts; its lists re-record only
+        when buffers, materials or the environment change. With a mock
+        backend, 2,000 objects cost 0.11\,ms and 30 tokens per frame against
+        3.8\,ms and 50,017 tokens as one MeshVisual each. On a real GPU its
+        images are bit-identical to MeshVisual's, shadows included.
+        \symbolref{SceneInstance}\texttt{::setRenderWorld} puts a scene's
+        mesh-asset visuals into it (IllMeshViewer, IllEd, the game's 3D mode).
+        It can also draw a sky (\texttt{setSkybox}) first, rebuilding the
+        rotation-only view projection from the frame camera
+        (\pathref{docs/host-render-world-design.md}).
+  \item Worlds per scene (D-R30): frame schema v8 addresses host render
+        worlds. \texttt{SelectWorld} (10) sends the world operations after it
+        to a world id, created on first use; \texttt{ShowWorld} (11) picks the
+        world that draws (0: none); \texttt{DestroyWorld} (12) releases one
+        and everything in it. A version 7 frame is exactly ``world 1, shown''.
+        A guest has at most 8 worlds, material and instance ids are per world,
+        and the shown world draws with the frame camera. The guest SDK's
+        \texttt{GuestSceneWorlds} gives every program scene its own
+        \texttt{GuestRenderWorld}, so a kept scene's objects stay on the host
+        undrawn and steady frames send nothing. \texttt{hostRenderWorld=0}
+        still gives scenes no world.
+\end{itemize}
+
+\subsection{Host-retained 2D visuals (D-R29)}
+\begin{itemize}
+  \item \texttt{VisualStore}: 2D visuals by id, each a
+        \symbolref{GameVisual} edited in place (items by index, opacity). A
+        visual's draw tokens are recorded once and replayed with
+        \texttt{ExecuteList} until its geometry or frame state (resolution,
+        projection, clip) changes. \texttt{GameVisual::prepareFrame} builds
+        and uploads; \texttt{emitDraws} pushes only clip and batch tokens.
+  \item Guests: \texttt{GameVisual::AppendCommands} offers the visual to
+        \texttt{IBackend::AppendVisual}, and \texttt{SkyboxVisual} to
+        \texttt{AppendSkybox}. The guest recorder sends visual operations
+        (frame schema v7 and later; only unconfirmed changes) and per-target
+        compositions,
+        and the host draws them through \texttt{VisualStore} in painter order
+        between the remaining batches. Visuals that cannot travel, the canvas
+        quad and the MeshVisual line overlays still record retained batches.
+\end{itemize}
+
 \subsection{Backend surface}
 \symbolref{IBackend}: lifecycle and command-queue push/submit/clear. Resource
 creation returns non-convertible slot+generation \texttt{MeshHandle},
@@ -157,17 +385,40 @@ with a warning and safe no-op.
 
 \symbolref{CommandQueue}: vector storage reserves 2,048 tokens, grows to a
 configurable 65,536 default safety ceiling, and reports high-water and rejected
-counts. Rejection logs once per reset interval.
+counts. Rejection logs once per reset interval. On the supported 64-bit Windows
+build each token is 72 bytes. Matrix-uniform values are copied into retained
+renderer-owned chunks of 128 matrices and the compact token borrows that stable
+value until synchronous submission returns; the chunks reset after submission
+and are reused by later frames. Matrix side storage uses a matching default
+65,536-value safety ceiling so rejected token storms cannot grow it without
+bound.
 
 \symbolref{RenderCommand}: tagged union (\texttt{CommandType} + POD payload)
 including pipeline, bind, uniforms, \texttt{UpdateTexture}, \texttt{UpdateBuffer},
 clear, draw, and explicit enabled/disabled scissor state (D-R1).
+
+Each \symbolref{GLShaderProgram} owns its uniform-location cache. Cache hits use
+the token's name directly rather than building and hashing a combined
+program-ID/name string, and shader replacement or destruction retires cached
+locations with the owning program.
+
+Renderer maintains a per-frame scissor stack for \texttt{pushClipRect}/
+\texttt{popClipRect}. Nested clips intersect in physical viewport coordinates
+and restore the prior state; low-level \texttt{pushScissor} remains the explicit
+state-token path (D-R23).
 
 \symbolref{GLTexture::UpdateSubImage}: rectangles through 64\,KiB use direct
 \texttt{glTexSubImage2D}. Larger uploads select a signaled slot from a
 three-PBO/\texttt{GLsync} ring without waiting; all-busy and map-failure cases
 fall back to the direct path. Replacement/destruction deletes every fence and
 buffer and retains the OpenGL 3.3 baseline.
+
+Uploads reject invalid bounds, channel counts, row strides, and byte-size
+overflow before any staging or GL call. Uploads bind on texture unit zero,
+matching the device cache, and restore the caller's active unit and unpack
+state. Cubemap file decoding explicitly produces RGBA for every face and cross;
+raw two-channel cubemaps are rejected instead of reinterpreted as RGBA. OBJ
+conversion validates all attribute references before publishing mesh data.
 
 \symbolref{GLDevice}: bind-state tracker (skip redundant program/VAO/texture/
 viewport within a submit); uniform location cache; blend-func-on-enable (D-R5).
@@ -178,6 +429,56 @@ frame-paced mode or an explicit uncapped profiling mode and may change live at
 a swap boundary. Debug labels swap-completion cadence as \texttt{Paced FPS} and
 main-loop work as \texttt{Submit FPS}; uncapped mode reports paced FPS as off
 instead of treating thousands of CPU submissions as displayed frames (D-P32).
+
+\subsection{Vulkan backend (D-R33)}
+\texttt{Rendering/Vulkan/} is a second complete \symbolref{IBackend}. The
+\texttt{GraphicsAPI} setting (\texttt{OPENGL} by default, or \texttt{VULKAN};
+also \texttt{--graphics-api} and the console \texttt{set}, applied at the next
+launch) picks the window and backend in \texttt{Illumo::initialize}; if the
+Vulkan window or backend cannot start, the host logs why and starts OpenGL
+instead, keeping the preference. The window for Vulkan is created with
+\texttt{GLFW\_NO\_API}; everything else about it is unchanged.
+
+The backend executes the same tokens and compiles the same GLSL 330 text, with
+the OpenGL backend's observable results:
+\begin{itemize}
+  \item Every image, including a stand-in for the default framebuffer, is
+        stored bottom row first and drawn with an unflipped viewport, so
+        \texttt{gl\_FragCoord}, viewport, scissor and readback numbers match
+        OpenGL; presentation blits the image to the swapchain flipped. Front
+        faces are inverted and vertex shaders remap clip $z$ from $[-w,w]$.
+  \item glslang compiles the shaders at run time under Vulkan's relaxed GLSL
+        rules: loose uniforms form a per-program default block whose values
+        persist as OpenGL program uniforms do, samplers and blocks are bound
+        automatically, and varyings are matched by name.
+  \item OpenGL's state machine is kept per device: texture units, uniform
+        binding points, pipeline state, viewport and scissor persist; a mesh's
+        instance stream stays attached as a VAO keeps it; missing vertex
+        attributes read $(0,0,0,1)$ and empty texture units sample black.
+  \item Uploads are ordered with draws: until a resource is used in a
+        submission its updates go to that submission's upload command buffer,
+        afterwards inline in the main one.
+  \item Multisampled lines are rectangular and aliased ones Bresenham, sample
+        positions mirror the OpenGL driver's, and the resolve is gamma-correct,
+        as the NVIDIA OpenGL driver resolves its default framebuffer.
+  \item Asynchronous framebuffer readbacks submit their copy when first polled,
+        as a flushing OpenGL fence poll does, so detached panels update at the
+        same rate on both backends.
+  \item Presentation never waits unboundedly: an image the compositor still
+        holds stays pending and the frame goes unshown, and while the login
+        session is locked no presents are issued (the driver's present call
+        can stall there), with the loop still paced by the refresh interval.
+\end{itemize}
+
+\texttt{Illumo.Gpu.BackendParity} renders seven scenes through both backends
+in one process --- lit and shadowed meshes with a RenderWorld and sky, 2D
+visuals through \texttt{renderOffscreen}, raw tokens covering culling,
+primitives, blending, depth, scissored clears, instancing and uniform arrays,
+texture formats and in-frame updates, render-target readback conversions, the
+detached-panel readback loop, and the default framebuffer with motion blur ---
+and compares the pixels. The dependencies are Vulkan-Headers, volk, glslang and
+the Vulkan Memory Allocator, pinned to Vulkan SDK 1.4.363.0 and built from
+\texttt{Illumo/thirdparty}; the driver supplies \texttt{vulkan-1.dll}.
 
 \subsection{Primitive-composed UI (D-R20)}
 \begin{itemize}
@@ -191,24 +492,33 @@ instead of treating thousands of CPU submissions as displayed frames (D-P32).
   \item \symbolref{GLString}: geometry cache --- skip VBO re-upload if
         content/style unchanged (FPS $\sim$1\,Hz rebuilds). Optional panel
         chrome adds a shadow, surface, border, and accent in the same batch.
-  \item \symbolref{SplashText}: fading EDIT/NORMAL label built on decorated
-        GLString chrome; the two modes use distinct shared theme accents.
+  \item \symbolref{SplashText}: fading corner notice label built on decorated
+        GLString chrome. The simulator now draws its EDIT/NORMAL badge itself
+        from GuiKit glass (\texttt{ModeBadge}); the engine class is retained.
   \item \texttt{UiTheme}: shared value-only colors and compact panel metrics;
         it is not a retained widget tree or layout engine.
-  \item \symbolref{DebugModule}: \texttt{renderer\_demo}, \texttt{assets}, and
+  \item \symbolref{GameVisual} gradient quads (D-R26): convex, fan-ordered
+        quads with one color per vertex through the ordinary shape vertex
+        format and shader. GuiKit composes soft chrome from them (glass
+        panels, gradient surfaces, soft shadows, radial glows, vignettes,
+        sheens, keycaps); fades keep their color at zero alpha so
+        straight-alpha blending never darkens an edge.
+  \item \symbolref{DebugOverlay}: \texttt{renderer\_demo}, \texttt{assets}, and
         \texttt{asset\_reload} prove managed atlas/shader loading, atlas
         animation, transforms, tint, alpha order, async load, state inspection,
-        and reload in Debug builds only.
+        and reload in debug-tool builds only.
 \end{itemize}
 
 \subsection{Tests (headless)}
 \texttt{IllumoTests} owns persistent scene hierarchy plus reusable
 rendering/services cases, while
-\texttt{IllumoGameTests} owns CanvasView, ruleset, CellGameModule, simulation,
-and persistence cases. Both are shared binaries for compile efficiency, but
+\texttt{IllumoGameTests} owns CanvasView, ruleset, TitleScene, CanvasScene,
+simulation, and persistence cases. Editor and mesh-viewer cases have their own runners.
+These are shared binaries for compile efficiency, but
 CTest invokes one exact logical case per isolated process (D-T1). No GPU
 context is required. Combined Clang/LLVM \texttt{IllumoCoverage} enforces 85\%
-line coverage over headless-testable first-party production code.
+line coverage over headless-testable first-party production code linked into
+all registered workspace runners.
 
 \subsection{Remaining pain points (non-blocking)}
 \begin{enumerate}
@@ -218,8 +528,44 @@ line coverage over headless-testable first-party production code.
         (D-R9).
   \item \pathref{RenderWindow} still uses GLEW for context create / viewport
         (window bootstrap, not frame submission).
-  \item Windows is the supported live path. Linux and macOS bootstraps are
-        known stale against current App APIs and have no native validation.
-  \item Font atlases/UTF-8 layout, tilemaps/particles, general 3D meshes, and offscreen compositing
-        are follow-on features, not hidden scaffolding in the current renderer.
+  \item Windows is the supported live path. Linux window bootstrap no longer
+        issues GL calls before GLEW; native GUI smoke is still required.
+        macOS is not targeted and has no retained scaffold.
+  \item Font atlases/UTF-8 layout, tilemaps/particles, mesh materials and formats
+        beyond OBJ, and broader offscreen compositing are follow-on features,
+        not hidden scaffolding in the current renderer.
 \end{enumerate}
+
+
+\subsection{Standalone frame capture (2026-09-11)}
+\texttt{FrameCapture} creates a hidden, unpaced OpenGL context for one synchronous
+producer callback. No application host, input, simulation, audio or persistent
+configuration starts. The producer owns its content through normal token
+submission and destroys renderer-bound objects before returning. The renderer
+reads top-down RGBA8 pixels before swap and tears down before the context.
+Strict capture rejects immediate fallback, invalid resources and queue overflow.
+Existing applications retain normal scheduling and visible-window defaults.
+The former \texttt{IllumoCapture} fixture CLI is removed (D-E14). Command-line
+capture is now \texttt{IllumoRuntime --capture}: a running WASM application
+renders to \texttt{--capture-frame} (default 60), a
+\texttt{Renderer::setBeforePresent} hook reads back the presented backbuffer,
+\texttt{FrameCapture::savePng} publishes a new PNG, and one JSON result line
+reports success, size and error. \texttt{--capture-script} first runs
+bench-script steps (console lines, key presses, waits) so a capture can reach a
+later screen, and the saved frame is forced opaque to match the presented
+window. \texttt{FrameCapture} itself remains the
+engine API, checked on a real GPU by \texttt{IllumoCaptureGpuTests}.
+See \texttt{docs/frame-capture.md} for inputs, publication and limitations.
+
+Current 3D facilities include CPU OBJ import, directional lighting,
+per-drawable self-shadowing and post-processing, and scene-level environment
+lighting, sun and skybox resolved by \texttt{SceneInstance} from a scene's
+\texttt{settings.environment}. These do not yet implement registered game
+objects or physics integration.
+
+Renderer-bound GameVisual resources retain one renderer lifetime. Foreign use,
+truncated geometry, and queue rejection report incomplete frames and suppress
+presentation. Rejected retained uploads retry on a subsequent frame. Backend
+queue totals survive pass resets; native GPU names live only in private GL types.
+Mesh and texture enrollment validates actual storage before publishing a handle;
+failed replacements preserve old resources and oversized vertex writes fail early.

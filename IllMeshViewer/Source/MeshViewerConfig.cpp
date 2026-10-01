@@ -31,6 +31,7 @@ MeshViewerConfig::ApplyDefaults(IEnvVars* environment)
     { "showGrid", "1" },
     { "showAxes", "1" },
     { "showWireframe", "0" },
+    { "showSkybox", "1" },
     { "lightingEnabled", "1" },
     { "lightDirX", "0.5" },
     { "lightDirY", "1" },

@@ -13,11 +13,17 @@ enum class ExitConfirmAction
   None,
   Confirm,
   Cancel,
-  MainMenu
+  MainMenu,
+  ClearCanvas,
+  ResetCanvas,
+  Restart
 };
 
-// Primitive-composed exit confirmation overlay backed by
-// Illumo::Gui::GuiDialog.
+// Primitive-composed confirmation overlay backed by Illumo::Gui::GuiDialog.
+// It asks before leaving (open), before clearing the canvas
+// (openClearCanvas), before putting back the rule's starting pattern
+// (openResetCanvas), or whether to restart now for settings that only a
+// restart applies (openRestart); the owner treats each as the same modal.
 class ExitConfirmDialog : public DrawableBase
 {
 public:
@@ -28,9 +34,14 @@ public:
   ExitConfirmDialog& operator=(const ExitConfirmDialog&) = delete;
 
   void open();
+  void openClearCanvas();
+  void openResetCanvas();
+  // inCanvas warns that the open world closes with the restart.
+  void openRestart(bool inCanvas);
   void close();
   bool isOpen() const { return m_dialog.isOpen(); }
   void tick(float deltaSeconds);
+  void setReducedMotion(bool enabled) { m_dialog.setReducedMotion(enabled); }
   ExitConfirmAction update(InputManager* inputManager);
   GameVisual& getVisual() { return m_dialog.getVisual(); }
 
@@ -48,5 +59,12 @@ public:
   bool AppendCommands(Renderer* renderer) override;
 
 private:
+  void configureExit();
+  void configureClearCanvas();
+  void configureResetCanvas();
+  void configureRestart(bool inCanvas);
+
   GuiDialog m_dialog;
+  // The dialog recomputes hover every frame; cues fire when it changes.
+  int m_lastHovered = -1;
 };

@@ -6,6 +6,8 @@ and formal decision log; they do not override either.
 
 Current records:
 
+- `2026-09-17-linux-port-release-v26.09.md` — Linux platform repair, gtkmm-3
+  dialogs/clipboard, X11-only GLFW, and Ubuntu 24.04 build/run instructions.
 - `2026-08-30-clang-tidy.md` — workspace `IllumoTidy` clang-tidy gate, Ninja/Clang
   compile database, `python build.py tidy`, and first-party check set.
 - `2026-08-04-illumo-console-and-documentation.md` — product rename, console

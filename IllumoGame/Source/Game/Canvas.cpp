@@ -1,5 +1,6 @@
 #include "Canvas.h"
 #include "Rulesets/RuleSet.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -8,7 +9,6 @@
 #include <cmath>
 #include <cstring>
 #include <glm/fwd.hpp>
-#include <tracy/Tracy.hpp>
 
 Canvas::Canvas(int width,
                int height,
@@ -69,7 +69,7 @@ Canvas::rebuildDefaultPalette()
 void
 Canvas::rebuildPalette(const RuleSet* rules)
 {
-  ZoneScopedN("Canvas.rebuildPalette");
+  ILLUMO_PROFILE_ZONE("Canvas.rebuildPalette");
   if (!rules) {
     rebuildDefaultPalette();
   } else {
@@ -256,7 +256,7 @@ Canvas::setTargetColorRect(int cellIndex,
 void
 Canvas::rebuildTargetsFromLife()
 {
-  ZoneScopedN("Canvas.rebuildTargetsFromLife");
+  ILLUMO_PROFILE_ZONE("Canvas.rebuildTargetsFromLife");
   if (!cellsDirty || !lifeCanvas) {
     return;
   }
@@ -344,7 +344,7 @@ Canvas::writeTexelFromDisplay(int cellIndex,
 void
 Canvas::snapVisualToTargets()
 {
-  ZoneScopedN("Canvas.snapVisualToTargets");
+  ILLUMO_PROFILE_ZONE("Canvas.snapVisualToTargets");
   bool anyByteChange = false;
 
   int x0 = 0;
@@ -378,7 +378,7 @@ Canvas::snapVisualToTargets()
 void
 Canvas::tickVisual(float dt)
 {
-  ZoneScopedN("Canvas.tickVisual");
+  ILLUMO_PROFILE_ZONE("Canvas.tickVisual");
   if (!fadeActive) {
     return;
   }
@@ -456,7 +456,7 @@ Canvas::DrawImpl()
 bool
 Canvas::AppendCommands(Renderer* r)
 {
-  ZoneScopedN("Canvas.AppendCommands");
+  ILLUMO_PROFILE_ZONE("Canvas.AppendCommands");
   if (!isVisible() || !gpuReady || !r) {
     if (!isVisible()) {
       return true;
@@ -466,7 +466,7 @@ Canvas::AppendCommands(Renderer* r)
 
   // RGB display texture: dirty-rect upload (PBO path inside GLTexture).
   if (textureUploadPending && texCanvasBuffer) {
-    ZoneScopedN("Canvas.UpdateDisplayTexture");
+    ILLUMO_PROFILE_ZONE("Canvas.UpdateDisplayTexture");
     int x = 0;
     int y = 0;
     int w = canvasWidth;

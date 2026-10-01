@@ -19,41 +19,16 @@ if(NOT DEFINED JOBS OR JOBS STREQUAL "" OR JOBS STREQUAL "0")
   endif()
 endif()
 
-set(FILE_REGEX
-  "(IllumoGame|IllMeshViewer|IllEd|Illumo)[/\\\\](Include|Source|Tests|TestSupport)[/\\\\]")
-
-file(STRINGS "${COMPILE_COMMANDS}" COMPILE_FILE_LINES REGEX "\"file\"")
-set(MATCHED_TRANSLATION_UNITS 0)
-foreach(line IN LISTS COMPILE_FILE_LINES)
-  if(line MATCHES "thirdparty")
-    continue()
-  endif()
-  if(line MATCHES "${FILE_REGEX}")
-    math(EXPR MATCHED_TRANSLATION_UNITS "${MATCHED_TRANSLATION_UNITS} + 1")
-  endif()
-endforeach()
-if(MATCHED_TRANSLATION_UNITS EQUAL 0)
-  message(FATAL_ERROR
-    "No first-party translation units matched ${FILE_REGEX} in "
-    "${COMPILE_COMMANDS}")
-endif()
-
-message(STATUS
-  "Running clang-tidy on ${MATCHED_TRANSLATION_UNITS} first-party "
-  "translation units (${JOBS} jobs)")
-
 execute_process(
   COMMAND
     "${PYTHON}"
-    "${RUN_CLANG_TIDY}"
-    -p "${BINARY_DIR}"
-    -clang-tidy-binary "${CLANG_TIDY}"
-    -config-file "${SOURCE_DIR}/.clang-tidy"
-    -j "${JOBS}"
-    -quiet
-    -hide-progress
-    --
-    "${FILE_REGEX}"
+    "${CMAKE_CURRENT_LIST_DIR}/RunWorkspaceTidy.py"
+    --source-dir "${SOURCE_DIR}"
+    --binary-dir "${BINARY_DIR}"
+    --clang-tidy "${CLANG_TIDY}"
+    --run-clang-tidy "${RUN_CLANG_TIDY}"
+    --python "${PYTHON}"
+    --jobs "${JOBS}"
   WORKING_DIRECTORY "${SOURCE_DIR}"
   RESULT_VARIABLE TIDY_RESULT)
 if(NOT TIDY_RESULT EQUAL 0)
