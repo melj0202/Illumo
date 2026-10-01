@@ -15,7 +15,7 @@ D-E24 and D-E26.
 - The guest mirror `IllumoGuestContent` (`IllumoGuest/CMakeLists.txt`) builds
   the serial-safe subset: `VirtualPath`, `PackageManifest`, `SceneDocument`,
   `IlscCodec`, `SceneAssetRefs`, `SceneInstance`, `ScenePrimitiveMeshes`,
-  `BehaviourSchema`, `SceneBehaviours`.
+  `BehaviourSchema`, `SceneBehaviours`, `ScenePlay`.
   `PackageArchive`, `VirtualFileSystem`, `VfsAssetSource`, `VfsConsole`,
   `VfsTreeSource` and `PackageMounts` are host-only. Keep a new source in the
   right list.
@@ -55,7 +55,10 @@ D-E24 and D-E26.
   callback. `SceneBehaviours` runs behaviour code in its `update()`, queues
   structural edits until after the pass, and never stores a node handle
   across frames. `behaviours.json` is decoded strictly like `.ilsc`;
-  invalid component values fall back to defaults with a warning.
+  invalid component values fall back to defaults with a warning. The
+  `illumo.play` scene extension (the game and a launched copy's package root)
+  is read and written only through `ScenePlay`, which keeps members it does
+  not know.
 - No recursion: tree walks, dependency order (Kahn) and flattening are
   iterative.
 

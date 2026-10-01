@@ -127,6 +127,7 @@ target_link_libraries(IllumoGuestEngine PUBLIC IllumoGuestRendering)
 # file services.
 add_library(IllumoGuestContent STATIC
   ../Illumo/Source/Content/BehaviourSchema.cpp
+  ../Illumo/Source/Content/ScenePlay.cpp
   ../Illumo/Source/Content/IlscCodec.cpp
   ../Illumo/Source/Content/PackageManifest.cpp
   ../Illumo/Source/Content/ProgramScene.cpp

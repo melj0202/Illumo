@@ -28,9 +28,10 @@ includes `<Illumo/Content/...>`, and guests compile its serial-safe subset as
 | `IllEd/Tests/` | `IllEd.*` product cases |
 | `IllMeshViewer/Source/` | The viewer scene (`MeshViewerScene`), camera, configuration, input, menu bar and Info/Display panels |
 | `IllMeshViewer/Tests/` | `IllMeshViewer.*` product cases |
+| `Playground/` | The sample game for scene behaviours (D-E35): `Playground.wasm` (a `GuestPlayProgram`), its `behaviours.json`, demo scene and `Playground.Wasm.*` package tests |
 
 `Illumo/Shader`, `Illumo/Assets`, notices, dependencies, and licenses remain
 library-owned. `IllumoGame/envvars.json`, `IllEd/envvars.json`, and
-`IllMeshViewer/envvars.json` are product-owned, as are each product's
+`IllMeshViewer/envvars.json` (and `Playground/envvars.json`) are product-owned, as are each product's
 `illumo.json` package manifest (which replaced `app.json`). Historical
 material under `archive/` is not built.

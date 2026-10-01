@@ -45,7 +45,12 @@ if(BUILD_TESTING)
   # With a writable /project: place project assets and save into the project.
   add_test(NAME IllEd.Wasm.ProjectPackage
     COMMAND IllEdWasmPackageTests --run IllEd.Wasm.ProjectPackage)
-  set_tests_properties(IllEd.Wasm.Package IllEd.Wasm.ProjectPackage PROPERTIES
+  # Play: an installed game's behaviours at /apps and a launch through the
+  # Launch capability.
+  add_test(NAME IllEd.Wasm.PlayPackage
+    COMMAND IllEdWasmPackageTests --run IllEd.Wasm.PlayPackage)
+  set_tests_properties(IllEd.Wasm.Package IllEd.Wasm.ProjectPackage
+    IllEd.Wasm.PlayPackage PROPERTIES
     LABELS "IllEd;IllumoWorkspace" TIMEOUT 300
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllEdWasmPackageTests>")
   add_dependencies(IllumoRunTests IllEdWasmPackageTests)

@@ -2,11 +2,11 @@
 
 #include <Illumo/Content/IlscCodec.h>
 #include <Illumo/Content/SceneAssetRefs.h>
+#include <Illumo/Content/ScenePlay.h>
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/Logger.h>
 #include <cstdio>
-#include <nlohmann/json.hpp>
 #include <utility>
 
 // ---------------------------------------------------------------------------
@@ -114,21 +114,9 @@ GuestPlayScene::start(IllumoContext& startContext)
 static std::string
 launchedRoot(const SceneDocument& document)
 {
-  for (const SceneExtension& extension : document.extensions) {
-    if (extension.key != "illumo.play") {
-      continue;
-    }
-    const nlohmann::json data =
-      nlohmann::json::parse(extension.data, nullptr, false);
-    if (data.is_object() && data.contains("root") && data["root"].is_string()) {
-      const std::string root = data["root"].get<std::string>();
-      std::string normalized;
-      if (!root.empty() && root.front() == '/' &&
-          scenePackageRoot(root + "/scene.ilsc", normalized) &&
-          normalized == root) {
-        return root;
-      }
-    }
+  ScenePlay play;
+  if (ScenePlay::read(document.extensions, &play) && !play.root.empty()) {
+    return play.root;
   }
   return "/local";
 }

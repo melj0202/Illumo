@@ -233,7 +233,58 @@ public:
   {
     done(Clipboard::GetText());
   }
+  bool canLaunch() const override { return IllEdNativeLauncher::available(); }
+  void launchApp(const std::string& application,
+                 const std::string& name,
+                 const std::string& document,
+                 LaunchCallback done) override
+  {
+    if (!IllEdNativeLauncher::available()) {
+      done(false);
+      return;
+    }
+    IllEdNativeLauncher::launches().push_back({ application, name, document });
+    IllEdNativeLauncher::running() = true;
+    done(true);
+  }
+  void stopApp() override { IllEdNativeLauncher::running() = false; }
+  bool appRunning() const override { return IllEdNativeLauncher::running(); }
 };
+
+static bool&
+launcherAvailable()
+{
+  static bool available = false;
+  return available;
+}
+
+void
+IllEdNativeLauncher::setAvailable(bool available)
+{
+  launcherAvailable() = available;
+  launches().clear();
+  running() = false;
+}
+
+bool
+IllEdNativeLauncher::available()
+{
+  return launcherAvailable();
+}
+
+std::vector<IllEdNativeLauncher::Launch>&
+IllEdNativeLauncher::launches()
+{
+  static std::vector<Launch> recorded;
+  return recorded;
+}
+
+bool&
+IllEdNativeLauncher::running()
+{
+  static bool runs = false;
+  return runs;
+}
 
 static std::shared_ptr<VirtualFileSystem>&
 installedTree()

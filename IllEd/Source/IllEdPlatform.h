@@ -119,6 +119,26 @@ public:
     done(false, "No project is mounted");
   }
 
+  // --- Play: another installed application (the Launch capability). ---
+  using LaunchCallback = std::function<void(bool started)>;
+  // Whether this host can launch applications at all.
+  virtual bool canLaunch() const { return false; }
+  // Starts `application` with `document` (scene text) as its launch document
+  // named `name`, replacing any application launched before.
+  virtual void launchApp(const std::string& application,
+                         const std::string& name,
+                         const std::string& document,
+                         LaunchCallback done)
+  {
+    (void)application;
+    (void)name;
+    (void)document;
+    done(false);
+  }
+  virtual void stopApp() {}
+  // Whether the launched application still runs; refreshed while it does.
+  virtual bool appRunning() const { return false; }
+
   // Defined once per link: the native oracle or the guest service adapter.
   static IllEdPlatform& current();
 };
@@ -133,6 +153,24 @@ class IllEdNativeTree
 public:
   static void install(std::shared_ptr<VirtualFileSystem> tree);
   static std::shared_ptr<VirtualFileSystem> current();
+};
+
+// The native oracle's launcher, for tests: once available, launches are
+// recorded (and report started) instead of starting anything.
+class IllEdNativeLauncher
+{
+public:
+  struct Launch
+  {
+    std::string application;
+    std::string name;
+    std::string document;
+  };
+  static void setAvailable(bool available);
+  static bool available();
+  static std::vector<Launch>& launches();
+  // Whether the recorded launch still "runs"; tests end it by hand.
+  static bool& running();
 };
 
 // Native scene file access by UTF-8 path, used by the native platform and the

@@ -84,6 +84,9 @@ enum class EditorCommand
   NudgeExtent,
   ResetCamera,
   FrameSelection,
+  // Plays the scene in its game's own window, or stops it (Ctrl+P; the host
+  // keeps F5 for asset reloads).
+  PlayScene,
   // View > panels: show or hide, pop out or dock, and reset the layout.
   ToggleHierarchyPanel,
   ToggleAssetsPanel,

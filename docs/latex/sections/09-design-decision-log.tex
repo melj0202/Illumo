@@ -3629,6 +3629,66 @@ generation per start.\\
 \textbf{Extends:} D-E33
 \end{decisionbox}
 
+\subsection*{D-E35 --- Scene behaviours}
+\begin{decisionbox}[title={D-E35 \quad 2026-10-01}]
+\textbf{Decision:} A scene node gets game code by holding a namespaced
+component (\texttt{playground.spinner}) whose type a game registered in its
+own WASM program (\pathref{docs/scene-behaviours-design.md}). A game package
+ships \texttt{behaviours.json} (format \texttt{illumo-behaviours}~1) beside
+\texttt{illumo.json}, describing each behaviour's typed fields (number,
+integer, bool, text, color, vector3, choice, asset, node) with defaults and
+limits; \symbolref{BehaviourSchema} decodes component data against it
+(clamping, warning, keeping unknown members) and encodes it canonically.
+\symbolref{SceneBehaviours} observes a \symbolref{SceneInstance} through
+\texttt{ISceneContentObserver} and runs one \symbolref{SceneBehaviour} per
+component (\texttt{start}, \texttt{update}, \texttt{valuesChanged},
+\texttt{stop}) from a \symbolref{BehaviourRegistry}; behaviours create and
+destroy nodes through queued requests. \texttt{GuestPlayProgram} plays a
+launched or default scene with them, and IllEd shows known behaviours as
+typed inspector fields with Add behaviour, reading every
+\texttt{behaviours.json} under \texttt{/apps}, \texttt{/packages} and
+\texttt{/project}.\\
+\textbf{Why:} Owner request: Unity-style scripting that keeps WebAssembly.
+Code stays in each game's one sandboxed program (D-E31), the scene format
+needs no change (namespaced components are already preserved, D-E19), and a
+separate description file keeps the strict manifest decoder unchanged.\\
+\textbf{Consequences:} The description and the code can disagree; the game
+logs both directions at startup and the editor trusts the file. A type two
+files describe keeps the first (applications, then packages, then the
+project). Pasting and duplicating remap known behaviours' node and asset
+references. CSim is unchanged; the \texttt{playground} app is the sample.\\
+\textbf{Extends:} D-E19, D-E31
+\end{decisionbox}
+
+\subsection*{D-E36 --- Launching installed apps (Play)}
+\begin{decisionbox}[title={D-E36 \quad 2026-10-01}]
+\textbf{Decision:} A new \texttt{Launch} capability (bit 13) and
+\texttt{GuestService::LaunchApp} (19) let a guest start one installed
+application in its own process with a document it hands over
+(\texttt{Start}, \texttt{Stop}, \texttt{Status}; every accepted request
+completes with whether it runs). The runtime offers it only to an
+application whose manifest sets \texttt{app.launchApps} (IllEd), never for
+\texttt{--capture} or \texttt{--bench-*}, and then mounts every installed
+application read-only at \texttt{/apps/<id>}. \symbolref{RuntimeAppLauncher}
+saves the document in a temporary play directory and runs
+\texttt{IllumoRuntime --app <id> --open <file>} with the parent's
+\texttt{--mount} and \texttt{--project}; \symbolref{ChildProcess} keeps one
+child, on Windows in a kill-on-close job object. IllEd's Play (Ctrl+P) launches
+the scene's game, named by the \texttt{illumo.play} scene extension
+(\symbolref{ScenePlay}) or inferred from its behaviours, with the package
+root its references resolve against.\\
+\textbf{Why:} The host runs exactly one program per process (D-E31), so Play
+inside the editor's store would need a second design; a child process keeps
+the game's faults away from the editor and reuses the ordinary launch path,
+which also fixed \texttt{--open} for package launches.\\
+\textbf{Consequences:} Every offered capability is granted, so the manifest
+flag is the gate. Play shows the saved-or-not current document, not the
+file on disk. A crashed or closed game window reads as stopped on the next
+status poll. Linux spawns through \texttt{posix\_spawn} without a job
+object.\\
+\textbf{Extends:} D-E22, D-E23
+\end{decisionbox}
+
 \subsection*{D-F2 --- Calendar build versions}
 \begin{decisionbox}[title={D-F2 \quad 2026-09-25}]
 \textbf{Decision:} A build's version is \texttt{vYY.MM\_B}, for example

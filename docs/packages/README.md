@@ -1,7 +1,8 @@
 # Source-package maps
 
 These files summarize current ownership across the Illumo library and its
-three in-tree applications: IllumoGame, IllEd, and IllMeshViewer. They are
+four in-tree applications: IllumoGame, IllEd, IllMeshViewer and the
+Playground behaviours sample. They are
 documentation, not build inputs.
 
 | File | Area |

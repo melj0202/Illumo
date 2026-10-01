@@ -133,6 +133,9 @@ private:
   // complete on a later update). Editing input is held until it finishes.
   bool m_busy = false;
   bool m_closeAfterBusy = false;
+  // The game Play launched (empty when none runs), and a launch in flight.
+  std::string m_playApplication;
+  bool m_playStarting = false;
   // Expires on Exit so late platform completions never touch a stopped
   // module.
   std::shared_ptr<bool> m_lifetime;
@@ -209,6 +212,14 @@ private:
   bool handleSettingCommand(EditorCommand command);
   // Align and distribute commands; false when the command is not one.
   bool handleArrangeCommand(EditorCommand command);
+  // Play (Ctrl+P): launches the scene's game on a copy of the document, or
+  // stops it.
+  void togglePlay();
+  // Notices a game window that closed since Play, and updates the menu.
+  void updatePlay();
+  // The game Play launches: the scene's choice, else the game that describes
+  // one of its behaviours, else the only installed game; empty when none.
+  std::string playApplication() const;
   void nudgeSelectedExtent();
   void cycleSelectedColor();
   SaveLoadDialogSpec dialogSpec() const;

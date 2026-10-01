@@ -36,6 +36,7 @@ EditorShortcuts::all()
     { EditorCommand::SetMode3D, KeyCode::Num3, false, false, false },
     { EditorCommand::ResetCamera, KeyCode::Home, false, false, false },
     { EditorCommand::FrameSelection, KeyCode::F, false, false, false },
+    { EditorCommand::PlayScene, KeyCode::P, true, false, false },
   };
   return shortcuts;
 }

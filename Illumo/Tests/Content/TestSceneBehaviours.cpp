@@ -2,6 +2,7 @@
 #include <Illumo/Content/IlscCodec.h>
 #include <Illumo/Content/SceneBehaviours.h>
 #include <Illumo/Content/SceneInstance.h>
+#include <Illumo/Content/ScenePlay.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -391,9 +392,50 @@ testSceneBehavioursLifecycle()
   return counters.failures;
 }
 
+static int
+testScenePlayExtension()
+{
+  TestCounters counters;
+  std::vector<SceneExtension> extensions;
+  ScenePlay play;
+  testTrue(counters,
+           !ScenePlay::read(extensions, &play) && play.application.empty(),
+           "a scene without the extension names no game");
+  play.application = "playground";
+  play.root = "/project";
+  ScenePlay::write(extensions, play);
+  testTrue(counters,
+           extensions.size() == 1 && extensions[0].key == "illumo.play" &&
+             extensions[0].data == R"({"app":"playground","root":"/project"})",
+           "the extension is written as canonical compact JSON");
+  ScenePlay read;
+  testTrue(counters,
+           ScenePlay::read(extensions, &read) &&
+             read.application == "playground" && read.root == "/project",
+           "and reads back");
+  extensions[0].data = R"({"app":"Bad Id","note":1,"root":"/a/../b"})";
+  testTrue(counters,
+           ScenePlay::read(extensions, &read) && read.application.empty() &&
+             read.root.empty(),
+           "an invalid id or unnormalized root reads empty");
+  play.root.clear();
+  ScenePlay::write(extensions, play);
+  testEqStr(counters,
+            extensions[0].data,
+            R"({"app":"playground","note":1})",
+            "members it does not know are kept");
+  extensions[0].data = R"({"app":"playground"})";
+  ScenePlay::write(extensions, ScenePlay{});
+  testTrue(
+    counters, extensions.empty(), "clearing everything removes the extension");
+  return counters.failures;
+}
+
 void
 registerSceneBehavioursTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.Content.ScenePlayExtension",
+               []() { return testScenePlayExtension(); });
   registry.add("Illumo.Content.BehaviourSchemaParse",
                []() { return testBehaviourSchemaParse(); });
   registry.add("Illumo.Content.BehaviourValues",

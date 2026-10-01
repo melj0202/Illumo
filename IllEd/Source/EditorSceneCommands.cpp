@@ -4,6 +4,7 @@
 #include "EditorAssets.h"
 #include <Illumo/Content/IlscCodec.h>
 #include <Illumo/Content/SceneAssetRefs.h>
+#include <Illumo/Content/ScenePlay.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Platform/SaveLoad.h>
@@ -25,6 +26,119 @@ EditorScene::toast(const std::string& message, ColorRgba color)
 {
   if (m_toolbar) {
     m_toolbar->showToast(message, color);
+  }
+}
+
+std::string
+EditorScene::playApplication() const
+{
+  const std::string chosen = m_document.playApplication();
+  if (!chosen.empty()) {
+    return chosen;
+  }
+  for (const SceneNode& node : m_document.scene().document().nodes) {
+    for (const SceneComponent& component : node.components) {
+      const SceneOpaqueComponent* opaque =
+        std::get_if<SceneOpaqueComponent>(&component.value);
+      const std::string game =
+        opaque != nullptr ? m_behaviours.gameFor(opaque->type) : std::string();
+      if (!game.empty()) {
+        return game;
+      }
+    }
+  }
+  return m_behaviours.games().size() == 1 ? m_behaviours.games().front()
+                                          : std::string();
+}
+
+// The launch document's file name: the document's, as a plain file name.
+static std::string
+playFileName(const std::string& label)
+{
+  std::string name;
+  for (char character : label) {
+    const bool plain = (character >= 'a' && character <= 'z') ||
+                       (character >= 'A' && character <= 'Z') ||
+                       (character >= '0' && character <= '9') ||
+                       character == '.' || character == '-' || character == '_';
+    name.push_back(plain ? character : '_');
+  }
+  while (!name.empty() && name.front() == '.') {
+    name.erase(name.begin());
+  }
+  if (name.size() < 5 || name.substr(name.size() - 5) != ".ilsc") {
+    name += ".ilsc";
+  }
+  if (name.size() > 64 || name == ".ilsc") {
+    name = "scene.ilsc";
+  }
+  return name;
+}
+
+void
+EditorScene::togglePlay()
+{
+  IllEdPlatform& platform = IllEdPlatform::current();
+  if (m_playStarting) {
+    return;
+  }
+  if (!m_playApplication.empty()) {
+    platform.stopApp();
+    m_playApplication.clear();
+    toast("Stopped playing", kToastInfo);
+    return;
+  }
+  if (!platform.canLaunch()) {
+    toast("Play needs IllumoRuntime with app launching", kToastBad);
+    return;
+  }
+  const std::string application = playApplication();
+  if (application.empty()) {
+    toast("No game plays this scene: pick one in the scene's Play with",
+          kToastBad);
+    return;
+  }
+  // The game plays the scene as it is now, saved or not; relative references
+  // resolve against the editor's package root.
+  SceneDocument copy = m_document.scene().document();
+  ScenePlay play;
+  ScenePlay::read(copy.extensions, &play);
+  play.application = application;
+  play.root = m_document.packageRoot();
+  ScenePlay::write(copy.extensions, play);
+  m_playStarting = true;
+  const std::weak_ptr<bool> alive = m_lifetime;
+  platform.launchApp(application,
+                     playFileName(m_document.displayName().empty()
+                                    ? std::string("Untitled")
+                                    : m_document.displayName()),
+                     IlscCodec::encode(copy, false),
+                     [this, alive, application](bool started) {
+                       if (alive.expired()) {
+                         return;
+                       }
+                       m_playStarting = false;
+                       if (!started) {
+                         toast("Could not start " + application, kToastBad);
+                         return;
+                       }
+                       m_playApplication = application;
+                       toast("Playing in " + application, kToastGood);
+                       Logger::LogInfo("Playing the scene in " + application);
+                     });
+}
+
+void
+EditorScene::updatePlay()
+{
+  // The game window was closed (or failed) since Play started it.
+  if (!m_playApplication.empty() && !m_playStarting &&
+      !IllEdPlatform::current().appRunning()) {
+    m_playApplication.clear();
+    toast("Stopped playing", kToastInfo);
+  }
+  if (m_toolbar) {
+    m_toolbar->setPlaying(!m_playApplication.empty());
   }
 }
 
@@ -1023,6 +1137,9 @@ EditorScene::dispatchCommand(EditorCommand command)
       return;
     case EditorCommand::FrameSelection:
       frameSelection();
+      return;
+    case EditorCommand::PlayScene:
+      togglePlay();
       return;
     case EditorCommand::FindInHierarchy:
       // The filter lives in the Hierarchy panel, so it must be shown.

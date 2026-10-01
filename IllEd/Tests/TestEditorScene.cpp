@@ -3,7 +3,9 @@
 #include "EditorShortcuts.h"
 #include "EditorUiAtlas.h"
 #include "TestAccess.h"
+#include <Illumo/Content/IlscCodec.h>
 #include <Illumo/Content/SceneDirector.h>
+#include <Illumo/Content/ScenePlay.h>
 #include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/AssetManager.h>
@@ -20,6 +22,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <unordered_map>
@@ -1785,11 +1788,140 @@ testAssetsProjectFlow()
   return counters.failures;
 }
 
+// Play: the scene's game launches with a copy of the document that names the
+// game and its package root; Ctrl+P (or the window closing) stops it.
+static int
+testPlayScene()
+{
+  TestCounters counters;
+  const std::filesystem::path root =
+    std::filesystem::temp_directory_path() / "illed-play-scene";
+  std::error_code code;
+  std::filesystem::remove_all(root, code);
+  std::filesystem::create_directories(root / "playground");
+  std::filesystem::create_directories(root / "viewer");
+  std::filesystem::create_directories(root / "project");
+  std::ofstream(root / "playground" / "behaviours.json")
+    << R"({"format":"illumo-behaviours","format_version":1,"behaviours":[
+         {"type":"playground.bob","fields":[
+           {"name":"height","kind":"number","default":1}]}]})";
+  std::ofstream(root / "viewer" / "behaviours.json")
+    << R"({"format":"illumo-behaviours","format_version":1,"behaviours":[
+         {"type":"viewer.spin","fields":[]}]})";
+  std::shared_ptr<VirtualFileSystem> tree =
+    std::make_shared<VirtualFileSystem>();
+  std::string error;
+  for (const char* name : { "playground", "viewer" }) {
+    VfsMount app;
+    app.point = std::string("/apps/") + name;
+    app.layers.push_back(
+      { DirectoryVfsBackend::open(root / name, false, error), name });
+    tree->mount(app, error);
+  }
+  VfsMount project;
+  project.point = "/project";
+  project.layers.push_back(
+    { DirectoryVfsBackend::open(root / "project", true, error), "level" });
+  tree->mount(project, error);
+  IllEdNativeTree::install(tree);
+  {
+    EditorFixture fixture;
+    EditorScene& module = fixture.module;
+    EditorDocument& document = EditorSceneTestAccess::document(module);
+    IllEdNativeLauncher::setAvailable(false);
+    EditorSceneTestAccess::handleCommand(module, EditorCommand::PlayScene);
+    testTrue(counters,
+             EditorSceneTestAccess::playing(module).empty(),
+             "without a launcher Play starts nothing");
+    IllEdNativeLauncher::setAvailable(true);
+    EditorSceneTestAccess::handleCommand(module, EditorCommand::PlayScene);
+    testTrue(counters,
+             IllEdNativeLauncher::launches().empty(),
+             "with two games and no behaviours Play cannot guess the game");
+
+    const std::string id =
+      EditorSceneTestAccess::createNode(module, EditorCommand::CreateCube);
+    EditorInspector* inspector = EditorSceneTestAccess::inspector(module);
+    EditorSelection& selection = EditorSceneTestAccess::selection(module);
+    inspector->activateField(
+      "behaviour.add:playground.bob", &document, &selection);
+    EditorSceneTestAccess::handleCommand(module, EditorCommand::PlayScene);
+    testTrue(counters,
+             IllEdNativeLauncher::launches().size() == 1 &&
+               IllEdNativeLauncher::launches()[0].application == "playground" &&
+               EditorSceneTestAccess::playing(module) == "playground",
+             "a scene using a game's behaviour plays in that game");
+    SceneDocument launched;
+    std::string parseError;
+    ScenePlay play;
+    const IllEdNativeLauncher::Launch first =
+      IllEdNativeLauncher::launches().empty()
+        ? IllEdNativeLauncher::Launch{}
+        : IllEdNativeLauncher::launches()[0];
+    testTrue(counters,
+             IlscCodec::parse(first.document, launched, parseError) &&
+               launched.findNode(id) != nullptr,
+             "the launch document is the current scene");
+    testTrue(counters,
+             ScenePlay::read(launched.extensions, &play) &&
+               play.application == "playground" && play.root == "/project",
+             "it names its game and package root");
+    testEqStr(
+      counters, first.name, "Untitled.ilsc", "it is named after the document");
+    testTrue(counters,
+             document.playApplication().empty(),
+             "playing writes nothing into the edited document");
+    module.update(0.016);
+    testTrue(counters,
+             EditorSceneTestAccess::toolbar(module)->menuHintForTesting(
+               EditorCommand::PlayScene) == "Ctrl+P",
+             "View > Play shows its shortcut");
+    EditorSceneTestAccess::handleCommand(module, EditorCommand::PlayScene);
+    testTrue(counters,
+             EditorSceneTestAccess::playing(module).empty() &&
+               !IllEdNativeLauncher::running(),
+             "Play again stops the game");
+
+    EditorSelection none;
+    inspector->update(&fixture.input, &document, &none, 0.016f);
+    const InspectorField* game = inspector->field("scene.play");
+    testTrue(counters,
+             game != nullptr && game->value == "(automatic)" &&
+               game->choices.size() == 3,
+             "the scene offers its installed games");
+    inspector->activateField("scene.play", &document, &none);
+    inspector->activateField("scene.play", &document, &none);
+    testEqStr(counters,
+              document.playApplication(),
+              "viewer",
+              "a game chosen for the scene is stored with it");
+    EditorSceneTestAccess::handleCommand(module, EditorCommand::PlayScene);
+    testTrue(counters,
+             IllEdNativeLauncher::launches().size() == 2 &&
+               IllEdNativeLauncher::launches()[1].application == "viewer",
+             "the scene's choice wins over its behaviours");
+    IllEdNativeLauncher::running() = false;
+    module.update(0.016);
+    testTrue(counters,
+             EditorSceneTestAccess::playing(module).empty(),
+             "closing the game window stops playing");
+    document.undo();
+    document.undo();
+    testEqStr(
+      counters, document.playApplication(), "", "choosing the game undoes");
+    IllEdNativeLauncher::setAvailable(false);
+  }
+  IllEdNativeTree::install(nullptr);
+  std::filesystem::remove_all(root, code);
+  return counters.failures;
+}
+
 void
 registerEditorSceneTests(IllumoTestRegistry& registry)
 {
   registry.add("IllEd.Assets.ProjectFlow",
                []() { return testAssetsProjectFlow(); });
+  registry.add("IllEd.Module.PlayScene", []() { return testPlayScene(); });
   registry.add("IllEd.Selection.BoxSelect2D",
                []() { return testBoxSelect2D(); });
   registry.add("IllEd.Selection.BoxSelect3D",

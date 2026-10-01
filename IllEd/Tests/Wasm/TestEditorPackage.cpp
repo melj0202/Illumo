@@ -1,10 +1,11 @@
 #include "EditorDocument.h"
 #include "IllEdPlatform.h"
 #include <Illumo/Content/IlscCodec.h>
+#include <Illumo/Content/ScenePlay.h>
 #include <Illumo/Content/VirtualFileSystem.h>
 #include <Illumo/Rendering/Camera.h>
-#include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/DrawList.h>
+#include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/EnvVars.h>
@@ -418,12 +419,208 @@ projectPackage()
   return counters.failures == 0;
 }
 
+// Records launches instead of starting processes.
+class RecordingLauncher final : public IAppLauncher
+{
+public:
+  struct Record
+  {
+    std::vector<std::string> applications;
+    std::vector<std::string> names;
+    std::vector<std::string> documents;
+    bool running = false;
+  };
+  explicit RecordingLauncher(Record& record)
+    : m_record(record)
+  {
+  }
+  bool available() const override { return true; }
+  bool launch(const std::string& application,
+              const std::string& name,
+              std::span<const std::byte> document,
+              std::string& error) override
+  {
+    (void)error;
+    m_record.applications.push_back(application);
+    m_record.names.push_back(name);
+    std::string text;
+    for (std::byte value : document) {
+      text.push_back(static_cast<char>(value));
+    }
+    m_record.documents.push_back(text);
+    m_record.running = true;
+    return true;
+  }
+  void stop() override { m_record.running = false; }
+  bool running() override { return m_record.running; }
+
+private:
+  Record& m_record;
+};
+
+// Play end to end through the generic host: IllEd reads the installed
+// Playground's behaviours.json at /apps/playground, opens a scene using one of
+// them, and Play hands the host's launcher that scene with its game and
+// package root; Play again stops it.
+static bool
+playPackage()
+{
+  TestCounters counters;
+  const std::filesystem::path root =
+    std::filesystem::temp_directory_path() /
+    ("illumo-illed-play-" +
+     std::to_string(
+       std::chrono::steady_clock::now().time_since_epoch().count()));
+  const std::filesystem::path package = root / "package";
+  const std::filesystem::path game = root / "playground";
+  const std::filesystem::path scene = root / "documents" / "level.ilsc";
+  std::filesystem::create_directories(package / "Assets" / "IllEd");
+  std::filesystem::create_directories(game);
+  std::filesystem::create_directories(root / "storage");
+  std::filesystem::create_directories(scene.parent_path());
+  std::filesystem::copy_file(ILLUMO_ILLED_DEFAULTS, package / "envvars.json");
+  std::filesystem::copy_file(
+    ILLUMO_ILLED_ATLAS, package / "Assets" / "IllEd" / "editor-ui-atlas.jpg");
+  std::ofstream(game / "behaviours.json")
+    << R"({"format":"illumo-behaviours","format_version":1,"behaviours":[
+         {"type":"playground.bob","title":"Bob","fields":[
+           {"name":"height","kind":"number","default":0.5}]}]})";
+  std::ofstream(scene) << R"({
+  "format": "ilsc",
+  "format_version": [2, 0],
+  "settings": { "world_mode": "3d" },
+  "nodes": [
+    { "id": "box",
+      "components": [
+        { "type": "primitive", "shape": "cube" },
+        { "type": "playground.bob", "height": 2 } ] }
+  ]
+})";
+
+  std::shared_ptr<VirtualFileSystem> tree =
+    std::make_shared<VirtualFileSystem>();
+  std::string error;
+  VfsMount app;
+  app.point = "/app";
+  app.layers.push_back(
+    { DirectoryVfsBackend::open(package, false, error), "illed" });
+  VfsMount installed;
+  installed.point = "/apps/playground";
+  installed.layers.push_back(
+    { DirectoryVfsBackend::open(game, false, error), "playground" });
+  tree->mount(app, error);
+  tree->mount(installed, error);
+  WasmFileRoots files;
+  files.storage = root / "storage";
+  files.packages = tree;
+  files.launch = scene;
+  files.launchEditable = true;
+  GuestLaunch launch;
+  launch.label = "level.ilsc";
+  launch.editable = true;
+  launch.size = std::filesystem::file_size(scene);
+  GuestWireWriter startup;
+  launch.write(startup);
+
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  env.setVar("fullscreen", false);
+  Camera camera(glm::vec2(0, 0), 1, &env);
+  AtlasObservingBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  renderer.ensureBuiltinStyles();
+  CommandRegistry commands;
+  CommandLine console(&env, &commands, &window, &renderer, "Test");
+  Logger::setContext(&env, &console);
+  InputManager input(nullptr);
+  IllumoContext context;
+  context.renderer = &renderer;
+  context.window = &window;
+  context.inputManager = &input;
+  context.envVars = &env;
+  context.commandRegistry = &commands;
+  context.commandLine = &console;
+
+  RecordingLauncher::Record record;
+  WasmProgram editor(readBytes(ILLUMO_ILLED_GUEST),
+                     startup.take(),
+                     editorLimits(),
+                     {},
+                     {},
+                     files);
+  editor.setAppLauncher(std::make_unique<RecordingLauncher>(record));
+  const bool started = editor.start(context);
+  testTrue(counters, started, "The package starts with a launcher");
+  if (!started) {
+    std::printf("%s\n", editor.error().c_str());
+    return false;
+  }
+  int frames = 0;
+  pumpUntil(editor, [&]() {
+    renderFrame(editor, renderer, window, camera);
+    return commands.HasCommand("scene_play") && ++frames > 60;
+  });
+  commands.QueueCommand("scene_play");
+  commands.ExecuteQueue();
+  testTrue(counters,
+           pumpUntil(editor,
+                     [&]() {
+                       renderFrame(editor, renderer, window, camera);
+                       return !record.applications.empty();
+                     }),
+           "Play reaches the host's launcher");
+  SceneDocument played;
+  ScenePlay play;
+  testTrue(counters,
+           !record.applications.empty() &&
+             record.applications[0] == "playground" &&
+             record.names[0] == "level.ilsc",
+           "the scene's behaviour picks the installed game");
+  testTrue(counters,
+           !record.documents.empty() &&
+             IlscCodec::parse(record.documents[0], played, error) &&
+             played.findNode("box") != nullptr &&
+             ScenePlay::read(played.extensions, &play) &&
+             play.application == "playground" && !play.root.empty(),
+           "the launch document is the scene with its game and root");
+  frames = 0;
+  pumpUntil(editor, [&]() {
+    renderFrame(editor, renderer, window, camera);
+    return ++frames > 10;
+  });
+  commands.QueueCommand("scene_play");
+  commands.ExecuteQueue();
+  testTrue(counters,
+           pumpUntil(editor,
+                     [&]() {
+                       renderFrame(editor, renderer, window, camera);
+                       return !record.running;
+                     }),
+           "Play again stops the game");
+  testTrue(counters,
+           record.applications.size() == 1 && renderer.frameError().empty(),
+           "one launch, and every frame renders");
+  editor.stop();
+  if (counters.failures != 0) {
+    for (const CommandLine::historyBuffer& entry : console.getHistory()) {
+      std::printf("console: %s\n", entry.content.c_str());
+    }
+  }
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  return counters.failures == 0;
+}
+
 int
 main(int argc, char** argv)
 {
   if (argc == 2 && std::string(argv[1]) == "--list") {
     std::puts("IllEd.Wasm.Package");
     std::puts("IllEd.Wasm.ProjectPackage");
+    std::puts("IllEd.Wasm.PlayPackage");
     return 0;
   }
   if (argc != 3 || std::string(argv[1]) != "--run") {
@@ -431,6 +628,9 @@ main(int argc, char** argv)
   }
   if (std::string(argv[2]) == "IllEd.Wasm.ProjectPackage") {
     return projectPackage() ? 0 : 1;
+  }
+  if (std::string(argv[2]) == "IllEd.Wasm.PlayPackage") {
+    return playPackage() ? 0 : 1;
   }
   if (std::string(argv[2]) != "IllEd.Wasm.Package") {
     return 2;

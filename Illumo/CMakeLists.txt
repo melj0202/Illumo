@@ -280,6 +280,7 @@ endif()
 # <Illumo/Content/...>; nlohmann stays private to its sources.
 add_library(IllumoContent STATIC
   Source/Content/BehaviourSchema.cpp
+  Source/Content/ScenePlay.cpp
   Source/Content/IlscCodec.cpp
   Source/Content/PackageArchive.cpp
   Source/Content/PackageManifest.cpp

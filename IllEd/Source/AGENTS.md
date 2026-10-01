@@ -69,6 +69,12 @@ oracle suite.
   `BehaviourSchema` (canonical data, unknown members kept); Add behaviour
   inserts every default. Unknown types stay read-only JSON. The apps that
   ship a `behaviours.json` are the games a scene can play with.
+- Play (Ctrl+P, D-E36; F5 belongs to the host's asset reload) launches the
+  scene's game through `IllEdPlatform::launchApp` with a copy of the current
+  document whose `illumo.play` extension (`ScenePlay`) names the game and the
+  document's package root. The edited document only stores the scene's Play
+  with choice (`EditorDocument::setPlayApplication`, a settings command).
+  The native oracle records launches through `IllEdNativeLauncher`.
 - The Tools panel only issues `EditorCommand`s (settings are steppers over
   fixed ladders); it never takes typing. Grid and snap settings are editor
   view state and never dirty the document.

@@ -46,6 +46,8 @@
 \path{Illumo/Include/Illumo/Audio/*} & \texttt{IAudio}, \texttt{AudioClip}/\texttt{AudioDecoder}, native \texttt{AudioDevice} (D-E28) \\
 \path{Illumo/Source/Audio/*} & miniaudio-backed decoding (the one implementation unit) and output mixing \\
 \path{IllumoGuest/Include/IllumoGuest/Audio.h} & Audio service wire record and guest \texttt{GuestAudio} \\
+\path{IllumoGuest/Include/IllumoGuest/Launcher.h} & LaunchApp service wire records and guest \texttt{GuestLauncher} (D-E36) \\
+\path{Illumo/Include/Illumo/Wasm/RuntimeAppLauncher.h}, \path{Platform/ChildProcess.h} & Runtime app launcher and the owned child process (D-E36) \\
 \path{IllumoGame/Source/Game/CSimSounds.*} & CSim sound cues and the \texttt{soundVolume} setting \\
 \path{Illumo/Include/Illumo/Content/} & \texttt{Illumo::Content} public API: paths, manifests, archives, file tree, scenes \\
 \path{Illumo/Source/Content/IlscCodec.cpp} & \texttt{.ilsc} format 2 strict parser and canonical encoder \\
@@ -75,6 +77,8 @@
 \textbf{Path} & \textbf{Why it matters} \\
 \midrule
 \path{IllumoGuest/Include/IllumoGuest/Program.h} & \texttt{GuestProgram}: guest-local engine and the program's scenes (D-E31) \\
+\path{IllumoGuest/Include/IllumoGuest/PlayProgram.h} & \texttt{GuestPlayProgram}: plays a launched or default scene with its behaviours (D-E35) \\
+\path{Illumo/Include/Illumo/Content/BehaviourSchema.h}, \path{SceneBehaviours.h}, \path{ScenePlay.h} & Behaviour descriptions, the behaviour driver and the \texttt{illumo.play} extension (D-E35, D-E36) \\
 \path{IllumoGuest/Include/IllumoGuest/SceneWorlds.h} & One host render world per scene, frame schema v8 (D-R30) \\
 \path{IllumoGame/CMakeLists.txt} & Product core (native test oracle), tests, runtime seed \\
 \path{IllumoGame/Source/Wasm/GameApplication.cpp} & The CSim program: bootstrap, catalogs, sounds, pointer, first scene \\
@@ -102,6 +106,7 @@
 \path{docs/content-packages-and-scenes-design.md} & Packages, file tree, \texttt{.ilsc} format 2, IllEd wave 1 design \\
 \path{docs/content-packages-and-scenes-plan.md} & Per-milestone execution record for that design \\
 \path{docs/scene-programs-design.md} & Scene programs design (D-E31, D-R30) and validation results \\
+\path{docs/scene-behaviours-design.md} & Scene behaviours and Play design (D-E35, D-E36) and validation results \\
 \path{Templates/SpinningCube/} & Template for new projects: a one-scene WASM program \\
 \path{docs/latex/illumo.tex} & Prose-book entry point \\
 \path{docs/latex/architecture-map.tex} & Chart-pack entry point \\

@@ -55,6 +55,8 @@ public:
   void setWorldMode(bool is3D);
   // Check marks for View > Show Grid and Tools > Pivot at Selection Center.
   void setViewToggles(bool gridVisible, bool pivotCenter);
+  // View > Play reads Stop Playing while the scene's game runs.
+  void setPlaying(bool playing);
   // The viewport rectangle between the dock columns: the mode label sits at
   // its top left and toasts at its bottom right.
   void setViewport(const GuiToolRect& viewport) { m_viewport = viewport; }
@@ -124,6 +126,7 @@ private:
   bool m_is3D = false;
   bool m_gridVisible = true;
   bool m_pivotCenter = false;
+  bool m_playing = false;
   std::string m_undoLabel;
   std::string m_redoLabel;
   std::vector<EditorPanelMenuEntry> m_panels;

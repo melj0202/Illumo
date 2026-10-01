@@ -200,12 +200,45 @@ public:
     m_clipboard.get();
     m_pasteWaiting = std::move(done);
   }
+  void setLauncher(GuestLauncher* launcher) { m_launcher = launcher; }
+  bool canLaunch() const override
+  {
+    return m_launcher != nullptr && m_launcher->available();
+  }
+  void launchApp(const std::string& application,
+                 const std::string& name,
+                 const std::string& document,
+                 LaunchCallback done) override
+  {
+    std::vector<std::byte> bytes;
+    bytes.reserve(document.size());
+    for (char value : document) {
+      bytes.push_back(static_cast<std::byte>(value));
+    }
+    if (!canLaunch() || m_launchDone ||
+        !m_launcher->start(application, name, bytes)) {
+      done(false);
+      return;
+    }
+    m_launchDone = std::move(done);
+  }
+  void stopApp() override
+  {
+    if (canLaunch()) {
+      m_launcher->stop();
+    }
+  }
+  bool appRunning() const override
+  {
+    return m_launcher != nullptr && m_launcher->running();
+  }
   void pump()
   {
     m_documents.pump();
     m_clipboard.pump();
     m_tree.pump();
     m_fetches.pump();
+    pumpLauncher();
     if (m_pasteWaiting && m_clipboard.idle()) {
       std::function<void(const std::string& text)> done =
         std::move(m_pasteWaiting);
@@ -215,6 +248,25 @@ public:
   }
 
 private:
+  // Completes a launch once its request does, and while the launched
+  // application runs asks about twice a second whether it still does.
+  void pumpLauncher()
+  {
+    if (m_launcher == nullptr) {
+      return;
+    }
+    m_launcher->poll();
+    if (m_launchDone && !m_launcher->pending()) {
+      const LaunchCallback done = std::move(m_launchDone);
+      m_launchDone = nullptr;
+      done(!m_launcher->takeRefused() && m_launcher->running());
+    }
+    if (m_launcher->running() && !m_launcher->pending() &&
+        ++m_statusFrames >= 30) {
+      m_statusFrames = 0;
+      m_launcher->refresh();
+    }
+  }
   void choose(GuestDocumentDialog mode,
               const SaveLoadDialogSpec& specification,
               LocationCallback done)
@@ -241,6 +293,9 @@ private:
   bool m_project = false;
   std::function<void(const std::string& text)> m_pasteWaiting;
   IllEdLocation m_launch;
+  GuestLauncher* m_launcher = nullptr;
+  LaunchCallback m_launchDone;
+  int m_statusFrames = 0;
 };
 
 static GuestIllEdPlatform* installedPlatform = nullptr;
@@ -299,6 +354,8 @@ protected:
     if (launchFile() != nullptr) {
       m_platform.setLaunch(*launchFile());
     }
+    // Play (Ctrl+P) launches the scene's game when the host granted Launch.
+    m_platform.setLauncher(&launcher());
     m_platform.setProject(granted(GuestCapability::ProjectFiles));
     Logger::LogTrace(granted(GuestCapability::ProjectFiles)
                        ? "IllEd has project access: saves, imports and packs "

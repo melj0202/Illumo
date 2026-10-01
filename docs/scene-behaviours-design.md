@@ -36,8 +36,8 @@ launched application").
 2. The game package ships `behaviours.json`, describing each behaviour's
    fields. IllEd reads it and shows typed inspector fields and an Add
    Behaviour list instead of read-only JSON.
-3. IllEd's Play button (F5) starts the game in its own window on a copy of
-   the scene being edited; Stop (F5 again, or closing that window) ends it.
+3. IllEd's Play (Ctrl+P) starts the game in its own window on a copy of the
+   scene being edited; Stop (Ctrl+P again, or closing that window) ends it.
    The edited document never changes.
 4. In-viewport play (pause, edit while paused, reset on Stop) is a later
    phase with its own design; nothing here blocks it.
@@ -162,7 +162,8 @@ owned by `Illumo::Content`.
   IllMeshViewer does), own a `SceneBehaviours`, and use the scene's primary
   camera. A game supports Play by deriving from `GuestPlayProgram` and
   registering its behaviours.
-- **IllEd:** Play/Stop in the toolbar and View menu, F5, a status-bar state,
+- **IllEd:** Play/Stop in the View menu, Ctrl+P (Unity's binding; the host
+  already takes F5 for asset reloads), a status-bar state,
   and a toast when the scene names no game or the host refuses.
 
 ### 4.6 First consumer
@@ -208,7 +209,7 @@ real games. CSim is unchanged.
 | B2 | `PlayScene` and the `playground` sample app with three behaviours; package test |
 | B3 | IllEd: schema discovery, typed behaviour fields, Add Behaviour, `node` id remap on paste |
 | B4 | Host: `Launch` capability, `LaunchApp` service, process spawn, decoder and deny tests |
-| B5 | IllEd Play/Stop (F5), scene "Play with" choice; end-to-end package test |
+| B5 | IllEd Play/Stop (Ctrl+P), scene "Play with" choice; end-to-end package test |
 | B6 | Docs: decision log (D-E35 behaviours, D-E36 launch), architecture-consensus, LaTeX, package maps |
 
 Each milestone builds and passes the Release workspace suite before the next.
@@ -230,3 +231,19 @@ The owner authorized implementation as written on 2026-10-01 and chose:
   behaviours, the moon orbits the beacon at its radius) and
   `Playground.Wasm.LaunchedScene` (a launched scene's bob moves its node; an
   unknown component is ignored); 722 of 722 workspace tests pass.
+- B4 (596b871f): `Illumo.Wasm.LaunchServiceDecoder`, `LaunchDeny`,
+  `GuestLauncher`, `ChildProcess` (this test program relaunched as a
+  sleeping child, stopped through its job object) and `RuntimeAppLauncher`;
+  manifest `launchApps` and the `/apps` mount in
+  `Illumo.Content.PackageManifestDecode` and `PackageDiscovery`; 727 of 727.
+- B3 (3d48aebe): `IllEd.Behaviours.InspectorFields`, `CopiesRemap` and
+  `Discovery`; 730 of 730.
+- B5: `IllEd.Module.PlayScene` (game choice and inference, launch document,
+  stop, a closed game window), `IllEd.Wasm.PlayPackage` (the real IllEd.wasm
+  reads `/apps/playground/behaviours.json` and hands a recording launcher the
+  scene with its game and root) and `Illumo.Content.ScenePlayExtension`; 733
+  of 733. Real runtime: `--app playground` renders the demo and
+  `--app playground --open <file>` (the child's exact command) plays it; IllEd
+  shows the demo moon's Orbit behaviour as typed fields (a node choice, radius,
+  degrees) with Spinner, Bob and Walker under Add behaviour. Play inside the
+  editor's own process remains out of scope (§5).

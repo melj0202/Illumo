@@ -3,6 +3,7 @@
 #include <Illumo/Content/SceneAssetRefs.h>
 
 #include <Illumo/Content/IlscCodec.h>
+#include <Illumo/Content/ScenePlay.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cmath>
@@ -797,6 +798,36 @@ EditorDocument::setMetadata(const SceneMetadata& metadata)
   }
   m_scene->setMetadata(metadata);
   return recordSettings("Edit metadata", {}, before);
+}
+
+std::string
+EditorDocument::playApplication() const
+{
+  ScenePlay play;
+  ScenePlay::read(m_scene->document().extensions, &play);
+  return play.application;
+}
+
+bool
+EditorDocument::setPlayApplication(const std::string& application)
+{
+  const EditorSceneSettings before = EditorHistory::captureSettings(*m_scene);
+  std::vector<SceneExtension> extensions = before.extensions;
+  ScenePlay play;
+  ScenePlay::read(extensions, &play);
+  if (play.application == application) {
+    return false;
+  }
+  play.application = application;
+  ScenePlay::write(extensions, play);
+  std::string error;
+  if (!m_scene->setExtensions(extensions, error)) {
+    return false;
+  }
+  return recordSettings(application.empty() ? "Play with any game"
+                                            : "Play with " + application,
+                        {},
+                        before);
 }
 
 static bool

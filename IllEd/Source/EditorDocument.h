@@ -200,6 +200,10 @@ public:
   bool setAssets(const std::vector<SceneAsset>& assets,
                  const std::string& label,
                  const std::string& mergeKey = {});
+  // The game that plays this scene: the "illumo.play" extension's app (see
+  // ScenePlay). Setting it is one settings command; empty clears it.
+  std::string playApplication() const;
+  bool setPlayApplication(const std::string& application);
   // Known behaviours, borrowed: their Node fields that name a copied node
   // follow the copy on duplicate and paste, and their Asset fields follow a
   // renamed pasted asset. Null leaves behaviour data as it is.

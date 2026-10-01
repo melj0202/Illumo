@@ -333,8 +333,9 @@ Installed packages live in `apps\<name>\` (or `apps\<name>.ilpk`), each with an
 | `--app` | Module | Manifest notes | Private storage |
 |---|---|---|---|
 | `game` (default) | `IllumoGame.wasm` | | `storage\csim\` |
-| `illed` | `IllEd.wasm` | `launchAccess: "edit"`; preloads `Assets/IllEd/editor-ui-atlas.jpg` | `storage\illed\` |
+| `illed` | `IllEd.wasm` | `launchAccess: "edit"`, `launchApps: true` (Play); preloads `Assets/IllEd/editor-ui-atlas.jpg` | `storage\illed\` |
 | `meshviewer` | `IllMeshViewer.wasm` | `launchAccess: "read"`; preloads `Assets/Skybox/skybox-daylight.png` | `storage\meshviewer\` |
+| `playground` | `Playground.wasm` | `launchAccess: "read"`; ships `behaviours.json` and `Scenes/demo.ilsc` | `storage\playground\` |
 
 ```text
 IllumoRuntime.exe [--app name] [--open file] [-ww width] [-wh height] [--graphics-api opengl|vulkan|d3d12]
@@ -357,6 +358,10 @@ Escape closes). `--open` hands one
 document to the app: the guest sees only the file's base name, and the host
 grants the file as the selection `launch`, writable when the manifest says
 `launchAccess: "edit"`. The window title comes from the manifest `title`.
+An app whose manifest sets `launchApps` (IllEd) also sees every installed app
+read-only at `/apps/<id>` and may start one in its own window: IllEd's View >
+Play (Ctrl+P) runs the edited scene in its game (see
+`docs/scene-behaviours-design.md`).
 Runtime settings live in `envvars.json` beside the runtime, including the
 last restored window size (`WinX`/`WinY`; a minimized window keeps the
 previous size, and a non-positive saved size opens at 1280x720); each app keeps

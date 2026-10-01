@@ -14,6 +14,8 @@
 
 // The leading choice of an optional asset reference (the skybox).
 static const char* const kNoAsset = "(none)";
+// The leading choice of the scene's game: whichever its behaviours name.
+static const char* const kAutomaticGame = "(automatic)";
 // The format's limits for a scene description and, with separators, a node's
 // tags (32 of at most 64 bytes).
 static constexpr size_t kMaximumDescriptionBytes = 4096;
@@ -1045,6 +1047,26 @@ EditorInspector::buildFields(const EditorDocument& document,
       text("meta.description", "Description", scene.metadata.description);
     description.maxBytes = kMaximumDescriptionBytes;
     row("Description", { description });
+    // The game Play launches: automatic (the game whose behaviours the scene
+    // uses), or one of the installed games; a game no longer installed stays
+    // visible as its own choice.
+    const std::string game = document.playApplication();
+    if (m_behaviours != nullptr &&
+        (!m_behaviours->games().empty() || !game.empty())) {
+      std::vector<std::string> games{ kAutomaticGame };
+      int selected = 0;
+      for (const std::string& candidate : m_behaviours->games()) {
+        if (candidate == game) {
+          selected = static_cast<int>(games.size());
+        }
+        games.push_back(candidate);
+      }
+      if (!game.empty() && selected == 0) {
+        selected = static_cast<int>(games.size());
+        games.push_back(game);
+      }
+      row("Play with", { choice("scene.play", "Game", games, selected) });
+    }
     section("Environment");
     row("Skybox",
         { assetChoice(
@@ -1602,6 +1624,10 @@ EditorInspector::activate(const InspectorField& target,
     if (key == "scene.mode") {
       return document.setWorldMode(next == 1 ? SceneWorldMode::World3D
                                              : SceneWorldMode::World2D);
+    }
+    if (key == "scene.play") {
+      return document.setPlayApplication(
+        next == 0 ? std::string() : target.choices[static_cast<size_t>(next)]);
     }
     const std::string picked = target.choices[static_cast<size_t>(next)];
     if (key.starts_with("behaviour:")) {

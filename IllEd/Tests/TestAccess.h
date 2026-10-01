@@ -58,6 +58,12 @@ public:
     module.handleCommand(command);
   }
 
+  // The game Play launched (empty when none runs).
+  static const std::string& playing(const EditorScene& module)
+  {
+    return module.m_playApplication;
+  }
+
   static EditorToolbar* toolbar(EditorScene& module)
   {
     return module.m_toolbar.get();

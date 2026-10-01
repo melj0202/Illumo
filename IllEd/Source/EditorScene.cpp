@@ -280,6 +280,9 @@ EditorScene::updateStatus()
   } else {
     status += "  |  [Arrows/MMB: Pan  Wheel: Zoom  F: Frame]";
   }
+  if (!m_playApplication.empty()) {
+    status = "Playing in " + m_playApplication + "  |  " + status;
+  }
   m_toolbar->setStatus(status);
 }
 
@@ -315,6 +318,7 @@ EditorScene::update(double dt)
     m_toolbar->setWorldMode(m_document.worldMode() == SceneWorldMode::World3D);
     m_toolbar->setViewToggles(m_document.editorState().gridVisible,
                               m_pivotCenter);
+    updatePlay();
     m_toolbar->setHistoryLabels(m_document.history().undoLabel(),
                                 m_document.history().redoLabel());
   }
@@ -536,6 +540,13 @@ EditorScene::registerCommands()
     },
     "scene_frame",
     "Frame the selection (or the whole scene)");
+  ic->commandRegistry->RegisterCommand(
+    "scene_play",
+    [this](const std::vector<std::string>&) {
+      handleCommand(EditorCommand::PlayScene);
+    },
+    "scene_play",
+    "Play the scene in its game's window, or stop it");
 }
 
 void
@@ -549,7 +560,8 @@ EditorScene::unregisterCommands()
                             "scene_save_project",
                             "scene_undo",
                             "scene_redo",
-                            "scene_frame" }) {
+                            "scene_frame",
+                            "scene_play" }) {
     ic->commandRegistry->UnregisterCommand(name);
   }
 }

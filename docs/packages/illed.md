@@ -301,10 +301,24 @@ Fields are rebuilt from the document every frame.
   needed. Tree documents use `vfs:<virtual path>` locations
   (`IllEdPlatform::kTreePrefix`).
 
+## Play
+
+View > Play (Ctrl+P; the host keeps F5 for asset reloads) runs the edited
+scene in its game's own window (D-E36). The game is the scene's Play with
+choice (the `illumo.play` extension's `app`, set in the scene inspector among
+the installed apps that ship a `behaviours.json`), else the game describing
+one of the scene's behaviours, else the only installed game. Play sends a copy
+of the current document, saved or not, with the extension's `root` set to the
+document's package root, through `IllEdPlatform::launchApp` (the Launch
+capability; IllEd's manifest sets `launchApps`). The status bar reads
+Playing in <game> and the menu item Stop Playing until Ctrl+P stops it or the
+game window closes (polled about twice a second). Without the capability
+(captures, benchmarks, an older host) Play explains that it is unavailable.
+
 ## Console commands
 
 IllEd registers `scene_select [id...]`, `scene_place <virtual path> [x] [y]`,
-`scene_save_project`, `scene_undo`, `scene_redo` and `scene_frame`. Capture
+`scene_save_project`, `scene_undo`, `scene_redo`, `scene_frame` and `scene_play`. Capture
 scripts and package tests use them to reach the same flows as the UI.
 
 ## UI
@@ -376,7 +390,10 @@ detached text entry, cross-window asset drop, layout persistence, all through
 generic host (launch scene, package-preloaded atlas, arrow-key pan, Ctrl+S
 save in place); `IllEd.Wasm.ProjectPackage` runs it with a writable
 `/project`, places a project mesh with its MTL and a texture through the guest
-cache, and saves into the project. `IllEdCloseWindowTests` checks close
+cache, and saves into the project; `IllEd.Wasm.PlayPackage` mounts a game's
+`behaviours.json` at `/apps/playground`, opens a scene using it and checks
+that Play hands a recording launcher the scene with its game and root, and
+that Play again stops it. `IllEdCloseWindowTests` checks close
 confirmation in a real hidden GLFW window. Import and Pack dialogs cannot be
 scripted natively; their host halves are covered by `Illumo.Wasm.MountedFiles`
 and `Illumo.Wasm.MountedDeny`.

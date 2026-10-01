@@ -58,6 +58,15 @@ EditorToolbar::setViewToggles(bool gridVisible, bool pivotCenter)
 }
 
 void
+EditorToolbar::setPlaying(bool playing)
+{
+  if (playing != m_playing) {
+    m_playing = playing;
+    rebuildMenus();
+  }
+}
+
+void
 EditorToolbar::showToast(const std::string& message,
                          ColorRgba color,
                          float duration)
@@ -248,6 +257,9 @@ EditorToolbar::rebuildMenus()
 
   Menu viewMenu;
   viewMenu.title = "View";
+  viewMenu.items.push_back(
+    item(m_playing ? "Stop Playing" : "Play", EditorCommand::PlayScene));
+  viewMenu.items.push_back(separator());
   MenuItem world2d = item("2D World", EditorCommand::SetMode2D);
   world2d.checked = !m_is3D;
   viewMenu.items.push_back(world2d);
