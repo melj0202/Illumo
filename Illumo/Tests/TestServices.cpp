@@ -114,6 +114,32 @@ testCameraInitializationAndControls()
            nearlyEqual(centerWorld.y, camera.GetPosition().y),
            "screen center maps to camera y");
 
+  // Two quick wheel notches under one cursor: the second lands while the
+  // first still eases, and the settled view keeps the cursor's world point.
+  Camera wheel(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  const glm::dvec2 cursor(650.0, 120.0);
+  const glm::dvec2 anchor = wheel.ScreenToTargetWorldPrecise(cursor);
+  wheel.ZoomAt(1.5f, anchor);
+  wheel.Update(0.02f);
+  const glm::dvec2 eased = wheel.ScreenToWorldPrecise(cursor);
+  const glm::dvec2 heading = wheel.ScreenToTargetWorldPrecise(cursor);
+  testTrue(g,
+           std::abs(eased.x - anchor.x) > 1.0,
+           "mid-ease the eased view puts another point under the cursor");
+  // ZoomAt scales by a float zoom ratio; a thousandth of a world unit is far
+  // below a pixel at these zooms.
+  testTrue(g,
+           std::abs(heading.x - anchor.x) < 1e-3 &&
+             std::abs(heading.y - anchor.y) < 1e-3,
+           "the target view keeps the anchor under the cursor");
+  wheel.ZoomAt(1.5f, heading);
+  wheel.Update(10.0f);
+  const glm::dvec2 settled = wheel.ScreenToWorldPrecise(cursor);
+  testTrue(g,
+           std::abs(settled.x - anchor.x) < 1e-3 &&
+             std::abs(settled.y - anchor.y) < 1e-3,
+           "quick notches settle with the cursor's point under it");
+
   camera.Reset();
   camera.Update(1.0f);
   testTrue(g,

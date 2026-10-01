@@ -2298,10 +2298,6 @@ CanvasScene::update(double dt)
     ILLUMO_PROFILE_ZONE("CanvasScene.cameraInput");
     CameraPan();
 
-    // Zoom behavior using scroll offset
-    std::array<double, 2> mouseCoords = ic->window->getMouseCoords();
-    glm::dvec2 worldMouse = ic->camera->ScreenToWorldPrecise(
-      glm::dvec2(mouseCoords[0], mouseCoords[1]));
     keyboardPan(dt);
     double* scroll = ic->inputManager->getMouseScrollOffset();
     const bool overChrome =
@@ -2319,6 +2315,12 @@ CanvasScene::update(double dt)
         (*scroll > 0.0f) !=
         SimulatorSettings::flag(ic->envVars, "invertZoom", false);
       const double zoomFactor = zoomIn ? 1.0 + step : 1.0 - step;
+      // The anchor is the point under the cursor in the view the camera is
+      // heading to, where ZoomAt applies; the eased view puts another point
+      // there while an earlier notch still settles.
+      const std::array<double, 2> mouseCoords = ic->window->getMouseCoords();
+      const glm::dvec2 worldMouse = ic->camera->ScreenToTargetWorldPrecise(
+        glm::dvec2(mouseCoords[0], mouseCoords[1]));
       const glm::dvec2 target = ic->camera->GetTargetPositionPrecise();
       const float oldZoom = ic->camera->GetTargetZoom();
       const float newZoom =

@@ -81,6 +81,11 @@ public:
   // coordinates. Orthographic only; perspective does not change CA picking.
   glm::vec2 ScreenToWorld(const glm::vec2& screenPos) const;
   glm::dvec2 ScreenToWorldPrecise(const glm::dvec2& screenPos) const;
+  // The same point in the view the camera is easing towards (its target
+  // position, zoom and rotation). ZoomAt works in that view, so a zoom
+  // anchored under the cursor takes its anchor from here; the eased view
+  // gives another point while the camera still moves.
+  glm::dvec2 ScreenToTargetWorldPrecise(const glm::dvec2& screenPos) const;
 
   // Matrix calculations
   glm::mat4 GetViewMatrix() const;
@@ -89,6 +94,10 @@ public:
 
 private:
   std::array<int, 2> GetWinDims() const;
+  glm::dvec2 screenToView(const glm::dvec2& screenPos,
+                          const glm::dvec2& viewPosition,
+                          float viewZoom,
+                          float viewRotation) const;
   ProjectionType projectionType;
   glm::dvec2 position;       // Current interpolated position
   glm::dvec2 targetPosition; // Target position we pan towards

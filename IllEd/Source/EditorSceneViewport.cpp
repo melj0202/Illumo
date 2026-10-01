@@ -232,8 +232,10 @@ EditorScene::updateCamera(double dt)
   if (scroll != nullptr && *scroll != 0.0) {
     const float factor = *scroll > 0.0 ? 1.1f : 0.9f;
     if (m_document.worldMode() != SceneWorldMode::World3D) {
+      // Anchored in the view ZoomAt works in, so quick notches stay under
+      // the cursor while the camera still eases.
       const glm::dvec2 worldMouse =
-        ic->camera->ScreenToWorldPrecise(glm::dvec2(mouse[0], mouse[1]));
+        ic->camera->ScreenToTargetWorldPrecise(glm::dvec2(mouse[0], mouse[1]));
       ic->camera->ZoomAt(factor, worldMouse);
     } else {
       ic->camera->ZoomAt(factor, ic->camera->GetPositionPrecise());

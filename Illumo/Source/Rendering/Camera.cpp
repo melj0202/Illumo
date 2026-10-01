@@ -201,6 +201,21 @@ Camera::ScreenToWorld(const glm::vec2& screenPos) const
 glm::dvec2
 Camera::ScreenToWorldPrecise(const glm::dvec2& screenPos) const
 {
+  return screenToView(screenPos, position, zoom, rotation);
+}
+
+glm::dvec2
+Camera::ScreenToTargetWorldPrecise(const glm::dvec2& screenPos) const
+{
+  return screenToView(screenPos, targetPosition, targetZoom, targetRotation);
+}
+
+glm::dvec2
+Camera::screenToView(const glm::dvec2& screenPos,
+                     const glm::dvec2& viewPosition,
+                     float viewZoom,
+                     float viewRotation) const
+{
   std::array<int, 2> winDims = GetWinDims();
   const double halfW = static_cast<double>(winDims[0]) / 2.0;
   const double halfH = static_cast<double>(winDims[1]) / 2.0;
@@ -208,15 +223,17 @@ Camera::ScreenToWorldPrecise(const glm::dvec2& screenPos) const
   const double dx = screenPos.x - halfW;
   const double dy = halfH - screenPos.y;
 
-  const double rad = glm::radians(static_cast<double>(rotation));
+  const double rad = glm::radians(static_cast<double>(viewRotation));
   const double cosRad = std::cos(rad);
   const double sinRad = std::sin(rad);
 
   const double rotatedX = dx * cosRad - dy * sinRad;
   const double rotatedY = dx * sinRad + dy * cosRad;
 
-  const double worldX = rotatedX / static_cast<double>(zoom) + position.x;
-  const double worldY = rotatedY / static_cast<double>(zoom) + position.y;
+  const double worldX =
+    rotatedX / static_cast<double>(viewZoom) + viewPosition.x;
+  const double worldY =
+    rotatedY / static_cast<double>(viewZoom) + viewPosition.y;
 
   return glm::dvec2(worldX, worldY);
 }
