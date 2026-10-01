@@ -133,6 +133,25 @@ private:
   // complete on a later update). Editing input is held until it finishes.
   bool m_busy = false;
   bool m_closeAfterBusy = false;
+  // The node under the cursor in the viewport, outlined; empty for none.
+  std::string m_hoverId;
+  // A right press in the viewport, to tell a click (the context menu) from
+  // an orbit or pan drag.
+  bool m_rightDown = false;
+  bool m_rightInWorld = false;
+  float m_rightStartX = 0.0f;
+  float m_rightStartY = 0.0f;
+  float m_rightTravel = 0.0f;
+  // The edit-plane point the context menu was opened at.
+  bool m_contextPointValid = false;
+  float m_contextWorldX = 0.0f;
+  float m_contextWorldY = 0.0f;
+  // Isolation (Shift+H): the scene generation it was made for, since a new
+  // document ends it.
+  bool m_isolated = false;
+  uint64_t m_isolatedGeneration = 0;
+  // Consecutive nudges share one history command.
+  uint64_t m_nudgeSerial = 0;
   // The game Play launched (empty when none runs), and a launch in flight.
   std::string m_playApplication;
   bool m_playStarting = false;
@@ -212,6 +231,30 @@ private:
   bool handleSettingCommand(EditorCommand command);
   // Align and distribute commands; false when the command is not one.
   bool handleArrangeCommand(EditorCommand command);
+  // Hierarchy commands: group and ungroup the selection, select parents or
+  // children, lock or unlock against viewport picking, isolate the view.
+  void groupSelection();
+  void ungroupSelection();
+  void selectRelatives(bool parents);
+  void toggleLockSelection();
+  void toggleIsolate();
+  // Lowers each top-level selected subtree onto the surface below it (or the
+  // ground plane), as one command.
+  void dropSelectionToFloor();
+  // Moves the selection one move-snap step along a world direction; repeated
+  // nudges merge into one command (Alt+arrows, Alt+PageUp/PageDown).
+  void nudgeSelection(const Vector3& direction);
+  // Viewport interaction (EditorSceneViewport.cpp): a right click that did
+  // not drag opens the context menu for the node under it; its Create items
+  // place at the clicked point.
+  void updateContextClick();
+  void openViewportMenu(float pixelX, float pixelY);
+  bool createAtContextPoint(EditorCommand command);
+  // Alt held as a move starts: duplicate the selection and move the copies.
+  void duplicateForDrag();
+  // Takes Alt+arrow and Alt+PageUp/PageDown presses as nudges along the
+  // world axes nearest the view (EditorSceneViewport.cpp).
+  void handleNudgeKeys();
   // Play (Ctrl+P): launches the scene's game on a copy of the document, or
   // stops it.
   void togglePlay();

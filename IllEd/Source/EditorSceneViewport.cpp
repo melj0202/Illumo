@@ -455,6 +455,19 @@ EditorScene::rebuildSelectionOverlay()
     return;
   }
   m_selectionOverlay->clearPrimitives();
+  // The node under the cursor, thin and pale, unless it is selected.
+  if (!m_hoverId.empty() && !m_selection.contains(m_hoverId) &&
+      m_document.findNode(m_hoverId) != nullptr) {
+    AxisAlignedBounds3 local;
+    if (!m_document.scene().localBounds(m_hoverId, &local)) {
+      local = AxisAlignedBounds3{ Vector3(-0.25f), Vector3(0.25f) };
+    }
+    addOrientedBox(*m_selectionOverlay,
+                   m_document.worldMatrix(m_hoverId),
+                   local,
+                   1.04f,
+                   ColorRgba{ 225, 228, 235, 150 });
+  }
   const std::string& primary = m_selection.primary();
   if (primary.empty() || m_document.findNode(primary) == nullptr) {
     return;
@@ -685,7 +698,8 @@ EditorScene::boxSelect(float x0, float y0, float x1, float y1, bool additive)
   for (SceneNodeHandle node = graph.firstNode(); !node.isNull();
        node = graph.nextNode(node)) {
     // Hidden nodes are not pickable, so they are not box-selectable either.
-    if (!graph.isEffectivelyVisible(node)) {
+    if (!graph.isEffectivelyVisible(node) ||
+        m_document.isLocked(std::string(graph.getName(node)))) {
       continue;
     }
     Vector3 center(0.0f);
@@ -795,8 +809,20 @@ EditorScene::updateSelection(double dt)
   }
 
   if (uiBlocksWorld(uiX, uiY)) {
+    if (!m_hoverId.empty()) {
+      m_hoverId.clear();
+      rebuildSelectionOverlay();
+    }
     m_mouseWasDown = left;
     return;
+  }
+  std::string underCursor;
+  if (haveRay) {
+    m_document.pickRay(rayOrigin, rayDir, &underCursor);
+  }
+  if (underCursor != m_hoverId) {
+    m_hoverId = underCursor;
+    rebuildSelectionOverlay();
   }
 
   const bool hasSelection =
@@ -830,6 +856,10 @@ EditorScene::updateSelection(double dt)
         const GizmoPart hitPart = EditorGizmo::hitTest(
           gizmoFrame(primary), m_gizmoMode, rayOrigin, rayDir);
         if (hitPart != GizmoPart::None) {
+          if (ic->inputManager->isAltPressed() &&
+              m_gizmoMode == GizmoMode::Translate) {
+            duplicateForDrag();
+          }
           beginDrag(hitPart, rayOrigin, rayDir, m_gizmoMode);
           m_activeGizmoPart = m_gizmo.active() ? hitPart : GizmoPart::None;
           rebuildSelectionOverlay();
@@ -848,7 +878,10 @@ EditorScene::updateSelection(double dt)
           m_selection.add(hit);
         }
         // Grabbing a body moves the selection on the edit plane, keeping the
-        // grabbed point under the cursor.
+        // grabbed point under the cursor; with Alt, it moves copies.
+        if (ic->inputManager->isAltPressed()) {
+          duplicateForDrag();
+        }
         beginDrag(GizmoPart::Center, rayOrigin, rayDir, GizmoMode::Translate);
         m_activeGizmoPart =
           m_gizmo.active() ? GizmoPart::Center : GizmoPart::None;
@@ -870,6 +903,75 @@ EditorScene::updateSelection(double dt)
   }
   m_mouseWasDown = left;
 }
+// The world axis (+-X or +-Z) nearest a horizontal direction.
+static Vector3
+nearestGroundAxis(float x, float z)
+{
+  if (std::fabs(x) >= std::fabs(z)) {
+    return Vector3(x >= 0.0f ? 1.0f : -1.0f, 0.0f, 0.0f);
+  }
+  return Vector3(0.0f, 0.0f, z >= 0.0f ? 1.0f : -1.0f);
+}
+
+void
+EditorScene::handleNudgeKeys()
+{
+  if (ic == nullptr || ic->inputManager == nullptr || m_selection.empty()) {
+    return;
+  }
+  const bool is3D = m_document.worldMode() == SceneWorldMode::World3D;
+  Vector3 right(1.0f, 0.0f, 0.0f);
+  Vector3 away(0.0f, 1.0f, 0.0f);
+  if (is3D) {
+    // Arrows follow the view: right and away from the camera on the ground.
+    const SceneEditorState& state = m_document.editorState();
+    right = nearestGroundAxis(std::cos(state.yaw), -std::sin(state.yaw));
+    away = nearestGroundAxis(-std::sin(state.yaw), -std::cos(state.yaw));
+  }
+  std::queue<InputManager::KeyPressEvent>& keys =
+    ic->inputManager->getKeyQueue();
+  std::queue<InputManager::KeyPressEvent> kept;
+  while (!keys.empty()) {
+    const InputManager::KeyPressEvent event = keys.front();
+    keys.pop();
+    const bool alt =
+      ic->inputManager->isAltPressed() || (event.modifiers & 0x4) != 0;
+    const bool control =
+      ic->inputManager->isControlPressed() || (event.modifiers & 0x2) != 0;
+    Vector3 direction(0.0f);
+    if (event.action == InputAction::Press && alt && !control) {
+      switch (event.key) {
+        case KeyCode::Left:
+          direction = -right;
+          break;
+        case KeyCode::Right:
+          direction = right;
+          break;
+        case KeyCode::Up:
+          direction = away;
+          break;
+        case KeyCode::Down:
+          direction = -away;
+          break;
+        case KeyCode::PageUp:
+          direction = is3D ? Vector3(0.0f, 1.0f, 0.0f) : Vector3(0.0f);
+          break;
+        case KeyCode::PageDown:
+          direction = is3D ? Vector3(0.0f, -1.0f, 0.0f) : Vector3(0.0f);
+          break;
+        default:
+          break;
+      }
+    }
+    if (direction != Vector3(0.0f)) {
+      nudgeSelection(direction);
+      continue;
+    }
+    kept.push(event);
+  }
+  keys.swap(kept);
+}
+
 static bool
 createShapeFor(EditorCommand command, bool* empty, ScenePrimitiveShape* shape)
 {
@@ -905,6 +1007,156 @@ createShapeFor(EditorCommand command, bool* empty, ScenePrimitiveShape* shape)
     default:
       return false;
   }
+}
+
+bool
+EditorScene::createAtContextPoint(EditorCommand command)
+{
+  bool empty = false;
+  ScenePrimitiveShape shape = ScenePrimitiveShape::Cube;
+  if (!m_contextPointValid || !createShapeFor(command, &empty, &shape)) {
+    return false;
+  }
+  m_activeTool = command;
+  applyActiveToolAt(m_contextWorldX, m_contextWorldY);
+  m_contextPointValid = false;
+  return true;
+}
+
+void
+EditorScene::duplicateForDrag()
+{
+  const std::vector<std::string> copies =
+    m_document.duplicate(m_selection.topLevel(m_document.scene()));
+  if (!copies.empty()) {
+    m_selection.set(copies);
+    m_hoverId.clear();
+  }
+}
+
+void
+EditorScene::updateContextClick()
+{
+  if (ic == nullptr || ic->inputManager == nullptr || ic->window == nullptr) {
+    return;
+  }
+  const bool right =
+    ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight);
+  const std::array<double, 2> mouse = ic->window->getMouseCoords();
+  const float x = static_cast<float>(mouse[0]);
+  const float y = static_cast<float>(mouse[1]);
+  if (right && !m_rightDown) {
+    const float scale =
+      GuiPanelLayout::viewport(ic->window, ic->renderer).layoutScale;
+    m_rightDown = true;
+    m_rightInWorld = !uiBlocksWorld(x / scale, y / scale) &&
+                     !(m_sceneGraphView && m_sceneGraphView->menuOpen());
+    if (m_rightInWorld && m_toolbar) {
+      m_toolbar->closeMenus();
+    }
+    m_rightStartX = x;
+    m_rightStartY = y;
+    m_rightTravel = 0.0f;
+  } else if (right) {
+    m_rightTravel =
+      std::max(m_rightTravel, std::hypot(x - m_rightStartX, y - m_rightStartY));
+  } else if (m_rightDown) {
+    m_rightDown = false;
+    // A right click (not an orbit or pan) in the world opens the menu.
+    if (m_rightInWorld && m_rightTravel < 4.0f) {
+      openViewportMenu(x, y);
+    }
+  }
+}
+
+void
+EditorScene::openViewportMenu(float pixelX, float pixelY)
+{
+  if (!m_toolbar) {
+    return;
+  }
+  glm::vec3 origin{ 0.0f };
+  glm::vec3 direction{ 0.0f };
+  std::string hit;
+  if (screenToWorldRay(pixelX, pixelY, &origin, &direction)) {
+    m_document.pickRay(origin, direction, &hit);
+  }
+  m_contextPointValid =
+    screenToWorld(pixelX, pixelY, &m_contextWorldX, &m_contextWorldY);
+  using Entry = std::pair<std::string, EditorCommand>;
+  std::vector<Entry> entries;
+  if (!hit.empty()) {
+    // The menu acts on what was clicked: it joins a selection holding it,
+    // else replaces it.
+    if (!m_selection.contains(hit)) {
+      m_selection.set(hit);
+    }
+    const SceneInstance& scene = m_document.scene();
+    bool children = false;
+    bool parents = false;
+    bool allLocked = true;
+    for (const std::string& id : m_selection.ids()) {
+      children = children || !scene.childIds(id).empty();
+      parents = parents || !scene.parentOf(id).empty();
+      allLocked = allLocked && m_document.isLockedSelf(id);
+    }
+    const SceneNode* node = m_document.findNode(hit);
+    entries.push_back(
+      { node != nullptr && !node->name.empty() ? node->name : hit,
+        EditorCommand::None });
+    entries.push_back({ "-", EditorCommand::None });
+    entries.push_back({ "Frame", EditorCommand::FrameSelection });
+    entries.push_back({ "Rename", EditorCommand::Rename });
+    entries.push_back({ "Duplicate", EditorCommand::Duplicate });
+    entries.push_back({ "Copy", EditorCommand::Copy });
+    entries.push_back({ "Cut", EditorCommand::Cut });
+    entries.push_back({ "Paste", EditorCommand::Paste });
+    entries.push_back({ "Delete", EditorCommand::DeleteNode });
+    entries.push_back({ "-", EditorCommand::None });
+    entries.push_back({ "Group", EditorCommand::GroupSelection });
+    entries.push_back(
+      { "Ungroup",
+        children ? EditorCommand::UngroupSelection : EditorCommand::None });
+    entries.push_back(
+      { "Select Parent",
+        parents ? EditorCommand::SelectParent : EditorCommand::None });
+    entries.push_back(
+      { "Select Children",
+        children ? EditorCommand::SelectChildren : EditorCommand::None });
+    entries.push_back({ "-", EditorCommand::None });
+    entries.push_back(
+      { allLocked ? "Unlock" : "Lock", EditorCommand::ToggleLock });
+    entries.push_back({ "Hide", EditorCommand::ToggleVisible });
+    entries.push_back({ m_isolated ? "Show Everything" : "Isolate",
+                        EditorCommand::ToggleIsolate });
+    entries.push_back({ "Drop to Floor", EditorCommand::DropToFloor });
+  } else {
+    const bool is3D = m_document.worldMode() == SceneWorldMode::World3D;
+    entries.push_back({ "Paste", EditorCommand::Paste });
+    entries.push_back({ "-", EditorCommand::None });
+    entries.push_back({ "Create Empty", EditorCommand::CreateEmpty });
+    if (is3D) {
+      entries.push_back({ "Create Cube", EditorCommand::CreateCube });
+      entries.push_back({ "Create Sphere", EditorCommand::CreateSphere });
+      entries.push_back({ "Create Pyramid", EditorCommand::CreatePyramid });
+    } else {
+      entries.push_back({ "Create Rect", EditorCommand::CreateRect });
+      entries.push_back({ "Create Ellipse", EditorCommand::CreateEllipse });
+      entries.push_back({ "Create Triangle", EditorCommand::CreateTriangle });
+    }
+    entries.push_back({ "Create Light", EditorCommand::CreateLight });
+    entries.push_back({ "Create Camera", EditorCommand::CreateCamera });
+    entries.push_back({ "-", EditorCommand::None });
+    entries.push_back({ m_selection.empty() ? "Frame All" : "Frame Selection",
+                        EditorCommand::FrameSelection });
+    if (m_isolated) {
+      entries.push_back({ "Show Everything", EditorCommand::ToggleIsolate });
+    }
+  }
+  const float scale =
+    GuiPanelLayout::viewport(ic->window, ic->renderer).layoutScale;
+  m_toolbar->openPopup(pixelX / scale, pixelY / scale, entries);
+  rebuildSelectionOverlay();
 }
 
 void

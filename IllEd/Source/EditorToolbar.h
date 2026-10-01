@@ -7,6 +7,7 @@
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <string>
+#include <utility>
 #include <vector>
 
 class InputManager;
@@ -57,6 +58,8 @@ public:
   void setViewToggles(bool gridVisible, bool pivotCenter);
   // View > Play reads Stop Playing while the scene's game runs.
   void setPlaying(bool playing);
+  // Edit > Isolate Selection shows a check mark while the view is isolated.
+  void setIsolated(bool isolated);
   // The viewport rectangle between the dock columns: the mode label sits at
   // its top left and toasts at its bottom right.
   void setViewport(const GuiToolRect& viewport) { m_viewport = viewport; }
@@ -71,6 +74,19 @@ public:
                  float duration = 2.5f);
   void closeMenus();
   bool isMenuOpen() const { return m_openMenu >= 0; }
+  // A context menu at a point of the main window (UI units), kept inside
+  // it. Each entry is a label and its command; a "-" label is a separator
+  // and None disables an entry. A choice comes back from update() like a
+  // menu item's; Escape or a press elsewhere closes it.
+  void openPopup(
+    float x,
+    float y,
+    const std::vector<std::pair<std::string, EditorCommand>>& entries);
+  bool popupOpen() const { return m_popupOpen; }
+  // Whether the command update() last returned came from the popup.
+  bool commandFromPopup() const { return m_fromPopup; }
+  // The popup's item center for a command (tests); false when absent.
+  bool popupItemCenterForTesting(EditorCommand command, float* x, float* y);
   bool consumedPress() const { return m_consumedPress; }
   bool containsScreenPoint(float x, float y) const;
   EditorCommand clickAtForTesting(float x, float y);
@@ -113,6 +129,12 @@ private:
   int m_openMenu = -1;
   int m_hoverMenu = -1;
   int m_hoverItem = -1;
+  Menu m_popup;
+  bool m_popupOpen = false;
+  float m_popupX = 0.0f;
+  float m_popupY = 0.0f;
+  int m_popupHover = -1;
+  bool m_fromPopup = false;
   bool m_consumedPress = false;
   std::string m_status;
   float m_fontSize = kDefaultFontSize;
@@ -127,6 +149,7 @@ private:
   bool m_gridVisible = true;
   bool m_pivotCenter = false;
   bool m_playing = false;
+  bool m_isolated = false;
   std::string m_undoLabel;
   std::string m_redoLabel;
   std::vector<EditorPanelMenuEntry> m_panels;
@@ -141,6 +164,8 @@ private:
   std::vector<GuiToolStyle::MenuItem> styleItems(const Menu& menu) const;
   // The open dropdown's rectangle; empty when no menu is open.
   GuiToolRect dropdownRect() const;
+  GuiToolRect popupRect() const;
+  int popupItemAt(float x, float y) const;
   int menuAt(float x, float y) const;
   int itemAt(float x, float y) const;
   void rebuildVisual();

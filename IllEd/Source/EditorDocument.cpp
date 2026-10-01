@@ -3,11 +3,13 @@
 #include <Illumo/Content/SceneAssetRefs.h>
 
 #include <Illumo/Content/IlscCodec.h>
+#include <Illumo/Content/SceneExtensionList.h>
 #include <Illumo/Content/ScenePlay.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cmath>
 #include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <unordered_map>
 #include <utility>
 
@@ -1133,9 +1135,238 @@ EditorDocument::placeAsset(const std::string& virtualPath,
 bool
 EditorDocument::pickRay(const Vector3& origin,
                         const Vector3& direction,
-                        std::string* id) const
+                        std::string* id,
+                        const std::unordered_set<std::string>* except) const
 {
-  return m_scene->pickRay(origin, direction, id);
+  const std::unordered_set<std::string>& locked = unpickable();
+  if (except == nullptr || except->empty()) {
+    return m_scene->pickRay(
+      origin, direction, id, locked.empty() ? nullptr : &locked);
+  }
+  std::unordered_set<std::string> skip = locked;
+  skip.insert(except->begin(), except->end());
+  return m_scene->pickRay(origin, direction, id, &skip);
+}
+
+// The IllEd-owned scene extension holding editor data saved with a scene.
+static const char* const kViewExtension = "illed.view";
+
+void
+EditorDocument::refreshLocks() const
+{
+  if (m_lockRevision == m_scene->revision() &&
+      m_lockGeneration == m_sceneGeneration) {
+    return;
+  }
+  m_lockRevision = m_scene->revision();
+  m_lockGeneration = m_sceneGeneration;
+  m_locked.clear();
+  m_unpickable.clear();
+  for (const std::string& id : SceneExtensionList::read(
+         m_scene->document().extensions, kViewExtension, "locked")) {
+    if (m_scene->findNode(id) != nullptr) {
+      m_locked.insert(id);
+    }
+  }
+  for (const std::string& id : m_locked) {
+    for (const std::string& below : m_scene->subtreeIds(id)) {
+      m_unpickable.insert(below);
+    }
+  }
+}
+
+bool
+EditorDocument::isLocked(const std::string& id) const
+{
+  refreshLocks();
+  return m_unpickable.contains(id);
+}
+
+bool
+EditorDocument::isLockedSelf(const std::string& id) const
+{
+  refreshLocks();
+  return m_locked.contains(id);
+}
+
+const std::unordered_set<std::string>&
+EditorDocument::unpickable() const
+{
+  refreshLocks();
+  return m_unpickable;
+}
+
+bool
+EditorDocument::setLocked(const std::vector<std::string>& ids, bool locked)
+{
+  refreshLocks();
+  std::unordered_set<std::string> next = m_locked;
+  for (const std::string& id : ids) {
+    if (m_scene->findNode(id) == nullptr) {
+      continue;
+    }
+    if (locked) {
+      next.insert(id);
+    } else {
+      next.erase(id);
+    }
+  }
+  if (next == m_locked) {
+    return false;
+  }
+  std::vector<std::string> sorted(next.begin(), next.end());
+  std::sort(sorted.begin(), sorted.end());
+  const EditorSceneSettings before = EditorHistory::captureSettings(*m_scene);
+  std::vector<SceneExtension> extensions = before.extensions;
+  SceneExtensionList::write(extensions, kViewExtension, "locked", sorted);
+  std::string error;
+  if (!m_scene->setExtensions(extensions, error)) {
+    return false;
+  }
+  const std::string count = std::to_string(ids.size());
+  return recordSettings(
+    std::string(locked ? "Lock " : "Unlock ") +
+      (ids.size() == 1 ? std::string("node") : count + " nodes"),
+    {},
+    before);
+}
+
+std::string
+EditorDocument::groupNodes(const std::vector<std::string>& roots)
+{
+  std::vector<std::string> present;
+  for (const std::string& id : roots) {
+    if (m_scene->findNode(id) != nullptr &&
+        std::find(present.begin(), present.end(), id) == present.end()) {
+      present.push_back(id);
+    }
+  }
+  if (present.empty()) {
+    return {};
+  }
+  // A shared parent keeps the group there, in the first node's place;
+  // nodes from different parents are grouped at the root.
+  bool shared = true;
+  for (const std::string& id : present) {
+    shared = shared && m_scene->parentOf(id) == m_scene->parentOf(present[0]);
+  }
+  const std::string parent =
+    shared ? m_scene->parentOf(present.front()) : std::string();
+  std::string insertBefore;
+  for (const std::string& sibling : m_scene->childIds(parent)) {
+    if (shared &&
+        std::find(present.begin(), present.end(), sibling) != present.end()) {
+      insertBefore = sibling;
+      break;
+    }
+  }
+  bool any = false;
+  AxisAlignedBounds3 all;
+  for (const std::string& id : present) {
+    AxisAlignedBounds3 bounds;
+    if (subtreeWorldBounds(id, &bounds)) {
+      if (!any) {
+        all = bounds;
+        any = true;
+      } else {
+        all.include(bounds);
+      }
+    }
+  }
+  const Vector3 center =
+    any ? (all.minimum + all.maximum) * 0.5f : Vector3(0.0f);
+  const Matrix4 parentWorld =
+    parent.empty() ? Matrix4(1.0f) : m_scene->worldMatrix(parent);
+  const double determinant = glm::determinant(glm::dmat4(parentWorld));
+  if (!std::isfinite(determinant) || determinant == 0.0) {
+    return {};
+  }
+  SceneNode group;
+  group.id = m_scene->uniqueId("n");
+  group.name = "Group";
+  group.parentId = parent;
+  group.transform = Transform3D::fromMatrix(
+    glm::inverse(parentWorld) * glm::translate(Matrix4(1.0f), center));
+
+  std::vector<EditorNodeState> before;
+  EditorNodeState absent;
+  absent.id = group.id;
+  before.push_back(absent);
+  const std::vector<EditorNodeState> moved = captureAll(present);
+  before.insert(before.end(), moved.begin(), moved.end());
+  std::string error;
+  if (!m_scene->insertNode(group, insertBefore, error)) {
+    return {};
+  }
+  const Matrix4 groupWorld = m_scene->worldMatrix(group.id);
+  for (const std::string& id : present) {
+    const Matrix4 world = m_scene->worldMatrix(id);
+    if (!m_scene->setParent(id, group.id, {}, error)) {
+      std::string ignored;
+      EditorHistory::applyStates(*m_scene, before, ignored);
+      return {};
+    }
+    m_scene->setTransform(
+      id, Transform3D::fromMatrix(glm::inverse(groupWorld) * world));
+  }
+  record(present.size() == 1
+           ? std::string("Group node")
+           : "Group " + std::to_string(present.size()) + " nodes",
+         {},
+         before);
+  return group.id;
+}
+
+std::vector<std::string>
+EditorDocument::ungroupNodes(const std::vector<std::string>& ids)
+{
+  std::vector<std::string> lifted;
+  std::vector<std::string> touched;
+  std::vector<EditorNodeState> before;
+  const std::function<void(const std::string&)> capture =
+    [this, &touched, &before](const std::string& id) {
+      if (std::find(touched.begin(), touched.end(), id) == touched.end()) {
+        touched.push_back(id);
+        const std::vector<EditorNodeState> state = captureAll({ id });
+        before.insert(before.end(), state.begin(), state.end());
+      }
+    };
+  for (const std::string& id : ids) {
+    const SceneNode* node = m_scene->findNode(id);
+    const std::vector<std::string> children =
+      node != nullptr ? m_scene->childIds(id) : std::vector<std::string>{};
+    if (children.empty()) {
+      continue;
+    }
+    const bool drawsNothing = node->components.empty();
+    capture(id);
+    for (const std::string& child : children) {
+      capture(child);
+    }
+    const std::string parent = m_scene->parentOf(id);
+    const Matrix4 parentWorld =
+      parent.empty() ? Matrix4(1.0f) : m_scene->worldMatrix(parent);
+    const double determinant = glm::determinant(glm::dmat4(parentWorld));
+    std::string error;
+    for (const std::string& child : children) {
+      const Matrix4 world = m_scene->worldMatrix(child);
+      if (!m_scene->setParent(child, parent, id, error)) {
+        continue;
+      }
+      if (std::isfinite(determinant) && determinant != 0.0) {
+        m_scene->setTransform(
+          child, Transform3D::fromMatrix(glm::inverse(parentWorld) * world));
+      }
+      lifted.push_back(child);
+    }
+    if (drawsNothing && m_scene->childIds(id).empty()) {
+      m_scene->removeSubtree(id);
+    }
+  }
+  if (!lifted.empty()) {
+    record("Ungroup", {}, before);
+  }
+  return lifted;
 }
 
 Matrix4

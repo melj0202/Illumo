@@ -78,6 +78,17 @@ enum class EditorCommand
   DistributeZ,
   // Focuses the hierarchy's filter field.
   FindInHierarchy,
+  // Hierarchy: put the top-level selection under a new parent or lift a
+  // group's children out, walk up or down, lock nodes against viewport
+  // picking, and isolate the selection in the view.
+  GroupSelection,
+  UngroupSelection,
+  SelectParent,
+  SelectChildren,
+  ToggleLock,
+  ToggleIsolate,
+  // Lowers each selected subtree onto the surface or ground below it.
+  DropToFloor,
   SetMode2D,
   SetMode3D,
   CycleColor,

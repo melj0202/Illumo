@@ -323,6 +323,8 @@ EditorSceneGraphView::rebuildTreeRows(const EditorDocument* document)
     // Folding is ignored while filtering, so every match shows.
     row.folded = !filtering && row.hasChildren && isFolded(row.id);
     row.visible = node->visible;
+    row.locked = document->isLockedSelf(row.id);
+    row.lockInherited = !row.locked && document->isLocked(row.id);
     row.context = filtering && matches.find(row.id) == matches.end();
     if (row.folded) {
       foldedDepth = depth;
@@ -407,6 +409,7 @@ EditorSceneGraphView::rowGeometry(const TreeRow& row) const
   geometry.contentX = geometry.foldX + 12.0f * fontScale;
   geometry.eyeX =
     geometry.x + geometry.w - geometry.iconSize - 4.0f * fontScale;
+  geometry.lockX = geometry.eyeX - geometry.iconSize - 4.0f * fontScale;
   return geometry;
 }
 
@@ -470,14 +473,19 @@ struct SceneGraphMenuEntry
   EditorCommand command;
 };
 
-static const std::array<SceneGraphMenuEntry, 10> kMenuEntries = { {
+static const std::array<SceneGraphMenuEntry, 15> kMenuEntries = { {
   { "Rename", EditorCommand::Rename },
   { "Duplicate", EditorCommand::Duplicate },
   { "Copy", EditorCommand::Copy },
   { "Cut", EditorCommand::Cut },
   { "Paste", EditorCommand::Paste },
   { "Add Child", EditorCommand::CreateChild },
+  { "Group", EditorCommand::GroupSelection },
+  { "Ungroup", EditorCommand::UngroupSelection },
+  { "Select Children", EditorCommand::SelectChildren },
   { "Show/Hide", EditorCommand::ToggleVisible },
+  { "Lock/Unlock", EditorCommand::ToggleLock },
+  { "Isolate", EditorCommand::ToggleIsolate },
   { "Enable/Disable", EditorCommand::ToggleEnabled },
   { "Unparent", EditorCommand::UnparentNode },
   { "Delete", EditorCommand::DeleteNode },
@@ -622,6 +630,11 @@ EditorSceneGraphView::handlePress(float x,
     if (x >= geometry.eyeX - 2.0f &&
         x <= geometry.eyeX + geometry.iconSize + 2.0f) {
       return document != nullptr && document->setVisible(row.id, !row.visible);
+    }
+    if (x >= geometry.lockX - 2.0f &&
+        x <= geometry.lockX + geometry.iconSize + 2.0f) {
+      return document != nullptr &&
+             document->setLocked({ row.id }, !row.locked);
     }
     const std::string clickedId = row.id;
     int anchorIndex = -1;
@@ -923,6 +936,34 @@ drawEye(GameVisual& visual,
   }
 }
 
+// A small padlock: a body and a shackle, the shackle open when unlocked.
+static void
+drawLock(GameVisual& visual,
+         float x,
+         float centreY,
+         float size,
+         bool closed,
+         ColorRgba color)
+{
+  const float bodyW = size * 0.7f;
+  const float bodyH = size * 0.45f;
+  const float bodyX = x + (size - bodyW) * 0.5f;
+  const float bodyY = centreY - bodyH * 0.2f;
+  visual.addOutlineRect(bodyX, bodyY, bodyW, bodyH, color, 1.0f);
+  const float left = bodyX + bodyW * 0.2f;
+  const float right = bodyX + bodyW * 0.8f;
+  const float top = bodyY - size * 0.35f;
+  visual.addLine(left, bodyY, left, top, color, 1.0f);
+  visual.addLine(left, top, right, top, color, 1.0f);
+  // Open: the shackle's right leg lifts out of the body.
+  visual.addLine(
+    right, top, right, closed ? bodyY : top + size * 0.15f, color, 1.0f);
+  if (closed) {
+    visual.addFilledRect(
+      bodyX + bodyW * 0.5f - 1.0f, bodyY + bodyH * 0.35f, 2.0f, 2.0f, color);
+  }
+}
+
 void
 EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
                                     const EditorSelection* selection)
@@ -1061,10 +1102,20 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
                              row.name,
                              labelX,
                              textY,
-                             geometry.eyeX - 4.0f * fontScale - labelX,
+                             geometry.lockX - 4.0f * fontScale - labelX,
                              rowFont,
                              labelColor);
 
+    if (isHovered || isSelected || row.locked || row.lockInherited) {
+      drawLock(m_visual,
+               geometry.lockX,
+               hookY,
+               iconSize,
+               row.locked || row.lockInherited,
+               row.locked          ? GuiToolPalette::warning
+               : row.lockInherited ? GuiToolPalette::faint
+                                   : GuiToolPalette::dim);
+    }
     if (isHovered || isSelected || !row.visible) {
       drawEye(m_visual,
               geometry.eyeX,

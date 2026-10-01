@@ -163,6 +163,7 @@ SceneInstance::clear()
   m_state = SceneDocument{};
   m_packageRoot.clear();
   m_warnings.clear();
+  m_viewHidden.clear();
   m_lighting = SceneLighting{};
   m_lightingDirty = true;
   touch();
@@ -684,7 +685,7 @@ SceneInstance::buildNode(const SceneNode& node,
   description.transform = node.transform;
   description.name = node.id;
   description.enabled = node.enabled;
-  description.visible = node.visible;
+  description.visible = graphVisible(node);
   const SceneNodeHandle handle = m_graph.createNode(description);
   if (handle.isNull()) {
     error = "The scene graph rejected the node";
@@ -1234,7 +1235,9 @@ bool
 SceneInstance::setVisible(std::string_view id, bool visible)
 {
   Record* entry = record(id);
-  if (entry == nullptr || !m_graph.setVisible(entry->handle, visible)) {
+  if (entry == nullptr ||
+      !m_graph.setVisible(entry->handle,
+                          visible && !m_viewHidden.contains(entry->node.id))) {
     return false;
   }
   entry->node.visible = visible;
@@ -1312,7 +1315,7 @@ SceneInstance::replaceNode(const SceneNode& node, std::string& error)
   }
   m_graph.setLocalTransform(entry->handle, node.transform);
   m_graph.setEnabled(entry->handle, node.enabled);
-  m_graph.setVisible(entry->handle, node.visible);
+  m_graph.setVisible(entry->handle, graphVisible(node));
   const std::vector<SceneComponent> before = entry->node.components;
   entry->node = node;
   entry->node.parentId.clear();
@@ -1415,6 +1418,32 @@ SceneInstance::setEditorState(const SceneEditorState& state)
   m_cacheDirty = true;
 }
 
+void
+SceneInstance::setViewHidden(const std::vector<std::string>& ids)
+{
+  std::unordered_set<std::string> next;
+  for (const std::string& id : ids) {
+    if (record(id) != nullptr) {
+      next.insert(id);
+    }
+  }
+  if (next == m_viewHidden) {
+    return;
+  }
+  m_viewHidden = std::move(next);
+  // Only the graph changes; the document and its revision do not.
+  for (std::pair<const std::string, std::unique_ptr<Record>>& entry :
+       m_records) {
+    const bool visible = graphVisible(entry.second->node);
+    bool current = true;
+    m_graph.getVisible(entry.second->handle, &current);
+    if (current != visible) {
+      m_graph.setVisible(entry.second->handle, visible);
+    }
+  }
+  m_lightingDirty = true;
+}
+
 bool
 SceneInstance::localBounds(std::string_view id,
                            AxisAlignedBounds3* bounds) const
@@ -1449,7 +1478,8 @@ SceneInstance::localBounds(std::string_view id,
 bool
 SceneInstance::pickRay(const Vector3& origin,
                        const Vector3& direction,
-                       std::string* id) const
+                       std::string* id,
+                       const std::unordered_set<std::string>* skip) const
 {
   ILLUMO_PROFILE_ZONE("SceneInstance.pickRay");
   if (id == nullptr) {
@@ -1470,7 +1500,8 @@ SceneInstance::pickRay(const Vector3& origin,
   for (const SceneRayHit& candidate : m_candidates) {
     AxisAlignedBounds3 bounds;
     const std::string candidateId = idOf(candidate.node);
-    if (!localBounds(candidateId, &bounds)) {
+    if ((skip != nullptr && skip->contains(candidateId)) ||
+        !localBounds(candidateId, &bounds)) {
       continue;
     }
     Matrix4 worldValue(1.0f);

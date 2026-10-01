@@ -138,6 +138,9 @@ private:
     bool hasChildren = false;
     bool folded = false;
     bool visible = true;
+    // Locked itself, or only through a locked ancestor.
+    bool locked = false;
+    bool lockInherited = false;
     // Shown only as an ancestor of a filter match.
     bool context = false;
   };
@@ -191,6 +194,7 @@ private:
     float contentX = 0.0f;
     float foldX = 0.0f;
     float eyeX = 0.0f;
+    float lockX = 0.0f;
     float iconSize = 0.0f;
   };
 

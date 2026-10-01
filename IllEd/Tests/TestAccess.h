@@ -63,6 +63,16 @@ public:
   {
     return module.m_playApplication;
   }
+  // The node outlined under the cursor (empty for none).
+  static const std::string& hoverId(const EditorScene& module)
+  {
+    return module.m_hoverId;
+  }
+  static bool createAtContextPoint(EditorScene& module, EditorCommand command)
+  {
+    return module.createAtContextPoint(command);
+  }
+  static bool isolated(const EditorScene& module) { return module.m_isolated; }
 
   static EditorToolbar* toolbar(EditorScene& module)
   {

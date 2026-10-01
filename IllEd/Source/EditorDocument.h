@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class AssetManager;
@@ -213,6 +214,30 @@ public:
   }
   // Copies each subtree next to its original; returns the new root ids.
   std::vector<std::string> duplicate(const std::vector<std::string>& ids);
+  // Puts top-level nodes under a new empty "Group" node at the centre of
+  // their bounds, keeping their world poses, as one command. The group goes
+  // where the first of them was when they share a parent, else at the root.
+  // Returns the group's id (empty when nothing was grouped).
+  std::string groupNodes(const std::vector<std::string>& roots);
+  // Lifts each node's children into its own parent, in its place and keeping
+  // their world poses, and removes the node when it draws nothing (no
+  // components), as one command. Returns the lifted children.
+  std::vector<std::string> ungroupNodes(const std::vector<std::string>& ids);
+
+  // --- Locks: the viewport cannot pick a locked node or its subtree. ---
+  // Stored in the scene's "illed.view" extension, so they are saved; a
+  // change is one settings command.
+  bool isLocked(const std::string& id) const;
+  bool isLockedSelf(const std::string& id) const;
+  // Every locked node and descendant, for picking and box selection.
+  const std::unordered_set<std::string>& unpickable() const;
+  bool setLocked(const std::vector<std::string>& ids, bool locked);
+  // View hiding (an isolation): never an edit; see SceneInstance.
+  void setViewHidden(const std::vector<std::string>& ids)
+  {
+    m_scene->setViewHidden(ids);
+  }
+  bool viewHiding() const { return !m_scene->viewHidden().empty(); }
   // Adds a mesh (.obj) or texture file from the virtual file tree as an asset
   // entry plus a node showing it (a mesh renderer or a sprite) at the given
   // world transform, as one command. The reference is package-relative when
@@ -230,9 +255,11 @@ public:
 
   // --- Queries. ---
 
+  // Locked nodes, and those in `except` (a moving subtree), never pick.
   bool pickRay(const Vector3& origin,
                const Vector3& direction,
-               std::string* id) const;
+               std::string* id,
+               const std::unordered_set<std::string>* except = nullptr) const;
   Matrix4 worldMatrix(const std::string& id) const;
   // World bounds of a node and its descendants; a node that draws nothing
   // counts as its origin. False for an unknown id.
@@ -253,6 +280,12 @@ private:
   SceneInstance* m_scene = nullptr;
   uint64_t m_sceneGeneration = 0;
   const BehaviourSchema* m_behaviours = nullptr;
+  // Locked ids and the unpickable set, rebuilt when the scene changes.
+  mutable std::unordered_set<std::string> m_locked;
+  mutable std::unordered_set<std::string> m_unpickable;
+  mutable uint64_t m_lockRevision = 0;
+  mutable uint64_t m_lockGeneration = 0;
+  void refreshLocks() const;
   EditorHistory m_history;
   std::string m_path;
   std::string m_label;

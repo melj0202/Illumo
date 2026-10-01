@@ -142,6 +142,171 @@ EditorScene::updatePlay()
   }
 }
 
+void
+EditorScene::groupSelection()
+{
+  const std::string group =
+    m_document.groupNodes(m_selection.topLevel(m_document.scene()));
+  if (group.empty()) {
+    toast("Select nodes to group", kToastInfo);
+    return;
+  }
+  m_selection.set(group);
+  toast("Grouped", kToastGood);
+}
+
+void
+EditorScene::ungroupSelection()
+{
+  const std::vector<std::string> lifted =
+    m_document.ungroupNodes(m_selection.ids());
+  if (lifted.empty()) {
+    toast("Nothing to ungroup: select a node with children", kToastInfo);
+    return;
+  }
+  m_selection.set(lifted);
+  toast("Ungrouped " + std::to_string(lifted.size()) + " nodes", kToastGood);
+}
+
+void
+EditorScene::selectRelatives(bool parents)
+{
+  std::vector<std::string> next;
+  for (const std::string& id : m_selection.ids()) {
+    std::vector<std::string> found;
+    if (parents) {
+      const std::string parent = m_document.scene().parentOf(id);
+      if (!parent.empty()) {
+        found.push_back(parent);
+      }
+    } else {
+      found = m_document.scene().childIds(id);
+    }
+    for (const std::string& relative : found) {
+      if (std::find(next.begin(), next.end(), relative) == next.end()) {
+        next.push_back(relative);
+      }
+    }
+  }
+  if (next.empty()) {
+    toast(parents ? "The selection is at the root" : "No children to select",
+          kToastInfo);
+    return;
+  }
+  m_selection.set(next);
+}
+
+void
+EditorScene::toggleLockSelection()
+{
+  const std::vector<std::string>& ids = m_selection.ids();
+  if (ids.empty()) {
+    return;
+  }
+  bool allLocked = true;
+  for (const std::string& id : ids) {
+    allLocked = allLocked && m_document.isLockedSelf(id);
+  }
+  if (m_document.setLocked(ids, !allLocked)) {
+    toast(allLocked ? "Unlocked: clicks select it again"
+                    : "Locked: clicks in the viewport pass through",
+          kToastInfo);
+  }
+}
+
+void
+EditorScene::toggleIsolate()
+{
+  if (m_isolated) {
+    m_isolated = false;
+    m_document.setViewHidden({});
+    toast("Showing everything", kToastInfo);
+    return;
+  }
+  if (m_selection.ids().empty()) {
+    toast("Select what to isolate", kToastInfo);
+    return;
+  }
+  // The selection's subtrees and their ancestors stay; everything else
+  // hides from view (hiding a node hides its subtree).
+  std::unordered_set<std::string> keep;
+  for (const std::string& id : m_selection.ids()) {
+    for (const std::string& below : m_document.scene().subtreeIds(id)) {
+      keep.insert(below);
+    }
+    for (std::string up = m_document.scene().parentOf(id); !up.empty();
+         up = m_document.scene().parentOf(up)) {
+      keep.insert(up);
+    }
+  }
+  std::vector<std::string> hidden;
+  const SceneGraph& graph = m_document.graph();
+  for (SceneNodeHandle node = graph.firstNode(); !node.isNull();
+       node = graph.nextNode(node)) {
+    const std::string id(graph.getName(node));
+    if (!keep.contains(id)) {
+      hidden.push_back(id);
+    }
+  }
+  m_document.setViewHidden(hidden);
+  m_isolated = true;
+  m_isolatedGeneration = m_document.sceneGeneration();
+  toast("Isolated (Shift+H shows everything)", kToastInfo);
+}
+
+void
+EditorScene::dropSelectionToFloor()
+{
+  std::vector<std::string> ids;
+  std::vector<Vector3> deltas;
+  for (const std::string& id : m_selection.topLevel(m_document.scene())) {
+    AxisAlignedBounds3 bounds;
+    if (!m_document.subtreeWorldBounds(id, &bounds)) {
+      continue;
+    }
+    // Cast down from the subtree's base, through itself, to the first
+    // surface below; with none, the ground plane (y = 0).
+    std::unordered_set<std::string> self;
+    for (const std::string& below : m_document.scene().subtreeIds(id)) {
+      self.insert(below);
+    }
+    const Vector3 base((bounds.minimum.x + bounds.maximum.x) * 0.5f,
+                       bounds.minimum.y + 0.001f,
+                       (bounds.minimum.z + bounds.maximum.z) * 0.5f);
+    float floor = 0.0f;
+    std::string hit;
+    AxisAlignedBounds3 surface;
+    if (m_document.pickRay(base, Vector3(0.0f, -1.0f, 0.0f), &hit, &self) &&
+        m_document.graph().getWorldBounds(m_document.nodeHandle(hit),
+                                          &surface) &&
+        surface.maximum.y <= base.y) {
+      floor = surface.maximum.y;
+    }
+    const float delta = floor - bounds.minimum.y;
+    if (std::fabs(delta) > 1.0e-5f) {
+      ids.push_back(id);
+      deltas.push_back(Vector3(0.0f, delta, 0.0f));
+    }
+  }
+  if (ids.empty()) {
+    toast("Already on the floor", kToastInfo);
+    return;
+  }
+  m_document.translateEach(ids, deltas, "Drop to Floor");
+}
+
+void
+EditorScene::nudgeSelection(const Vector3& direction)
+{
+  const std::vector<std::string> ids = m_selection.topLevel(m_document.scene());
+  if (ids.empty()) {
+    return;
+  }
+  const float step = std::max(0.001f, m_document.editorState().snapTranslate);
+  m_document.translate(
+    ids, direction * step, "nudge:" + std::to_string(m_nudgeSerial));
+}
+
 SaveLoadDialogSpec
 EditorScene::dialogSpec() const
 {
@@ -989,6 +1154,10 @@ void
 EditorScene::handleCommand(EditorCommand command)
 {
   const uint64_t revision = m_document.revision();
+  if (command != EditorCommand::None) {
+    // A nudge after any other command starts a new undo step.
+    ++m_nudgeSerial;
+  }
   dispatchCommand(command);
   if (m_document.revision() != revision) {
     refreshView();
@@ -1140,6 +1309,27 @@ EditorScene::dispatchCommand(EditorCommand command)
       return;
     case EditorCommand::PlayScene:
       togglePlay();
+      return;
+    case EditorCommand::GroupSelection:
+      groupSelection();
+      return;
+    case EditorCommand::UngroupSelection:
+      ungroupSelection();
+      return;
+    case EditorCommand::SelectParent:
+      selectRelatives(true);
+      return;
+    case EditorCommand::SelectChildren:
+      selectRelatives(false);
+      return;
+    case EditorCommand::ToggleLock:
+      toggleLockSelection();
+      return;
+    case EditorCommand::ToggleIsolate:
+      toggleIsolate();
+      return;
+    case EditorCommand::DropToFloor:
+      dropSelectionToFloor();
       return;
     case EditorCommand::FindInHierarchy:
       // The filter lives in the Hierarchy panel, so it must be shown.

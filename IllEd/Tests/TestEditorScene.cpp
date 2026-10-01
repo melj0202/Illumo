@@ -1916,12 +1916,266 @@ testPlayScene()
   return counters.failures;
 }
 
+// Group, ungroup, select parent and children, lock and isolate.
+static int
+testGroupLockIsolate()
+{
+  TestCounters counters;
+  EditorFixture fixture;
+  EditorScene& module = fixture.module;
+  EditorDocument& document = EditorSceneTestAccess::document(module);
+  EditorSelection& selection = EditorSceneTestAccess::selection(module);
+  const std::string a =
+    EditorSceneTestAccess::createNode(module, EditorCommand::CreateCube);
+  const std::string b =
+    EditorSceneTestAccess::createNode(module, EditorCommand::CreateCube);
+  const std::string c =
+    EditorSceneTestAccess::createNode(module, EditorCommand::CreateCube);
+  document.setTransform(a, Transform3D::fromPosition(Vector3(1.0f, 0, 0)));
+  document.setTransform(b, Transform3D::fromPosition(Vector3(3.0f, 0, 0)));
+  document.setTransform(c, Transform3D::fromPosition(Vector3(10.0f, 0, 0)));
+  const SceneInstance& scene = document.scene();
+
+  selection.set(std::vector<std::string>{ a, b });
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::GroupSelection);
+  const std::string group = EditorSceneTestAccess::selectedId(module);
+  const SceneNode* groupNode = document.findNode(group);
+  testTrue(counters,
+           groupNode != nullptr && groupNode->name == "Group" &&
+             scene.parentOf(a) == group && scene.parentOf(b) == group &&
+             std::fabs(document.worldMatrix(group)[3].x - 2.0f) < 1.0e-4f &&
+             std::fabs(document.worldMatrix(a)[3].x - 1.0f) < 1.0e-4f &&
+             std::fabs(document.worldMatrix(b)[3].x - 3.0f) < 1.0e-4f,
+           "Group parents the nodes under a node at their centre, in place");
+  testTrue(counters,
+           scene.childIds({}) == std::vector<std::string>{ group, c },
+           "the group takes the first node's place");
+  document.undo();
+  testTrue(counters,
+           document.findNode(group) == nullptr && scene.parentOf(a).empty(),
+           "grouping is one undo step");
+  document.redo();
+  selection.set(a);
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::SelectParent);
+  testEqStr(counters,
+            EditorSceneTestAccess::selectedId(module),
+            group,
+            "Select Parent walks up");
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::SelectChildren);
+  testTrue(counters,
+           selection.ids() == std::vector<std::string>{ a, b },
+           "Select Children walks down");
+
+  // Locks: the subtree stops picking, the set is saved, undo unlocks.
+  selection.set(group);
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::ToggleLock);
+  std::string hit;
+  testTrue(counters,
+           document.isLockedSelf(group) && document.isLocked(a) &&
+             !document.isLocked(c) &&
+             !document.pickRay(
+               Vector3(1.0f, 0.0f, 10.0f), Vector3(0.0f, 0.0f, -1.0f), &hit) &&
+             document.pickRay(
+               Vector3(10.0f, 0.0f, 10.0f), Vector3(0.0f, 0.0f, -1.0f), &hit) &&
+             hit == c,
+           "a locked group's subtree is not pickable");
+  testTrue(counters,
+           document.encode().find("illed.view") != std::string::npos,
+           "locks are saved with the scene");
+  document.undo();
+  testTrue(counters,
+           !document.isLocked(a) &&
+             document.encode().find("illed.view") == std::string::npos,
+           "locking is one undo step");
+
+  // Isolation hides others from view only.
+  selection.set(c);
+  const size_t commands = document.history().size();
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::ToggleIsolate);
+  const SceneGraph& graph = document.graph();
+  testTrue(counters,
+           EditorSceneTestAccess::isolated(module) &&
+             !graph.isEffectivelyVisible(document.nodeHandle(a)) &&
+             graph.isEffectivelyVisible(document.nodeHandle(c)) &&
+             document.findNode(a)->visible &&
+             document.history().size() == commands,
+           "Isolate hides everything else without an edit");
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::ToggleIsolate);
+  testTrue(counters,
+           !EditorSceneTestAccess::isolated(module) &&
+             graph.isEffectivelyVisible(document.nodeHandle(a)),
+           "toggling again shows everything");
+
+  selection.set(group);
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::UngroupSelection);
+  testTrue(counters,
+           document.findNode(group) == nullptr && scene.parentOf(a).empty() &&
+             std::fabs(document.worldMatrix(b)[3].x - 3.0f) < 1.0e-4f &&
+             scene.childIds({}) == std::vector<std::string>{ a, b, c },
+           "Ungroup lifts the children in place and removes the empty group");
+  document.undo();
+  testTrue(counters,
+           document.findNode(group) != nullptr && scene.parentOf(a) == group,
+           "ungrouping is one undo step");
+  return counters.failures;
+}
+
+// Hover, the viewport context menu, Alt-drag copies, Drop to Floor and
+// nudges.
+static int
+testViewportInteraction()
+{
+  TestCounters counters;
+  EditorFixture fixture;
+  EditorScene& module = fixture.module;
+  EditorDocument& document = EditorSceneTestAccess::document(module);
+  EditorSelection& selection = EditorSceneTestAccess::selection(module);
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::SetMode3D);
+  const std::string base =
+    EditorSceneTestAccess::createNode(module, EditorCommand::CreateCube);
+  const std::string top =
+    EditorSceneTestAccess::createNode(module, EditorCommand::CreateCube);
+  const std::string loose =
+    EditorSceneTestAccess::createNode(module, EditorCommand::CreateCube);
+  document.setTransform(base, Transform3D::fromPosition(Vector3(0.0f)));
+  document.setTransform(top, Transform3D::fromPosition(Vector3(0, 5.0f, 0)));
+  document.setTransform(loose, Transform3D::fromPosition(Vector3(4, 3.0f, 0)));
+  selection.set(std::vector<std::string>{ top, loose });
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::DropToFloor);
+  testTrue(counters,
+           std::fabs(document.findNode(top)->transform.position.y - 1.0f) <
+               1.0e-3f &&
+             std::fabs(document.findNode(loose)->transform.position.y - 0.5f) <
+               1.0e-3f,
+           "Drop to Floor lands on the cube below, or on the ground");
+
+  // Nudges: Alt+arrow moves by the move snap step; a run is one command.
+  selection.set(base);
+  module.update(0.016);
+  const size_t commands = document.history().size();
+  const float before = document.findNode(base)->transform.position.x;
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0x4 });
+  module.update(0.016);
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0x4 });
+  module.update(0.016);
+  const Vector3 moved = document.findNode(base)->transform.position;
+  testTrue(counters,
+           std::fabs(std::fabs(moved.x - before) + std::fabs(moved.z) - 1.0f) <
+               1.0e-3f &&
+             document.history().size() == commands + 1,
+           "two Alt+arrow nudges move one snap step each as one command");
+
+  // Hover and the context menu, through real pointer input.
+  float x = 0.0f;
+  float y = 0.0f;
+  testTrue(counters,
+           EditorSceneTestAccess::worldToScreen(
+             module, Vector3(document.worldMatrix(loose)[3]), &x, &y),
+           "the loose cube is on screen");
+  fixture.window.mouseX = x;
+  fixture.window.mouseY = y;
+  module.update(0.016);
+  testEqStr(counters,
+            EditorSceneTestAccess::hoverId(module),
+            loose,
+            "the node under the cursor is hovered");
+  testTrue(counters,
+           EditorSceneTestAccess::toolbar(module)->statusForTesting().find(
+             "Under cursor") != std::string::npos,
+           "the status bar names it");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseRight, InputAction::Press);
+  module.update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseRight, InputAction::Release);
+  module.update(0.016);
+  EditorToolbar* toolbar = EditorSceneTestAccess::toolbar(module);
+  float itemX = 0.0f;
+  float itemY = 0.0f;
+  testTrue(counters,
+           toolbar->popupOpen() &&
+             EditorSceneTestAccess::selectedId(module) == loose &&
+             toolbar->popupItemCenterForTesting(
+               EditorCommand::Duplicate, &itemX, &itemY),
+           "a right click opens the menu for the node under it");
+  const size_t nodes = document.nodeCount();
+  EditorSceneTestAccess::handleCommand(
+    module, toolbar->clickAtForTesting(itemX, itemY));
+  testTrue(counters,
+           document.nodeCount() == nodes + 1 && !toolbar->popupOpen(),
+           "a menu item runs its command and closes the menu");
+
+  // Alt held as the body is grabbed moves a copy.
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseRight, InputAction::None);
+  selection.set(loose);
+  InputManagerTestAccess::setModifierFlags(fixture.input, 0x4);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  module.update(0.016);
+  const std::string copy = EditorSceneTestAccess::selectedId(module);
+  fixture.window.mouseX = x + 60.0;
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Hold);
+  module.update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  module.update(0.016);
+  InputManagerTestAccess::setModifierFlags(fixture.input, 0);
+  testTrue(counters,
+           copy != loose && document.findNode(copy) != nullptr &&
+             document.nodeCount() == nodes + 2 &&
+             std::fabs(document.findNode(loose)->transform.position.x - 4.0f) <
+               1.0e-4f &&
+             document.findNode(copy)->transform.position.x !=
+               document.findNode(loose)->transform.position.x,
+           "Alt-drag leaves the original and moves a copy");
+
+  // The empty-space menu creates where it was opened.
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::None);
+  // An empty patch of ground in the viewport, between the dock columns.
+  const float groundX = 860.0f;
+  const float groundY = 620.0f;
+  float worldX = 0.0f;
+  float worldZ = 0.0f;
+  EditorSceneTestAccess::screenToWorld(
+    module, groundX, groundY, &worldX, &worldZ);
+  fixture.window.mouseX = groundX;
+  fixture.window.mouseY = groundY;
+  module.update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseRight, InputAction::Press);
+  module.update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseRight, InputAction::Release);
+  module.update(0.016);
+  testTrue(counters,
+           toolbar->popupOpen() &&
+             toolbar->popupItemCenterForTesting(
+               EditorCommand::CreateSphere, &itemX, &itemY) &&
+             EditorSceneTestAccess::createAtContextPoint(
+               module, EditorCommand::CreateSphere),
+           "the empty-space menu offers shapes");
+  const Vector3 placed(
+    document.worldMatrix(EditorSceneTestAccess::selectedId(module))[3]);
+  testTrue(counters,
+           std::fabs(placed.x - worldX) < 0.05f &&
+             std::fabs(placed.z - worldZ) < 0.05f,
+           "a shape from it lands at the clicked point");
+  return counters.failures;
+}
+
 void
 registerEditorSceneTests(IllumoTestRegistry& registry)
 {
   registry.add("IllEd.Assets.ProjectFlow",
                []() { return testAssetsProjectFlow(); });
   registry.add("IllEd.Module.PlayScene", []() { return testPlayScene(); });
+  registry.add("IllEd.Module.GroupLockIsolate",
+               []() { return testGroupLockIsolate(); });
+  registry.add("IllEd.Module.ViewportInteraction",
+               []() { return testViewportInteraction(); });
   registry.add("IllEd.Selection.BoxSelect2D",
                []() { return testBoxSelect2D(); });
   registry.add("IllEd.Selection.BoxSelect3D",

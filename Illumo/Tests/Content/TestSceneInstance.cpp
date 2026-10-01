@@ -528,6 +528,41 @@ testInstancePicking()
   testTrue(counters,
            !instance.pickRay(Vector3(0.0f), Vector3(0.0f), &id),
            "a zero ray hits nothing");
+
+  // Editor hooks: a skip set passes the ray through (locked nodes), and
+  // view-hidden nodes neither pick nor change the document.
+  const std::unordered_set<std::string> locked{ "over" };
+  testTrue(counters,
+           instance.pickRay(Vector3(0.1f, 0.0f, 10.0f), down, &id, &locked) &&
+             id == "under",
+           "a skipped node lets the ray reach the one below");
+  const std::uint64_t revision = instance.revision();
+  instance.setViewHidden({ "over", "missing" });
+  testTrue(counters,
+           instance.viewHidden().size() == 1 &&
+             instance.pickRay(Vector3(0.1f, 0.0f, 10.0f), down, &id) &&
+             id == "under",
+           "a view-hidden node does not pick; unknown ids are ignored");
+  testTrue(counters,
+           instance.revision() == revision &&
+             instance.document().findNode("over")->visible,
+           "hiding from view is not an edit");
+  instance.setVisible("over", false);
+  instance.setVisible("over", true);
+  testTrue(counters,
+           instance.pickRay(Vector3(0.1f, 0.0f, 10.0f), down, &id) &&
+             id == "under" && instance.document().findNode("over")->visible,
+           "document visibility edits keep the view hiding");
+  instance.setViewHidden({});
+  testTrue(counters,
+           instance.pickRay(Vector3(0.1f, 0.0f, 10.0f), down, &id) &&
+             id == "over",
+           "clearing the view hiding shows the node again");
+  instance.setViewHidden({ "over" });
+  instance.load(document, "/app", error);
+  testTrue(counters,
+           instance.viewHidden().empty(),
+           "loading a scene clears the view hiding");
   return counters.failures;
 }
 

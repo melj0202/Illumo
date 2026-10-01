@@ -1,6 +1,7 @@
 #include <Illumo/Content/BehaviourSchema.h>
 #include <Illumo/Content/IlscCodec.h>
 #include <Illumo/Content/SceneBehaviours.h>
+#include <Illumo/Content/SceneExtensionList.h>
 #include <Illumo/Content/SceneInstance.h>
 #include <Illumo/Content/ScenePlay.h>
 #include <Illumo/Testing/TestHarness.h>
@@ -431,9 +432,43 @@ testScenePlayExtension()
   return counters.failures;
 }
 
+static int
+testSceneExtensionList()
+{
+  TestCounters counters;
+  std::vector<SceneExtension> extensions;
+  testTrue(counters,
+           SceneExtensionList::read(extensions, "illed.view", "locked").empty(),
+           "a missing extension reads empty");
+  SceneExtensionList::write(extensions, "illed.view", "locked", { "b", "a" });
+  testTrue(counters,
+           extensions.size() == 1 &&
+             extensions[0].data == R"({"locked":["b","a"]})" &&
+             SceneExtensionList::read(extensions, "illed.view", "locked") ==
+               std::vector<std::string>{ "b", "a" },
+           "a list writes canonically and reads back in order");
+  extensions[0].data = R"({"keep":true,"locked":["x",3]})";
+  testTrue(counters,
+           SceneExtensionList::read(extensions, "illed.view", "locked") ==
+             std::vector<std::string>{ "x" },
+           "non-string entries are skipped");
+  SceneExtensionList::write(extensions, "illed.view", "locked", {});
+  testEqStr(counters,
+            extensions[0].data,
+            R"({"keep":true})",
+            "an empty list drops the member and keeps the rest");
+  extensions[0].data = R"({"locked":["x"]})";
+  SceneExtensionList::write(extensions, "illed.view", "locked", {});
+  testTrue(
+    counters, extensions.empty(), "the extension goes when nothing is left");
+  return counters.failures;
+}
+
 void
 registerSceneBehavioursTests(IllumoTestRegistry& registry)
 {
+  registry.add("Illumo.Content.SceneExtensionList",
+               []() { return testSceneExtensionList(); });
   registry.add("Illumo.Content.ScenePlayExtension",
                []() { return testScenePlayExtension(); });
   registry.add("Illumo.Content.BehaviourSchemaParse",

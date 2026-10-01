@@ -58,6 +58,15 @@ EditorToolbar::setViewToggles(bool gridVisible, bool pivotCenter)
 }
 
 void
+EditorToolbar::setIsolated(bool isolated)
+{
+  if (isolated != m_isolated) {
+    m_isolated = isolated;
+    rebuildMenus();
+  }
+}
+
+void
 EditorToolbar::setPlaying(bool playing)
 {
   if (playing != m_playing) {
@@ -81,6 +90,7 @@ void
 EditorToolbar::closeMenus()
 {
   m_openMenu = -1;
+  m_popupOpen = false;
 }
 
 void
@@ -185,6 +195,17 @@ EditorToolbar::rebuildMenus()
   editMenu.items.push_back(separator());
   editMenu.items.push_back(
     item("Find in Hierarchy", EditorCommand::FindInHierarchy));
+  editMenu.items.push_back(separator());
+  editMenu.items.push_back(item("Group", EditorCommand::GroupSelection));
+  editMenu.items.push_back(item("Ungroup", EditorCommand::UngroupSelection));
+  editMenu.items.push_back(item("Select Parent", EditorCommand::SelectParent));
+  editMenu.items.push_back(
+    item("Select Children", EditorCommand::SelectChildren));
+  editMenu.items.push_back(item("Lock/Unlock", EditorCommand::ToggleLock));
+  MenuItem isolate = item("Isolate Selection", EditorCommand::ToggleIsolate);
+  isolate.checked = m_isolated;
+  editMenu.items.push_back(isolate);
+  editMenu.items.push_back(item("Drop to Floor", EditorCommand::DropToFloor));
   m_menus.push_back(editMenu);
 
   Menu createMenu;
@@ -351,6 +372,80 @@ EditorToolbar::dropdownRect() const
   return { title.x, barHeight(), GuiToolStyle::dropdownWidth(items), height };
 }
 
+void
+EditorToolbar::openPopup(
+  float x,
+  float y,
+  const std::vector<std::pair<std::string, EditorCommand>>& entries)
+{
+  m_popup = Menu{};
+  for (const std::pair<std::string, EditorCommand>& entry : entries) {
+    if (entry.first == "-") {
+      m_popup.items.push_back(separator());
+      continue;
+    }
+    MenuItem chosen = item(entry.first.c_str(), entry.second);
+    chosen.enabled = entry.second != EditorCommand::None;
+    m_popup.items.push_back(chosen);
+  }
+  m_openMenu = -1;
+  m_popupOpen = !m_popup.items.empty();
+  m_popupHover = -1;
+  updateLayout();
+  // Inside the window, above the status bar.
+  m_popupX = x;
+  m_popupY = y;
+  const GuiToolRect rect = popupRect();
+  m_popupX = std::clamp(x, 0.0f, std::max(0.0f, m_width - rect.w - 2.0f));
+  m_popupY = std::clamp(
+    y, barHeight(), std::max(barHeight(), m_height - statusHeight() - rect.h));
+}
+
+GuiToolRect
+EditorToolbar::popupRect() const
+{
+  if (!m_popupOpen) {
+    return {};
+  }
+  const std::vector<GuiToolStyle::MenuItem> items = styleItems(m_popup);
+  float height = 6.0f;
+  for (const GuiToolStyle::MenuItem& entry : items) {
+    height += entry.separator ? 7.0f : GuiToolStyle::kRowHeight;
+  }
+  return { m_popupX, m_popupY, GuiToolStyle::dropdownWidth(items), height };
+}
+
+int
+EditorToolbar::popupItemAt(float x, float y) const
+{
+  if (!m_popupOpen) {
+    return -1;
+  }
+  return GuiToolStyle::dropdownItemAt(
+    m_popupX, m_popupY, styleItems(m_popup), x, y);
+}
+
+bool
+EditorToolbar::popupItemCenterForTesting(EditorCommand command,
+                                         float* x,
+                                         float* y)
+{
+  if (!m_popupOpen) {
+    return false;
+  }
+  float top = m_popupY + 3.0f;
+  for (const MenuItem& entry : m_popup.items) {
+    const float height = entry.separator ? 7.0f : GuiToolStyle::kRowHeight;
+    if (!entry.separator && entry.command == command) {
+      *x = m_popupX + popupRect().w * 0.5f;
+      *y = top + height * 0.5f;
+      return true;
+    }
+    top += height;
+  }
+  return false;
+}
+
 int
 EditorToolbar::menuAt(float x, float y) const
 {
@@ -386,7 +481,7 @@ EditorToolbar::itemAt(float x, float y) const
 bool
 EditorToolbar::containsScreenPoint(float x, float y) const
 {
-  if (barRect().contains(x, y)) {
+  if (barRect().contains(x, y) || popupRect().contains(x, y)) {
     return true;
   }
   return m_openMenu >= 0 && dropdownRect().contains(x, y);
@@ -396,6 +491,19 @@ EditorCommand
 EditorToolbar::clickAt(float x, float y)
 {
   updateLayout();
+  if (m_popupOpen) {
+    // A press anywhere ends the popup; on an item it chooses it.
+    const int index = popupItemAt(x, y);
+    m_popupOpen = false;
+    if (index >= 0) {
+      const MenuItem& chosen = m_popup.items[static_cast<std::size_t>(index)];
+      if (chosen.enabled && !chosen.separator) {
+        m_fromPopup = true;
+        return chosen.command;
+      }
+    }
+    return EditorCommand::None;
+  }
   if (m_openMenu >= 0) {
     const int index = itemAt(x, y);
     if (index >= 0) {
@@ -468,8 +576,10 @@ EditorToolbar::update(InputManager* inputManager, float dt)
   m_pointer.sample(m_placement, m_window, m_renderer, inputManager);
   const float x = m_pointer.x();
   const float y = m_pointer.y();
+  m_fromPopup = false;
   m_hoverMenu = menuAt(x, y);
   m_hoverItem = itemAt(x, y);
+  m_popupHover = popupItemAt(x, y);
   if (m_openMenu >= 0 && m_hoverMenu >= 0) {
     // With a menu open, hovering another title switches to it.
     m_openMenu = m_hoverMenu;
@@ -497,8 +607,9 @@ EditorToolbar::update(InputManager* inputManager, float dt)
       inputManager->isShiftPressed() || (event.modifiers & 0x1) != 0;
     const bool alt =
       inputManager->isAltPressed() || (event.modifiers & 0x4) != 0;
-    if (event.key == KeyCode::Escape && m_openMenu >= 0) {
+    if (event.key == KeyCode::Escape && (m_openMenu >= 0 || m_popupOpen)) {
       closeMenus();
+      m_popupOpen = false;
       continue;
     }
     const EditorCommand matched =
@@ -513,7 +624,7 @@ EditorToolbar::update(InputManager* inputManager, float dt)
 
   m_consumedPress = false;
   if (m_pointer.clicked()) {
-    const bool menuWasOpen = m_openMenu >= 0;
+    const bool menuWasOpen = m_openMenu >= 0 || m_popupOpen;
     const EditorCommand clicked = clickAt(x, y);
     if (clicked != EditorCommand::None) {
       command = clicked;
@@ -598,6 +709,10 @@ EditorToolbar::rebuildVisual()
       drop.y,
       styleItems(m_menus[static_cast<std::size_t>(m_openMenu)]),
       m_hoverItem);
+  }
+  if (m_popupOpen) {
+    GuiToolStyle::dropdown(
+      m_visual, m_popupX, m_popupY, styleItems(m_popup), m_popupHover);
   }
 }
 

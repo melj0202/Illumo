@@ -281,6 +281,7 @@ endif()
 add_library(IllumoContent STATIC
   Source/Content/BehaviourSchema.cpp
   Source/Content/ScenePlay.cpp
+  Source/Content/SceneExtensionList.cpp
   Source/Content/IlscCodec.cpp
   Source/Content/PackageArchive.cpp
   Source/Content/PackageManifest.cpp

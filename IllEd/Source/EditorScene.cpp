@@ -274,6 +274,12 @@ EditorScene::updateStatus()
     const int zoom = static_cast<int>(std::round(ic->camera->GetZoom()));
     status += "  |  Zoom: " + std::to_string(zoom) + "x";
   }
+  const SceneNode* hovered =
+    m_hoverId.empty() ? nullptr : m_document.findNode(m_hoverId);
+  if (hovered != nullptr) {
+    status += "  |  Under cursor: " +
+              (hovered->name.empty() ? hovered->id : hovered->name);
+  }
   if (m_document.worldMode() == SceneWorldMode::World3D) {
     status += "  |  [Arrows/MMB: Pan  PgUp/PgDn: Up/Down  RMB: Orbit  "
               "Wheel: Zoom  F: Frame]";
@@ -282,6 +288,9 @@ EditorScene::updateStatus()
   }
   if (!m_playApplication.empty()) {
     status = "Playing in " + m_playApplication + "  |  " + status;
+  }
+  if (m_isolated) {
+    status = "Isolated (Shift+H)  |  " + status;
   }
   m_toolbar->setStatus(status);
 }
@@ -319,6 +328,11 @@ EditorScene::update(double dt)
     m_toolbar->setViewToggles(m_document.editorState().gridVisible,
                               m_pivotCenter);
     updatePlay();
+    // A new document's scene starts unisolated.
+    if (m_isolated && m_isolatedGeneration != m_document.sceneGeneration()) {
+      m_isolated = false;
+    }
+    m_toolbar->setIsolated(m_isolated);
     m_toolbar->setHistoryLabels(m_document.history().undoLabel(),
                                 m_document.history().redoLabel());
   }
@@ -360,7 +374,12 @@ EditorScene::update(double dt)
       // first, so typing never triggers editor shortcuts.
       updateInspector(dtF);
       updateHierarchyFilter(dtF);
-      handleCommand(m_toolbar->update(ic->inputManager, dtF));
+      // The viewport menu's Create items place where it was opened.
+      const EditorCommand chosen = m_toolbar->update(ic->inputManager, dtF);
+      if (!(m_toolbar->commandFromPopup() && createAtContextPoint(chosen))) {
+        handleCommand(chosen);
+      }
+      handleNudgeKeys();
       if (m_sceneGraphView) {
         m_sceneGraphView->update(
           ic->inputManager, &m_document, &m_selection, dtF);
@@ -406,6 +425,7 @@ EditorScene::update(double dt)
       !(ic->commandLine != nullptr && ic->commandLine->isOpen)) {
     updateCamera(dt);
     applyWorldCamera();
+    updateContextClick();
     if (uiConsumedClick) {
       if (ic->inputManager != nullptr) {
         m_mouseWasDown =

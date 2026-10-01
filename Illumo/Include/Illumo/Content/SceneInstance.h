@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class AssetManager;
@@ -176,6 +177,15 @@ public:
                      std::string& error);
   // Editor view state never counts as an edit (revision is unchanged).
   void setEditorState(const SceneEditorState& state);
+  // Editor view state too: these nodes, and so their subtrees, draw, light
+  // and pick as hidden while their document `visible` is unchanged (an
+  // editor's isolation). Replaces the previous set; unknown ids are ignored.
+  // Loading or clearing the scene empties it.
+  void setViewHidden(const std::vector<std::string>& ids);
+  const std::unordered_set<std::string>& viewHidden() const
+  {
+    return m_viewHidden;
+  }
   // One observer at a time (nullptr removes it); it must outlive the
   // binding or unbind itself.
   void setContentObserver(ISceneContentObserver* observer)
@@ -188,10 +198,12 @@ public:
 
   // Nearest node whose attachment local bounds a ray enters, respecting
   // rotation, scale and effective visibility. Equal distances prefer the
-  // node later in preorder (drawn on top in 2D).
+  // node later in preorder (drawn on top in 2D). Nodes in `skip` (an
+  // editor's locked nodes) are never hit; the ray passes through them.
   bool pickRay(const Vector3& origin,
                const Vector3& direction,
-               std::string* id) const;
+               std::string* id,
+               const std::unordered_set<std::string>* skip = nullptr) const;
   // Union of the node's attachment bounds in local space.
   bool localBounds(std::string_view id, AxisAlignedBounds3* bounds) const;
   // The primary camera component (else the first camera) in preorder.
@@ -225,6 +237,7 @@ private:
   SceneLighting m_lighting;
   bool m_lightingDirty = true;
   std::vector<std::string> m_warnings;
+  std::unordered_set<std::string> m_viewHidden;
   uint64_t m_revision = 1;
   uint64_t m_idCounter = 0;
   MeshHandle m_primitiveMeshes[6]{};
@@ -232,6 +245,12 @@ private:
 
   void touch();
   Record* record(std::string_view id) const;
+  // The graph's visibility for a node: its document flag unless the editor
+  // hides it from view.
+  bool graphVisible(const SceneNode& node) const
+  {
+    return node.visible && !m_viewHidden.contains(node.id);
+  }
   bool buildNode(const SceneNode& node,
                  SceneNodeHandle parent,
                  SceneNodeHandle before,
