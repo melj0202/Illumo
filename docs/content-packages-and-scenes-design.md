@@ -507,8 +507,11 @@ stays the single mutation gateway.
 - translate, rotate (view-facing and axis rings) and scale (axis and uniform)
   gizmos, in world or local space, with pivot at the primary node or the
   selection center;
-- grid, angle and scale snapping, toggled and configured in the toolbar;
-- frame selection (F) fits the selection's world bounds;
+- grid, angle and scale snapping, toggled and configured in the Tools panel
+  (steppers over fixed ladders; `docs/illed-editing-wave2-plan.md`);
+- frame selection (F) fits the selection's world bounds into the visible
+  viewport between the dock columns;
+- align and distribute the selection on a world axis;
 - oriented selection boxes;
 - box select in 2D and 3D (projected candidate bounds);
 - duplicate (Ctrl+D), copy/cut/paste (Ctrl+C/X/V) as a fragment on the

@@ -87,6 +87,9 @@ private:
   TextureHandle m_atlas{};
   std::unique_ptr<MeshVisual> m_grid;
   std::unique_ptr<MeshVisual> m_selectionOverlay;
+  // A ghost on the edit plane where a dragged mesh or texture would land.
+  std::unique_ptr<MeshVisual> m_dropPreview;
+  bool m_dropPreviewShown = false;
   // Box select: a drag from empty viewport space, in window pixels.
   std::unique_ptr<GameVisual> m_marquee;
   bool m_boxSelecting = false;
@@ -112,6 +115,9 @@ private:
   GizmoPart m_activeGizmoPart = GizmoPart::None;
   GizmoMode m_gizmoMode = GizmoMode::Translate;
   GizmoSpace m_gizmoSpace = GizmoSpace::World;
+  // Rotate and scale about the selection's bounds centre (else the primary
+  // node's origin). Session state, like the gizmo space.
+  bool m_pivotCenter = false;
   EditorGizmo m_gizmo;
   // The drag's top-level nodes and their transforms at the press.
   std::vector<std::string> m_dragIds;
@@ -143,6 +149,8 @@ private:
   void unregisterCommands();
   // Positions and runs the inspector, then services its clipboard requests.
   void updateInspector(float dt);
+  // Keys for the hierarchy's focused filter field, and its clipboard.
+  void updateHierarchyFilter(float dt);
   void restoreCameraState();
 
   // EditorSceneCommands.cpp
@@ -193,6 +201,11 @@ private:
   void toggleSelectionFlag(bool visibility);
   void createChildOfPrimary();
   void selectAll();
+  // Grid and snap settings: toggles and ladder steps of the editor view
+  // state (never an edit); false when the command is not one.
+  bool handleSettingCommand(EditorCommand command);
+  // Align and distribute commands; false when the command is not one.
+  bool handleArrangeCommand(EditorCommand command);
   void nudgeSelectedExtent();
   void cycleSelectedColor();
   SaveLoadDialogSpec dialogSpec() const;
@@ -224,6 +237,15 @@ private:
   void rebuildSelectionOverlay();
   void rebuildGrid();
   void frameSelection();
+  // The viewport between the dock columns and bars, in window pixels: its
+  // size, and how far its centre sits from the window's centre.
+  void viewportPixels(float* width,
+                      float* height,
+                      float* offsetX,
+                      float* offsetY) const;
+  // Zooms and aims the camera so a world point lands on the viewport's
+  // centre.
+  void placeCamera(const Vector3& point, float zoom);
   // Window pixels of a world point; false when it is behind the camera.
   bool worldToScreen(const Vector3& world,
                      float* screenX,
@@ -232,6 +254,12 @@ private:
   // (window pixels); additive adds to the selection instead of replacing it.
   void boxSelect(float x0, float y0, float x1, float y1, bool additive);
   void rebuildMarquee();
+  // Shows the drop ghost while the Assets panel drags a placeable file over
+  // the viewport (docked or from a detached window), and hides it otherwise.
+  void updateDropPreview();
+  // Shows the ghost for a file at a main-window pixel; false (hidden) when
+  // the file cannot be placed or the point is not over the viewport.
+  bool showDropPreview(const std::string& path, float pixelX, float pixelY);
   glm::mat4 currentViewProjection() const;
   bool screenToWorld(float screenX,
                      float screenY,
@@ -247,6 +275,9 @@ private:
                          const glm::vec3& gizmoOrigin,
                          float gizmoScale) const;
   GizmoFrame gizmoFrame(const std::string& id) const;
+  // The centre of the selection's top-level world bounds (a node without
+  // bounds counts as its origin); false when nothing is selected.
+  bool selectionCenter(Vector3* center) const;
   GizmoSnap snapSettings() const;
   void beginDrag(GizmoPart part,
                  const Vector3& rayOrigin,

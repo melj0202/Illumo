@@ -452,7 +452,8 @@ Each milestone builds and passes its own tests before the next begins.
       (possibly stray desktop input during the run).
 - **Follow-ups:**
   - frame and reset the camera on the visible centre rectangle (viewer and
-    IllEd);
+    IllEd; IllEd done 2026-10-01 in `docs/illed-editing-wave2-plan.md`, the
+    viewer still uses the whole window);
   - an optional `fontSize` scale for the chrome;
   - cross-column panel docking;
   - Linux presentation (still unsupported, as for the console).

@@ -1,9 +1,11 @@
 #include "EditorSceneGraphView.h"
 #include "EditorToolbar.h"
 #include "PanelTestHelpers.h"
+#include <Illumo/Services/InputManager.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <functional>
 
 static TestCounters g;
 
@@ -50,8 +52,80 @@ testHierarchyOrderingAndIndentation()
            !view.containsScreenPoint(300.0f, 60.0f),
            "does not contain outside point");
   testTrue(g,
-           std::fabs(view.rowScreenY(0) - 50.0f) < 0.5f,
-           "rows start at the top of the content rectangle");
+           std::fabs(view.rowScreenY(0) - (54.0f + view.rowHeight())) < 0.5f,
+           "rows start under the filter field at the top of the content");
+}
+
+static void
+testRangeSelectAndFilter()
+{
+  testSection("EditorSceneGraphView: Shift ranges and the filter field");
+  HeadlessRenderFixture fixture(1280, 720);
+  EditorSceneGraphView view(&fixture.window, &fixture.renderer);
+  view.setPlacement(panelArea(0.0f, 46.0f, 250.0f, 652.0f));
+  EditorDocument doc;
+  const std::string group = make(doc, "empty");
+  const std::string first = make(doc, "cube", group);
+  const std::string second = make(doc, "sphere", group);
+  const std::string third = make(doc, "rect");
+  doc.setName(group, "Props");
+  doc.setName(first, "Crate");
+  doc.setName(second, "Barrel");
+  doc.setName(third, "Crate Lid");
+  EditorSelection selected;
+  view.update(nullptr, &doc, &selected, 0.016f);
+  const std::function<float(size_t)> rowY = [&view](size_t index) {
+    return view.rowScreenY(index) + view.rowHeight() * 0.5f;
+  };
+  view.clickAtForTesting(40.0f, rowY(1), &doc, &selected);
+  view.clickAtForTesting(40.0f, rowY(3), &doc, &selected, false, true);
+  testTrue(g,
+           selected.size() == 3 && selected.contains(first) &&
+             selected.contains(second) && selected.contains(third) &&
+             selected.primary() == third,
+           "Shift+click selects the rows from the anchor, ending primary");
+  view.clickAtForTesting(40.0f, rowY(0), &doc, &selected, false, true);
+  testTrue(g,
+           selected.size() == 2 && selected.contains(group) &&
+             selected.contains(first) && selected.primary() == group,
+           "a second Shift+click keeps the anchor");
+  view.clickAtForTesting(40.0f, rowY(3), &doc, &selected, true);
+  view.clickAtForTesting(40.0f, rowY(2), &doc, &selected, true, true);
+  testTrue(g, selected.size() == 4, "Ctrl+Shift adds a range to the selection");
+
+  float x = 0.0f;
+  float y = 0.0f;
+  testTrue(g,
+           view.filterCenterForTesting(&x, &y) && !view.filterEditing(),
+           "the filter field sits above the tree");
+  view.clickAtForTesting(x, y, &doc, &selected);
+  testTrue(g, view.filterEditing(), "clicking the field focuses it");
+  InputManager input(nullptr);
+  for (const char character : std::string("CRATE")) {
+    input.getCharQueue().push(static_cast<unsigned char>(character));
+  }
+  view.updateFilterInput(&input, 0.016f);
+  view.update(nullptr, &doc, &selected, 0.016f);
+  testEqStr(g, view.filter(), "CRATE", "typing fills the filter");
+  const std::vector<std::string> rows = view.rowIdsForTesting();
+  testTrue(g,
+           rows == std::vector<std::string>({ group, first, third }),
+           "matches (any case) show with their ancestors");
+  input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  view.updateFilterInput(&input, 0.016f);
+  testTrue(g,
+           !view.filterEditing() && view.filter() == "CRATE",
+           "Enter keeps the filter and leaves the field");
+  view.setFilterForTesting("zzz");
+  view.update(nullptr, &doc, &selected, 0.016f);
+  testEqSize(g, view.visibleRowCountForTesting(), 0u, "no match, no rows");
+  view.focusFilter();
+  input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
+  view.updateFilterInput(&input, 0.016f);
+  view.update(nullptr, &doc, &selected, 0.016f);
+  testTrue(g,
+           view.filter().empty() && view.visibleRowCountForTesting() == 4u,
+           "Escape clears the filter");
 }
 
 static void
@@ -194,7 +268,7 @@ testPlacement()
   view.setPlacement(panelArea(0.0f, 22.0f, 300.0f, 458.0f));
   view.update(nullptr, &doc, &selected, 0.016f);
   testTrue(g,
-           std::fabs(view.rowScreenY(0) - 26.0f) < 0.5f &&
+           std::fabs(view.rowScreenY(0) - (30.0f + view.rowHeight())) < 0.5f &&
              std::fabs(view.panelWidth() - 300.0f) < 0.001f,
            "rows follow the placement");
   view.clickAtForTesting(
@@ -401,6 +475,11 @@ registerEditorSceneGraphViewTests(IllumoTestRegistry& registry)
   registry.add("IllEd.SceneGraphView.Hierarchy", []() {
     g = {};
     testHierarchyOrderingAndIndentation();
+    return g.failures;
+  });
+  registry.add("IllEd.SceneGraphView.RangeSelectAndFilter", []() {
+    g = {};
+    testRangeSelectAndFilter();
     return g.failures;
   });
   registry.add("IllEd.SceneGraphView.Selection", []() {

@@ -24,6 +24,76 @@ empty(EditorDocument& document, const std::string& parent = {})
     true, ScenePrimitiveShape::Cube, parent, Transform3D{});
 }
 
+static float
+worldX(const EditorDocument& document, const std::string& id)
+{
+  return document.worldMatrix(id)[3].x;
+}
+
+static void
+testAlignAndDistribute()
+{
+  testSection("EditorDocument: align and distribute top-level nodes");
+  EditorDocument document;
+  const std::string a =
+    shape(document, ScenePrimitiveShape::Cube, {}, Vector3(0.0f, 0.0f, 0.0f));
+  const std::string b =
+    shape(document, ScenePrimitiveShape::Cube, {}, Vector3(1.0f, 2.0f, 0.0f));
+  // A cube under a moved parent: arranging works in world space.
+  const std::string parent = empty(document);
+  document.setTransform(parent,
+                        Transform3D::fromPosition(Vector3(5.0f, 0.0f, 0.0f)));
+  const std::string c = shape(
+    document, ScenePrimitiveShape::Cube, parent, Vector3(2.0f, 0.0f, 0.0f));
+  testTrue(g,
+           std::fabs(worldX(document, c) - 7.0f) < 1e-4f,
+           "the child sits at world x 7");
+  const std::vector<std::string> ids = { a, b, c };
+  AxisAlignedBounds3 bounds;
+  testTrue(g,
+           document.subtreeWorldBounds(parent, &bounds) &&
+             bounds.maximum.x > 7.4f,
+           "subtree bounds include descendants");
+
+  const size_t commands = document.history().size();
+  testTrue(g, document.alignNodes(ids, 0, -1), "align X min");
+  testTrue(g,
+           std::fabs(worldX(document, a)) < 1e-4f &&
+             std::fabs(worldX(document, b)) < 1e-4f &&
+             std::fabs(worldX(document, c)) < 1e-4f,
+           "every left edge meets the leftmost");
+  testTrue(g,
+           document.findNode(b)->transform.position.y == 2.0f,
+           "align leaves the other axes alone");
+  testEqSize(g, document.history().size(), commands + 1, "one command");
+  document.undo();
+  testTrue(g,
+           std::fabs(worldX(document, c) - 7.0f) < 1e-4f,
+           "align undoes as one step");
+  testTrue(g, document.alignNodes(ids, 0, 0), "align X center");
+  testTrue(g,
+           std::fabs(worldX(document, a) - 3.5f) < 1e-4f &&
+             std::fabs(worldX(document, c) - 3.5f) < 1e-4f,
+           "centres meet the selection's centre");
+  document.undo();
+  testTrue(g,
+           document.alignNodes(ids, 0, 1) &&
+             std::fabs(worldX(document, b) - 7.0f) < 1e-4f,
+           "align X max");
+
+  document.undo();
+  testTrue(g, document.distributeNodes(ids, 0), "distribute X");
+  testTrue(g,
+           std::fabs(worldX(document, a)) < 1e-4f &&
+             std::fabs(worldX(document, b) - 3.5f) < 1e-4f &&
+             std::fabs(worldX(document, c) - 7.0f) < 1e-4f,
+           "inner centres space evenly between the outermost");
+  testTrue(g,
+           !document.distributeNodes({ a, b }, 0) &&
+             !document.alignNodes({ a }, 0, 0),
+           "distribute needs three nodes and align two");
+}
+
 static std::string
 parentOf(const EditorDocument& document, const std::string& id)
 {
@@ -342,6 +412,11 @@ registerEditorDocumentTests(IllumoTestRegistry& registry)
     testTrue(g,
              !document.pickRay(Vector3(0, 5, 10), Vector3(0, 0, 1), &hit),
              "objects behind ray rejected");
+    return g.failures;
+  });
+  registry.add("IllEd.Document.AlignAndDistribute", []() {
+    g = {};
+    testAlignAndDistribute();
     return g.failures;
   });
   registry.add("IllEd.Document.Hierarchy", []() {

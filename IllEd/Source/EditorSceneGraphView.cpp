@@ -89,7 +89,129 @@ EditorSceneGraphView::updateLayout()
   m_y = m_placement.area.y;
   m_width = std::max(0.0f, m_placement.area.w);
   m_height = std::max(0.0f, m_placement.area.h);
-  m_treeStartY = m_y + 4.0f;
+  // The filter field sits above the tree.
+  m_treeStartY = m_y + 4.0f + m_rowHeight + 4.0f;
+}
+
+GuiToolRect
+EditorSceneGraphView::filterRect() const
+{
+  return { m_x + GuiToolStyle::kPad,
+           m_y + 4.0f,
+           std::max(0.0f, m_width - GuiToolStyle::kPad * 2.0f),
+           m_rowHeight - 2.0f };
+}
+
+GuiToolRect
+EditorSceneGraphView::filterClearRect() const
+{
+  const GuiToolRect field = filterRect();
+  const float size = field.h;
+  return { field.x + field.w - size, field.y, size, size };
+}
+
+void
+EditorSceneGraphView::focusFilter()
+{
+  if (!m_filterEdit.active()) {
+    m_filterEdit.begin(m_filter);
+  }
+}
+
+void
+EditorSceneGraphView::updateFilterInput(InputManager* inputManager, float dt)
+{
+  if (!m_filterEdit.active()) {
+    return;
+  }
+  if (!m_placement.visible) {
+    m_filterEdit.end();
+    return;
+  }
+  m_filterEdit.tick(dt);
+  if (inputManager == nullptr) {
+    return;
+  }
+  const GuiTextEditEvents events = m_filterEdit.handleInput(*inputManager);
+  if (events.copyRequested) {
+    m_filterCopy = events.copied;
+    m_filterCopyPending = true;
+  }
+  if (events.pasteRequested) {
+    m_filterPastePending = true;
+  }
+  if (events.cancelled) {
+    // Escape clears the filter as well as leaving the field.
+    m_filter.clear();
+    m_filterEdit.end();
+    return;
+  }
+  // The tree follows every keystroke.
+  m_filter = m_filterEdit.text();
+  if (events.committed) {
+    m_filterEdit.end();
+  }
+}
+
+bool
+EditorSceneGraphView::takeFilterCopy(std::string* text)
+{
+  if (!m_filterCopyPending) {
+    return false;
+  }
+  m_filterCopyPending = false;
+  if (text != nullptr) {
+    *text = m_filterCopy;
+  }
+  return true;
+}
+
+bool
+EditorSceneGraphView::takeFilterPaste()
+{
+  const bool pending = m_filterPastePending;
+  m_filterPastePending = false;
+  return pending;
+}
+
+void
+EditorSceneGraphView::provideFilterPaste(const std::string& text)
+{
+  if (m_filterEdit.active()) {
+    m_filterEdit.insertText(text);
+    m_filter = m_filterEdit.text();
+  }
+}
+
+std::vector<std::string>
+EditorSceneGraphView::rowIdsForTesting() const
+{
+  std::vector<std::string> ids;
+  for (const TreeRow& row : m_rows) {
+    ids.push_back(row.id);
+  }
+  return ids;
+}
+
+bool
+EditorSceneGraphView::filterCenterForTesting(float* x, float* y) const
+{
+  const GuiToolRect field = filterRect();
+  *x = field.x + field.w * 0.25f;
+  *y = field.y + field.h * 0.5f;
+  return m_placement.visible;
+}
+
+static std::string
+lowered(const std::string& text)
+{
+  std::string result = text;
+  for (char& character : result) {
+    if (character >= 'A' && character <= 'Z') {
+      character = static_cast<char>(character - 'A' + 'a');
+    }
+  }
+  return result;
 }
 
 bool
@@ -140,6 +262,30 @@ EditorSceneGraphView::rebuildTreeRows(const EditorDocument* document)
     return;
   }
   const SceneGraph& graph = document->graph();
+  // With a filter, the matches and every ancestor of one are kept.
+  const bool filtering = !m_filter.empty();
+  std::unordered_set<std::string> matches;
+  std::unordered_set<std::string> kept;
+  if (filtering) {
+    const std::string needle = lowered(m_filter);
+    for (SceneNodeHandle handle = graph.firstNode(); !handle.isNull();
+         handle = graph.nextNode(handle)) {
+      const std::string id(graph.getName(handle));
+      const SceneNode* node = document->findNode(id);
+      if (node == nullptr ||
+          (lowered(node->name).find(needle) == std::string::npos &&
+           lowered(id).find(needle) == std::string::npos)) {
+        continue;
+      }
+      matches.insert(id);
+      for (SceneNodeHandle up = handle; !up.isNull();
+           up = graph.getParent(up)) {
+        if (!kept.insert(std::string(graph.getName(up))).second) {
+          break;
+        }
+      }
+    }
+  }
   float currentY = m_treeStartY - m_scroll;
   std::vector<SceneNodeHandle> ancestors;
   // Rows deeper than a folded row are skipped until the walk leaves it.
@@ -158,8 +304,11 @@ EditorSceneGraphView::rebuildTreeRows(const EditorDocument* document)
       }
       foldedDepth = -1;
     }
-    const SceneNode* node =
-      document->findNode(std::string(graph.getName(handle)));
+    const std::string id(graph.getName(handle));
+    if (filtering && kept.find(id) == kept.end()) {
+      continue;
+    }
+    const SceneNode* node = document->findNode(id);
     if (node == nullptr) {
       continue;
     }
@@ -171,8 +320,10 @@ EditorSceneGraphView::rebuildTreeRows(const EditorDocument* document)
     row.y = currentY;
     row.isLastChild = graph.getNextSibling(handle).isNull();
     row.hasChildren = graph.getChildCount(handle) > 0;
-    row.folded = row.hasChildren && isFolded(row.id);
+    // Folding is ignored while filtering, so every match shows.
+    row.folded = !filtering && row.hasChildren && isFolded(row.id);
     row.visible = node->visible;
+    row.context = filtering && matches.find(row.id) == matches.end();
     if (row.folded) {
       foldedDepth = depth;
     }
@@ -433,6 +584,7 @@ EditorSceneGraphView::handlePress(float x,
                                   EditorDocument* document,
                                   EditorSelection* selection,
                                   bool toggle,
+                                  bool range,
                                   bool armDrag)
 {
   if (m_menuOpen) {
@@ -444,6 +596,17 @@ EditorSceneGraphView::handlePress(float x,
     m_menuOpen = false;
     return false;
   }
+  if (filterRect().contains(x, y)) {
+    if (!m_filter.empty() && filterClearRect().contains(x, y)) {
+      m_filter.clear();
+      m_filterEdit.end();
+    } else {
+      focusFilter();
+    }
+    return false;
+  }
+  // Any other press leaves the filter field, keeping its text.
+  m_filterEdit.end();
   const int rowIndex = hitTestRow(x, y);
   if (rowIndex >= 0) {
     const TreeRow& row = m_rows[static_cast<size_t>(rowIndex)];
@@ -461,8 +624,31 @@ EditorSceneGraphView::handlePress(float x,
       return document != nullptr && document->setVisible(row.id, !row.visible);
     }
     const std::string clickedId = row.id;
+    int anchorIndex = -1;
+    for (size_t index = 0; range && index < m_rows.size(); ++index) {
+      if (m_rows[index].id == m_anchorId) {
+        anchorIndex = static_cast<int>(index);
+      }
+    }
     if (selection != nullptr) {
-      if (toggle) {
+      if (anchorIndex >= 0) {
+        // The visible rows from the anchor to the clicked row, which ends
+        // primary; Ctrl+Shift adds them to the selection.
+        const int first = std::min(anchorIndex, rowIndex);
+        const int last = std::max(anchorIndex, rowIndex);
+        std::vector<std::string> ids;
+        if (toggle) {
+          ids = selection->ids();
+        }
+        for (int index = first; index <= last; ++index) {
+          const std::string& id = m_rows[static_cast<size_t>(index)].id;
+          if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
+            ids.push_back(id);
+          }
+        }
+        selection->set(ids);
+        selection->add(clickedId);
+      } else if (toggle) {
         selection->toggle(clickedId);
       } else if (selection->contains(clickedId)) {
         selection->add(clickedId);
@@ -470,8 +656,11 @@ EditorSceneGraphView::handlePress(float x,
         selection->set(clickedId);
       }
     }
+    if (anchorIndex < 0) {
+      m_anchorId = clickedId;
+    }
     // A second click on the same row soon after renames it.
-    if (!toggle && clickedId == m_lastClickId &&
+    if (!toggle && !range && clickedId == m_lastClickId &&
         m_animTime - m_lastClickTime < 0.35f) {
       m_pendingCommand = EditorCommand::Rename;
       m_pendingTarget = clickedId;
@@ -503,12 +692,13 @@ EditorSceneGraphView::clickAtForTesting(float x,
                                         float y,
                                         EditorDocument* document,
                                         EditorSelection* selection,
-                                        bool toggle)
+                                        bool toggle,
+                                        bool range)
 {
   updateLayout();
   rebuildTreeRows(document);
   clampScroll();
-  handlePress(x, y, document, selection, toggle, false);
+  handlePress(x, y, document, selection, toggle, range, false);
 }
 
 void
@@ -629,17 +819,21 @@ EditorSceneGraphView::update(InputManager* inputManager,
       if (m_menuOpen) {
         // Any click closes the menu; it never reaches the viewport.
         m_consumedPress = true;
-        handlePress(m_mouseX, m_mouseY, document, selection, false, false);
+        handlePress(
+          m_mouseX, m_mouseY, document, selection, false, false, false);
       } else if (inPanel) {
         m_consumedPress = true;
         hierarchyChanged = handlePress(m_mouseX,
                                        m_mouseY,
                                        document,
                                        selection,
-                                       inputManager->isControlPressed() ||
-                                         inputManager->isShiftPressed(),
+                                       inputManager->isControlPressed(),
+                                       inputManager->isShiftPressed(),
                                        true) ||
                            hierarchyChanged;
+      } else {
+        // A press elsewhere (the viewport, another panel) leaves the field.
+        m_filterEdit.end();
       }
     }
 
@@ -746,7 +940,15 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
   const float iconSize = std::max(14.0f, std::round(14.0f * fontScale));
   const float indent = std::max(14.0f, std::round(14.0f * fontScale));
 
-  if (m_rows.empty()) {
+  if (m_rows.empty() && !m_filter.empty()) {
+    GuiToolStyle::fittedText(m_visual,
+                             "No matching nodes",
+                             m_x + GuiToolStyle::kPad,
+                             m_treeStartY + 6.0f,
+                             m_width - GuiToolStyle::kPad * 2.0f,
+                             smallFont,
+                             GuiToolPalette::dim);
+  } else if (m_rows.empty()) {
     GuiToolStyle::fittedText(m_visual,
                              "No nodes yet",
                              m_x + GuiToolStyle::kPad,
@@ -850,9 +1052,9 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
       labelX = geometry.contentX + iconSize + 4.0f * fontScale;
     }
 
-    ColorRgba labelColor = isDragged     ? GuiToolPalette::faint
-                           : row.visible ? GuiToolPalette::text
-                                         : GuiToolPalette::dim;
+    ColorRgba labelColor = isDragged || row.context ? GuiToolPalette::faint
+                           : row.visible            ? GuiToolPalette::text
+                                                    : GuiToolPalette::dim;
     const float textY =
       rect.y + std::max(0.0f, std::round((rect.h - rowFont) * 0.5f)) - 1.0f;
     GuiToolStyle::fittedText(m_visual,
@@ -871,6 +1073,51 @@ EditorSceneGraphView::rebuildVisual(const EditorDocument* document,
               row.visible,
               row.visible ? GuiToolPalette::dim : GuiToolPalette::faint);
     }
+  }
+
+  // The filter band, drawn over any row scrolled partly above the tree.
+  m_visual.addFilledRect(
+    m_x, m_y, m_width, m_treeStartY - m_y, GuiToolPalette::panel);
+  const GuiToolRect field = filterRect();
+  const bool fieldHovered =
+    field.contains(m_mouseX, m_mouseY) && !menuContains(m_mouseX, m_mouseY);
+  GuiToolStyle::textField(m_visual,
+                          field,
+                          m_filter,
+                          m_filterEdit.active() ? &m_filterEdit : nullptr,
+                          false,
+                          fieldHovered,
+                          false,
+                          smallFont);
+  if (m_filter.empty() && !m_filterEdit.active()) {
+    GuiToolStyle::fittedText(
+      m_visual,
+      "Filter (" + EditorShortcuts::labelFor(EditorCommand::FindInHierarchy) +
+        ")",
+      field.x + 6.0f,
+      field.y + std::max(0.0f, std::round((field.h - smallFont) * 0.5f)),
+      field.w - 12.0f,
+      smallFont,
+      GuiToolPalette::faint);
+  } else if (!m_filter.empty()) {
+    // The clear button: an x at the field's right end.
+    const GuiToolRect clear = filterClearRect();
+    const float inset = std::round(clear.h * 0.3f);
+    const ColorRgba color = clear.contains(m_mouseX, m_mouseY)
+                              ? GuiToolPalette::text
+                              : GuiToolPalette::dim;
+    m_visual.addLine(clear.x + inset,
+                     clear.y + inset,
+                     clear.x + clear.w - inset,
+                     clear.y + clear.h - inset,
+                     color,
+                     1.0f);
+    m_visual.addLine(clear.x + inset,
+                     clear.y + clear.h - inset,
+                     clear.x + clear.w - inset,
+                     clear.y + inset,
+                     color,
+                     1.0f);
   }
 
   // Scrollbar when rows overflow the window.

@@ -11,7 +11,10 @@
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/Logger.h>
+#include <algorithm>
+#include <cmath>
 #include <utility>
+#include <vector>
 
 static const ColorRgba kToastGood{ 60, 220, 120, 255 };
 static const ColorRgba kToastInfo{ 66, 214, 210, 255 };
@@ -663,6 +666,142 @@ EditorScene::cycleSelectedColor()
   }
 }
 
+// Common values the grid and snap steppers walk through.
+static const std::vector<float> kGridLadder = { 0.1f, 0.25f, 0.5f, 1.0f,
+                                                2.0f, 5.0f,  10.0f };
+static const std::vector<float> kMoveLadder = { 0.05f, 0.1f, 0.25f, 0.5f,
+                                                1.0f,  2.0f, 5.0f };
+static const std::vector<float> kRotateLadder = { 1.0f,  5.0f,  10.0f, 15.0f,
+                                                  30.0f, 45.0f, 90.0f };
+static const std::vector<float> kScaleLadder = { 0.01f, 0.05f, 0.1f,
+                                                 0.25f, 0.5f,  1.0f };
+
+// The next ladder value above (or below) `value`; a value between steps, as
+// a hand-edited scene may hold, moves to the nearest step in that direction,
+// and the ends hold.
+static float
+stepLadder(float value, const std::vector<float>& ladder, bool up)
+{
+  const float tolerance = 1.0e-4f * std::max(1.0f, std::fabs(value));
+  if (up) {
+    for (const float step : ladder) {
+      if (step > value + tolerance) {
+        return step;
+      }
+    }
+    return ladder.back();
+  }
+  for (size_t index = ladder.size(); index > 0; --index) {
+    if (ladder[index - 1] < value - tolerance) {
+      return ladder[index - 1];
+    }
+  }
+  return ladder.front();
+}
+
+bool
+EditorScene::handleSettingCommand(EditorCommand command)
+{
+  SceneEditorState state = m_document.editorState();
+  switch (command) {
+    case EditorCommand::ToggleGrid:
+      state.gridVisible = !state.gridVisible;
+      break;
+    case EditorCommand::GridSpacingDown:
+    case EditorCommand::GridSpacingUp:
+      state.gridSpacing = stepLadder(state.gridSpacing,
+                                     kGridLadder,
+                                     command == EditorCommand::GridSpacingUp);
+      break;
+    case EditorCommand::SnapMoveDown:
+    case EditorCommand::SnapMoveUp:
+      state.snapTranslate = stepLadder(
+        state.snapTranslate, kMoveLadder, command == EditorCommand::SnapMoveUp);
+      break;
+    case EditorCommand::SnapRotateDown:
+    case EditorCommand::SnapRotateUp:
+      state.snapRotateDegrees =
+        stepLadder(state.snapRotateDegrees,
+                   kRotateLadder,
+                   command == EditorCommand::SnapRotateUp);
+      break;
+    case EditorCommand::SnapScaleDown:
+    case EditorCommand::SnapScaleUp:
+      state.snapScale = stepLadder(
+        state.snapScale, kScaleLadder, command == EditorCommand::SnapScaleUp);
+      break;
+    default:
+      return false;
+  }
+  const bool respace =
+    state.gridSpacing != m_document.editorState().gridSpacing;
+  // View state is saved with the scene but never marks it dirty.
+  m_document.setEditorState(state);
+  if (respace) {
+    rebuildGrid();
+  }
+  return true;
+}
+
+bool
+EditorScene::handleArrangeCommand(EditorCommand command)
+{
+  int axis = -1;
+  int side = 0;
+  bool distribute = false;
+  switch (command) {
+    case EditorCommand::AlignMinX:
+    case EditorCommand::AlignCenterX:
+    case EditorCommand::AlignMaxX:
+      axis = 0;
+      side = command == EditorCommand::AlignMinX   ? -1
+             : command == EditorCommand::AlignMaxX ? 1
+                                                   : 0;
+      break;
+    case EditorCommand::AlignMinY:
+    case EditorCommand::AlignCenterY:
+    case EditorCommand::AlignMaxY:
+      axis = 1;
+      side = command == EditorCommand::AlignMinY   ? -1
+             : command == EditorCommand::AlignMaxY ? 1
+                                                   : 0;
+      break;
+    case EditorCommand::AlignMinZ:
+    case EditorCommand::AlignCenterZ:
+    case EditorCommand::AlignMaxZ:
+      axis = 2;
+      side = command == EditorCommand::AlignMinZ   ? -1
+             : command == EditorCommand::AlignMaxZ ? 1
+                                                   : 0;
+      break;
+    case EditorCommand::DistributeX:
+    case EditorCommand::DistributeY:
+    case EditorCommand::DistributeZ:
+      distribute = true;
+      axis = command == EditorCommand::DistributeX   ? 0
+             : command == EditorCommand::DistributeY ? 1
+                                                     : 2;
+      break;
+    default:
+      return false;
+  }
+  const std::vector<std::string> roots =
+    m_selection.topLevel(m_document.scene());
+  const size_t needed = distribute ? 3u : 2u;
+  if (roots.size() < needed) {
+    toast(distribute ? "Select three or more nodes to distribute"
+                     : "Select two or more nodes to align",
+          kToastBad);
+    return true;
+  }
+  const bool moved = distribute ? m_document.distributeNodes(roots, axis)
+                                : m_document.alignNodes(roots, axis, side);
+  if (moved) {
+    toast(m_document.history().undoLabel(), kToastInfo);
+  }
+  return true;
+}
+
 void
 EditorScene::requestAction(EditorPendingAction action)
 {
@@ -872,22 +1011,41 @@ EditorScene::dispatchCommand(EditorCommand command)
     case EditorCommand::ResetCamera:
       if (ic != nullptr && ic->camera != nullptr) {
         ic->camera->Reset();
-        ic->camera->SetZoom(32.0f);
         m_cameraTargetY = 0.0f;
         SceneEditorState state = m_document.editorState();
         state.yaw = SceneEditorState{}.yaw;
         state.pitch = SceneEditorState{}.pitch;
         m_document.setEditorState(state);
+        // The origin sits at the centre of the visible viewport.
+        placeCamera(Vector3(0.0f), 32.0f);
         toast("Camera reset to origin", kToastInfo);
       }
       return;
     case EditorCommand::FrameSelection:
       frameSelection();
       return;
+    case EditorCommand::FindInHierarchy:
+      // The filter lives in the Hierarchy panel, so it must be shown.
+      if (m_dock.mode("hierarchy") == GuiDockMode::Hidden) {
+        m_dock.setHidden("hierarchy", false);
+        layoutDock();
+      }
+      if (m_sceneGraphView) {
+        m_sceneGraphView->focusFilter();
+      }
+      return;
+    case EditorCommand::TogglePivot:
+      m_pivotCenter = !m_pivotCenter;
+      toast(m_pivotCenter ? "Pivot: selection center"
+                          : "Pivot: primary node origin",
+            kToastInfo);
+      rebuildSelectionOverlay();
+      return;
     default:
       break;
   }
-  if (handlePanelCommand(command)) {
+  if (handleSettingCommand(command) || handleArrangeCommand(command) ||
+      handlePanelCommand(command)) {
     return;
   }
   if (isCreateTool(command)) {

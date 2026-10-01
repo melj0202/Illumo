@@ -4,6 +4,7 @@
 #include "EditorDocument.h"
 #include "EditorSelection.h"
 #include <Illumo/Gui/GuiPanelPointer.h>
+#include <Illumo/Gui/GuiTextEdit.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/ResourceHandle.h>
@@ -18,6 +19,10 @@ class Renderer;
 // The Hierarchy dock panel's content: the scene tree drawn into the
 // rectangle and surface it is given (docked or detached), with folding,
 // visibility eyes, drag reordering inside its own surface and a context menu.
+// Ctrl+click toggles a row; Shift+click selects the visible rows between the
+// anchor (the last row clicked without Shift) and the clicked one. A filter
+// field above the tree keeps rows whose name or id contains its text (any
+// case) plus their ancestors, drawn dimmed, and ignores folding meanwhile.
 class EditorSceneGraphView : public DrawableBase
 {
 public:
@@ -49,6 +54,23 @@ public:
               float dt = 0.016f);
 
   bool consumedPress() const { return m_consumedPress; }
+
+  // The filter field. While it has focus it takes the keyboard (call
+  // updateFilterInput before shortcuts run); Enter keeps the text, Escape
+  // clears it.
+  void focusFilter();
+  bool filterEditing() const { return m_filterEdit.active(); }
+  const std::string& filter() const { return m_filter; }
+  void updateFilterInput(InputManager* inputManager, float dt);
+  // Clipboard hand-off for the filter field, like the inspector's.
+  bool takeFilterCopy(std::string* text);
+  bool takeFilterPaste();
+  void provideFilterPaste(const std::string& text);
+  void setFilterForTesting(const std::string& text) { m_filter = text; }
+  // Names of the rows shown now, in order (tests).
+  std::vector<std::string> rowIdsForTesting() const;
+  bool filterCenterForTesting(float* x, float* y) const;
+
   // A context-menu choice, once: the command and the row it was chosen on.
   EditorCommand takeCommand(std::string* targetId);
   void setAtlas(TextureHandle atlas);
@@ -62,7 +84,8 @@ public:
                          float y,
                          EditorDocument* document,
                          EditorSelection* selection,
-                         bool toggle = false);
+                         bool toggle = false,
+                         bool range = false);
   void dragAndDropForTesting(const std::string& sourceId,
                              const std::string& targetParentId,
                              EditorDocument* document);
@@ -115,6 +138,8 @@ private:
     bool hasChildren = false;
     bool folded = false;
     bool visible = true;
+    // Shown only as an ancestor of a filter match.
+    bool context = false;
   };
 
   IRenderWindow* m_window;
@@ -172,8 +197,18 @@ private:
   float m_lastClickTime = -1.0f;
   std::string m_lastClickId;
   std::string m_revealedPrimary;
+  // Shift+click ranges run from here.
+  std::string m_anchorId;
+  GuiTextEdit m_filterEdit;
+  std::string m_filter;
+  std::string m_filterCopy;
+  bool m_filterCopyPending = false;
+  bool m_filterPastePending = false;
 
   void updateLayout();
+  // The filter field, and its clear button while it holds text.
+  GuiToolRect filterRect() const;
+  GuiToolRect filterClearRect() const;
   RowGeometry rowGeometry(const TreeRow& row) const;
   // Keeps the scroll offset inside the content and shifts rows to match.
   void clampScroll();
@@ -187,6 +222,7 @@ private:
                    EditorDocument* document,
                    EditorSelection* selection,
                    bool toggle,
+                   bool range,
                    bool armDrag);
   void openMenu(float x,
                 float y,

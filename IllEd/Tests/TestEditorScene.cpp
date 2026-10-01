@@ -155,6 +155,151 @@ struct EditorFixture
 };
 
 static void
+testSettingStepsPivotAndArrange()
+{
+  testSection("EditorScene: grid and snap steppers, pivot and arrange");
+  EditorFixture fixture;
+  testTrue(g, fixture.started, "editor starts");
+  EditorScene& module = fixture.module;
+  EditorDocument& document = EditorSceneTestAccess::document(module);
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::GridSpacingUp);
+  testTrue(g,
+           document.editorState().gridSpacing == 2.0f,
+           "grid spacing steps up the ladder");
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::GridSpacingDown);
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::GridSpacingDown);
+  testTrue(g, document.editorState().gridSpacing == 0.5f, "and down");
+  for (int step = 0; step < 12; ++step) {
+    EditorSceneTestAccess::handleCommand(module, EditorCommand::GridSpacingUp);
+  }
+  testTrue(
+    g, document.editorState().gridSpacing == 10.0f, "the ladder's end holds");
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::SnapRotateUp);
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::SnapScaleUp);
+  testTrue(g,
+           document.editorState().snapRotateDegrees == 30.0f &&
+             document.editorState().snapScale == 0.25f,
+           "rotate and scale snaps step");
+  SceneEditorState odd = document.editorState();
+  odd.snapTranslate = 0.3f;
+  document.setEditorState(odd);
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::SnapMoveUp);
+  testTrue(g,
+           document.editorState().snapTranslate == 0.5f,
+           "a value between steps moves to the next step up");
+  odd.snapTranslate = 0.3f;
+  document.setEditorState(odd);
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::SnapMoveDown);
+  testTrue(g, document.editorState().snapTranslate == 0.25f, "or down");
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::ToggleGrid);
+  testTrue(g, !document.editorState().gridVisible, "the grid hides");
+  testTrue(g, !document.isDirty(), "view settings never dirty the scene");
+  module.update(0.01);
+  const EditorToolsState& tools = EditorSceneTestAccess::tools(module)->state();
+  testTrue(g,
+           tools.gridSpacing == 10.0f && !tools.gridVisible &&
+             tools.snapTranslate == 0.25f,
+           "the Tools panel shows the settings");
+
+  const std::string a =
+    EditorSceneTestAccess::createNode(module, EditorCommand::CreateCube);
+  const std::string b =
+    EditorSceneTestAccess::createNode(module, EditorCommand::CreateCube);
+  document.setTransform(b,
+                        Transform3D::fromPosition(Vector3(4.0f, 2.0f, 0.0f)));
+  EditorSelection& selection = EditorSceneTestAccess::selection(module);
+  selection.set(std::vector<std::string>{ a, b });
+  GizmoFrame frame = EditorSceneTestAccess::gizmoFrame(module, b);
+  testTrue(g,
+           frame.origin.x == 4.0f && frame.origin.y == 2.0f,
+           "the gizmo starts at the primary node");
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::TogglePivot);
+  frame = EditorSceneTestAccess::gizmoFrame(module, b);
+  testTrue(g,
+           std::fabs(frame.origin.x - 2.0f) < 1e-4f &&
+             std::fabs(frame.origin.y - 1.0f) < 1e-4f,
+           "the centre pivot sits at the selection's bounds centre");
+  module.update(0.01);
+  testTrue(g,
+           EditorSceneTestAccess::tools(module)->state().pivotCenter,
+           "the Tools panel shows the pivot");
+
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::AlignMaxX);
+  testTrue(g,
+           document.findNode(a)->transform.position.x == 4.0f &&
+             document.findNode(b)->transform.position.x == 4.0f,
+           "Arrange aligns the selection");
+  selection.set(a);
+  const size_t commands = document.history().size();
+  EditorSceneTestAccess::handleCommand(module, EditorCommand::AlignMinY);
+  testEqSize(g, document.history().size(), commands, "one node is not aligned");
+}
+
+static void
+testFindFocusesHierarchyFilter()
+{
+  testSection("EditorScene: Ctrl+F types into the hierarchy filter");
+  EditorFixture fixture;
+  EditorScene& module = fixture.module;
+  EditorDocument& document = EditorSceneTestAccess::document(module);
+  const std::string id =
+    EditorSceneTestAccess::createNode(module, EditorCommand::CreateCube);
+  module.update(0.016);
+  fixture.input.getKeyQueue().push({ KeyCode::F, InputAction::Press, 0x2 });
+  module.update(0.016);
+  EditorSceneGraphView* view = EditorSceneTestAccess::sceneGraphView(module);
+  testTrue(g, view->filterEditing(), "Ctrl+F focuses the filter");
+  // A typed letter arrives as a key press and a character.
+  fixture.input.getKeyQueue().push({ KeyCode::H, InputAction::Press, 0 });
+  fixture.input.getCharQueue().push(static_cast<unsigned char>('c'));
+  module.update(0.016);
+  testTrue(g,
+           view->filter() == "c" && document.findNode(id)->visible,
+           "typing filters and never fires the H shortcut");
+  fixture.input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
+  module.update(0.016);
+  testTrue(g,
+           view->filter().empty() && !view->filterEditing() &&
+             EditorSceneTestAccess::selectedId(module) == id,
+           "Escape clears the filter, not the selection");
+}
+
+static void
+testDropPreview()
+{
+  testSection("EditorScene: a dragged mesh or texture shows where it lands");
+  EditorFixture fixture;
+  EditorScene& module = fixture.module;
+  const GuiToolRect view = EditorSceneTestAccess::dock(module).center();
+  const float x = view.x + view.w * 0.5f;
+  const float y = view.y + view.h * 0.5f;
+  testTrue(g,
+           EditorSceneTestAccess::showDropPreview(
+             module, "/engine/Meshes/crate.obj", x, y) &&
+             EditorSceneTestAccess::dropPreviewShown(module),
+           "a mesh over the viewport shows its ghost");
+  testTrue(g,
+           EditorSceneTestAccess::showDropPreview(
+             module, "/project/textures/a.png", x, y),
+           "so does a texture");
+  testTrue(g,
+           !EditorSceneTestAccess::showDropPreview(
+             module, "/project/scenes/a.ilsc", x, y) &&
+             !EditorSceneTestAccess::dropPreviewShown(module),
+           "a scene cannot be placed, so it shows nothing");
+  testTrue(g,
+           !EditorSceneTestAccess::showDropPreview(
+             module, "/engine/Meshes/crate.obj", 10.0f, y),
+           "over a dock panel nothing shows");
+  module.update(0.016);
+  testTrue(g,
+           !EditorSceneTestAccess::dropPreviewShown(module),
+           "with no drag in progress the ghost is hidden");
+  EditorDocument& document = EditorSceneTestAccess::document(module);
+  testEqSize(g, document.nodeCount(), 0u, "a preview never edits the scene");
+}
+
+static void
 testCloseConfirmation()
 {
   testSection("EditorScene: native close shares unsaved confirmation");
@@ -1326,20 +1471,51 @@ testFrameSelectionFitsBounds()
   EditorSceneTestAccess::setSelectedId(fixture.module, id);
   fixture.input.getKeyQueue().push({ KeyCode::F, InputAction::Press, 0 });
   fixture.module.update(0.016);
-  const glm::dvec2 target = fixture.camera.GetTargetPositionPrecise();
-  testTrue(counters,
-           std::fabs(target.x - 50.0) < 1e-3 &&
-             std::fabs(target.y + 20.0) < 1e-3,
-           "F centers the camera on the selection");
-  float left = 0.0f, top = 0.0f, right = 0.0f, bottom = 0.0f;
   fixture.camera.Update(10.0f);
+  // The viewport between the dock columns (the test window has UI scale 1).
+  const GuiToolRect view = EditorSceneTestAccess::dock(fixture.module).center();
+  float screenX = 0.0f;
+  float screenY = 0.0f;
+  EditorSceneTestAccess::worldToScreen(
+    fixture.module, Vector3(50.0f, -20.0f, 0.0f), &screenX, &screenY);
+  testTrue(counters,
+           std::fabs(screenX - (view.x + view.w * 0.5f)) < 0.5f &&
+             std::fabs(screenY - (view.y + view.h * 0.5f)) < 0.5f,
+           "F centers the selection in the visible viewport");
+  float left = 0.0f, top = 0.0f, right = 0.0f, bottom = 0.0f;
   EditorSceneTestAccess::screenToWorld(
-    fixture.module, 0.0f, 0.0f, &left, &top);
+    fixture.module, view.x, view.y, &left, &top);
   EditorSceneTestAccess::screenToWorld(
-    fixture.module, 1280.0f, 720.0f, &right, &bottom);
+    fixture.module, view.x + view.w, view.y + view.h, &right, &bottom);
   testTrue(counters,
            left < 45.0f && right > 55.0f && bottom < -25.0f && top > -15.0f,
-           "the framed view contains the whole node");
+           "the viewport contains the whole node");
+
+  // Reset Camera puts the origin at the viewport's centre too.
+  EditorSceneTestAccess::handleCommand(fixture.module,
+                                       EditorCommand::ResetCamera);
+  fixture.camera.Update(10.0f);
+  EditorSceneTestAccess::worldToScreen(
+    fixture.module, Vector3(0.0f), &screenX, &screenY);
+  testTrue(counters,
+           std::fabs(screenX - (view.x + view.w * 0.5f)) < 0.5f &&
+             std::fabs(screenY - (view.y + view.h * 0.5f)) < 0.5f,
+           "Reset Camera centers the origin in the visible viewport");
+
+  // 3D: the framed point lands on the viewport's centre in perspective.
+  document.setWorldMode(SceneWorldMode::World3D);
+  document.setTransform(id,
+                        Transform3D::fromPosition(Vector3(3.0f, 1.0f, -2.0f)));
+  EditorSceneTestAccess::refreshView(fixture.module);
+  EditorSceneTestAccess::frameSelection(fixture.module);
+  fixture.camera.Update(10.0f);
+  EditorSceneTestAccess::refreshView(fixture.module);
+  EditorSceneTestAccess::worldToScreen(
+    fixture.module, Vector3(3.0f, 1.0f, -2.0f), &screenX, &screenY);
+  testTrue(counters,
+           std::fabs(screenX - (view.x + view.w * 0.5f)) < 2.0f &&
+             std::fabs(screenY - (view.y + view.h * 0.5f)) < 2.0f,
+           "3D framing centers the selection in the visible viewport");
   testTrue(counters,
            !document.isDirty() || document.history().size() > 0,
            "framing never edits the scene");
@@ -1996,13 +2172,21 @@ registerEditorSceneTests(IllumoTestRegistry& registry)
     fixture.camera.SetPositionPrecise(15.0, -7.0);
     fixture.camera.SetZoom(8.0f);
     EditorSceneTestAccess::handleCommand(fixture.module,
-                                          EditorCommand::ResetCamera);
+                                         EditorCommand::ResetCamera);
+    fixture.camera.Update(10.0f);
+    const GuiToolRect view =
+      EditorSceneTestAccess::dock(fixture.module).center();
+    float originX = 0.0f;
+    float originY = 0.0f;
+    EditorSceneTestAccess::worldToScreen(
+      fixture.module, Vector3(0.0f), &originX, &originY);
     testTrue(g,
-             glm::length(fixture.camera.GetPositionPrecise()) < 0.0001 &&
+             std::fabs(originX - (view.x + view.w * 0.5f)) < 0.5f &&
+               std::fabs(originY - (view.y + view.h * 0.5f)) < 0.5f &&
                fixture.camera.GetZoom() == 32.0f,
              "reset command restores camera origin and zoom");
     EditorSceneTestAccess::handleCommand(fixture.module,
-                                          EditorCommand::NewDocument);
+                                         EditorCommand::NewDocument);
     testEqSize(g, document.nodeCount(), 0u, "new document clears nodes");
     testTrue(g,
              document.path().empty() && !document.isDirty(),
@@ -2163,6 +2347,21 @@ registerEditorSceneTests(IllumoTestRegistry& registry)
   registry.add("IllEd.Module.UiAtlasSprites", []() {
     g = {};
     testUiAtlasSpritesFromStart();
+    return g.failures;
+  });
+  registry.add("IllEd.Module.SettingStepsPivotAndArrange", []() {
+    g = {};
+    testSettingStepsPivotAndArrange();
+    return g.failures;
+  });
+  registry.add("IllEd.Module.FindFocusesHierarchyFilter", []() {
+    g = {};
+    testFindFocusesHierarchyFilter();
+    return g.failures;
+  });
+  registry.add("IllEd.Module.DropPreview", []() {
+    g = {};
+    testDropPreview();
     return g.failures;
   });
   registry.add("IllEd.Module.CreateCube", []() {

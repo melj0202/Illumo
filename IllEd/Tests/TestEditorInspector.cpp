@@ -261,9 +261,282 @@ testInspectorComponentsAndScene()
   return counters.failures;
 }
 
+static SceneAsset
+asset(const std::string& id,
+      SceneAssetType type,
+      const std::string& path,
+      int columns = 1,
+      int rows = 1)
+{
+  SceneAsset entry;
+  entry.id = id;
+  entry.type = type;
+  entry.path = path;
+  entry.columns = columns;
+  entry.rows = rows;
+  return entry;
+}
+
+// A texture, a 4x2 atlas, a mesh and a cubemap cross, with a sprite node "s"
+// on the texture, an atlas-cell sprite "c" and an empty node "e".
+static void
+loadAssetScene(EditorDocument& document)
+{
+  SceneDocument scene;
+  scene.assets.push_back(
+    asset("tex", SceneAssetType::Texture, "textures/a.png"));
+  scene.assets.push_back(
+    asset("atlas", SceneAssetType::Atlas, "textures/b.png", 4, 2));
+  scene.assets.push_back(asset("mesh", SceneAssetType::Mesh, "meshes/m.obj"));
+  scene.assets.push_back(
+    asset("sky", SceneAssetType::CubemapCross, "textures/sky.png"));
+  SceneNode spriteNode;
+  spriteNode.id = "s";
+  spriteNode.name = "Sprite";
+  SceneSprite sprite;
+  sprite.texture = "tex";
+  SceneComponent spriteComponent;
+  spriteComponent.value = sprite;
+  spriteNode.components.push_back(spriteComponent);
+  scene.nodes.push_back(spriteNode);
+  SceneNode cellNode;
+  cellNode.id = "c";
+  cellNode.name = "Cell";
+  sprite.texture = "atlas";
+  sprite.hasCell = true;
+  sprite.column = 3;
+  spriteComponent.value = sprite;
+  cellNode.components.push_back(spriteComponent);
+  scene.nodes.push_back(cellNode);
+  SceneNode empty;
+  empty.id = "e";
+  empty.name = "Empty";
+  scene.nodes.push_back(empty);
+  std::string error;
+  document.loadFromText(IlscCodec::encode(scene), &error);
+}
+
+static const SceneSprite&
+spriteOf(EditorDocument& document, const std::string& id)
+{
+  return std::get<SceneSprite>(
+    document.findNode(id)->find(SceneComponentType::Sprite)->value);
+}
+
+static int
+testInspectorSpriteSourceTagsAndAssets()
+{
+  TestCounters counters;
+  HeadlessRenderFixture fixture(1280, 720);
+  EditorInspector inspector(&fixture.window, &fixture.renderer);
+  inspector.setPlacement(panelArea(1040.0f, 300.0f, 240.0f, 400.0f));
+  InputManager input(nullptr);
+  EditorDocument document;
+  EditorSelection selection;
+  loadAssetScene(document);
+  testEqSize(counters, document.nodeCount(), 3, "the asset scene loads");
+  selection.set("s");
+  inspector.update(&input, &document, &selection, 0.016f);
+  const InspectorField* texture = inspector.field("sprite.texture");
+  testTrue(counters,
+           texture != nullptr && texture->kind == InspectorFieldKind::Choice &&
+             texture->choices == std::vector<std::string>({ "tex", "atlas" }) &&
+             texture->choice == 0,
+           "a sprite picks among texture and atlas assets");
+  testTrue(counters,
+           inspector.field("sprite.region.u1") != nullptr &&
+             inspector.field("sprite.cell.column") == nullptr,
+           "a region sprite shows its region");
+  inspector.activateField("sprite.region.u1", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "0.5");
+  testTrue(counters, spriteOf(document, "s").u1 == 0.5f, "region edit");
+  inspector.activateField("sprite.region.v0", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "2");
+  testTrue(counters,
+           inspector.invalidInput() && spriteOf(document, "s").v0 == 0.0f,
+           "a region outside [0, 1] is refused");
+  input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
+  inspector.update(&input, &document, &selection, 0.016f);
+
+  inspector.activateField("sprite.source", &document, &selection);
+  testTrue(counters,
+           !spriteOf(document, "s").hasCell,
+           "a plain texture has no cells to switch to");
+  inspector.activateField("sprite.texture", &document, &selection);
+  inspector.activateField("sprite.source", &document, &selection);
+  testTrue(counters,
+           spriteOf(document, "s").texture == "atlas" &&
+             spriteOf(document, "s").hasCell,
+           "an atlas sprite switches to a cell");
+  inspector.update(&input, &document, &selection, 0.016f);
+  const InspectorField* column = inspector.field("sprite.cell.column");
+  testTrue(counters,
+           column != nullptr && column->integer,
+           "the cell column is a whole number");
+  const size_t commands = document.history().size();
+  inspector.scrubForTesting("sprite.cell.column", 15.0f, &document, &selection);
+  inspector.scrubForTesting("sprite.cell.column", 5.0f, &document, &selection);
+  testEqInt(counters,
+            spriteOf(document, "s").column,
+            2,
+            "integer scrubs carry fractions between frames");
+  testEqSize(counters,
+             document.history().size(),
+             commands + 1,
+             "one integer scrub is one command");
+  inspector.activateField("sprite.cell.column", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "9");
+  testTrue(counters,
+           inspector.invalidInput() && spriteOf(document, "s").column == 2,
+           "a cell outside the atlas grid is refused");
+  input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
+  inspector.update(&input, &document, &selection, 0.016f);
+  inspector.activateField("sprite.texture", &document, &selection);
+  testTrue(counters,
+           spriteOf(document, "s").texture == "tex" &&
+             !spriteOf(document, "s").hasCell,
+           "picking a plain texture returns the sprite to its region");
+
+  inspector.activateField("tags", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "hero, enemy ,, hero");
+  testTrue(counters,
+           document.findNode("s")->tags ==
+             std::vector<std::string>({ "hero", "enemy" }),
+           "tags are typed comma separated, trimmed and deduplicated");
+  selection.set(std::vector<std::string>{ "s", "e" });
+  inspector.update(&input, &document, &selection, 0.016f);
+  testTrue(counters,
+           inspector.field("tags")->mixed,
+           "differing tags across the selection are mixed");
+
+  selection.set("e");
+  inspector.update(&input, &document, &selection, 0.016f);
+  testTrue(counters,
+           inspector.field("component.add.mesh") != nullptr &&
+             inspector.field("component.add.sprite") != nullptr,
+           "with mesh and image assets a node offers Mesh and Sprite");
+  inspector.activateField("component.add.mesh", &document, &selection);
+  const SceneComponent* mesh =
+    document.findNode("e")->find(SceneComponentType::Mesh);
+  testTrue(counters,
+           mesh != nullptr &&
+             std::get<SceneMeshRenderer>(mesh->value).asset == "mesh",
+           "Add Mesh starts on the first mesh asset");
+  inspector.update(&input, &document, &selection, 0.016f);
+  testTrue(counters,
+           inspector.field("mesh.asset") != nullptr &&
+             inspector.field("mesh.asset")->kind ==
+               InspectorFieldKind::Choice &&
+             inspector.field("component.add.mesh") == nullptr,
+           "the mesh asset is a choice and Mesh is no longer offered");
+  return counters.failures;
+}
+
+static int
+testInspectorSceneAssetsSection()
+{
+  TestCounters counters;
+  HeadlessRenderFixture fixture(1280, 720);
+  EditorInspector inspector(&fixture.window, &fixture.renderer);
+  inspector.setPlacement(panelArea(1040.0f, 300.0f, 240.0f, 400.0f));
+  InputManager input(nullptr);
+  EditorDocument document;
+  EditorSelection selection;
+  loadAssetScene(document);
+  inspector.update(&input, &document, &selection, 0.016f);
+
+  inspector.activateField("meta.description", &document, &selection);
+  const std::string description(600, 'd');
+  typeAndFinish(inspector, input, document, selection, description);
+  testEqStr(counters,
+            document.scene().document().metadata.description,
+            description,
+            "descriptions are longer than one-line fields");
+
+  const InspectorField* skybox = inspector.field("env.skybox");
+  testTrue(counters,
+           skybox != nullptr && skybox->kind == InspectorFieldKind::Choice &&
+             skybox->choices == std::vector<std::string>({ "(none)", "sky" }) &&
+             inspector.field("env.tint.r") == nullptr,
+           "the skybox picks among cubemaps, and no sky has no tint");
+  inspector.activateField("env.skybox", &document, &selection);
+  testEqStr(counters,
+            document.scene().document().environment.skybox,
+            "sky",
+            "a cubemap becomes the skybox");
+  inspector.update(&input, &document, &selection, 0.016f);
+  inspector.activateField("env.tint.g", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "0.5");
+  testTrue(counters,
+           document.scene().document().environment.skyboxTint.y == 0.5f,
+           "the sky tint is editable");
+
+  testTrue(counters,
+           inspector.field("asset.type:tex") != nullptr &&
+             inspector.field("asset.type:mesh")->kind ==
+               InspectorFieldKind::ReadOnly &&
+             inspector.field("asset.radius:mesh") != nullptr &&
+             !inspector.field("asset.radius:mesh")->scrub,
+           "every asset lists its options");
+  testTrue(counters,
+           inspector.field("asset.remove:mesh") != nullptr &&
+             inspector.field("asset.remove:tex") == nullptr &&
+             inspector.field("asset.remove:sky") == nullptr,
+           "only unreferenced assets offer Remove");
+
+  inspector.activateField("asset.filter:tex", &document, &selection);
+  inspector.activateField("asset.mipmaps:tex", &document, &selection);
+  const SceneAsset* tex = document.scene().document().findAsset("tex");
+  testTrue(counters,
+           tex->texture.filter == SceneTextureFilter::Nearest &&
+             tex->texture.mipmaps,
+           "texture sampling options apply");
+  inspector.activateField("asset.type:tex", &document, &selection);
+  testTrue(counters,
+           document.scene().document().findAsset("tex")->type ==
+             SceneAssetType::Atlas,
+           "an image becomes an atlas");
+  inspector.update(&input, &document, &selection, 0.016f);
+  inspector.activateField("asset.columns:tex", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "3");
+  testEqInt(counters,
+            document.scene().document().findAsset("tex")->columns,
+            3,
+            "atlas columns apply");
+  inspector.activateField("asset.columns:atlas", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "2");
+  testTrue(counters,
+           inspector.invalidInput() &&
+             document.scene().document().findAsset("atlas")->columns == 4,
+           "a grid that would orphan a sprite cell is refused");
+  input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
+  inspector.update(&input, &document, &selection, 0.016f);
+  inspector.activateField("asset.type:sky", &document, &selection);
+  testTrue(counters,
+           document.scene().document().findAsset("sky")->type ==
+             SceneAssetType::CubemapCross,
+           "the skybox cannot stop being a cubemap");
+
+  const size_t assets = document.scene().document().assets.size();
+  inspector.activateField("asset.remove:mesh", &document, &selection);
+  testEqSize(counters,
+             document.scene().document().assets.size(),
+             assets - 1,
+             "an unused asset is removed");
+  document.undo();
+  testTrue(counters,
+           document.scene().document().findAsset("mesh") != nullptr,
+           "asset removal undoes");
+  return counters.failures;
+}
+
 void
 registerEditorInspectorTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllEd.Inspector.SpriteSourceTagsAndAssets",
+               []() { return testInspectorSpriteSourceTagsAndAssets(); });
+  registry.add("IllEd.Inspector.SceneAssetsSection",
+               []() { return testInspectorSceneAssetsSection(); });
   registry.add("IllEd.Inspector.CommitCreatesCommand",
                []() { return testInspectorCommitCreatesCommand(); });
   registry.add("IllEd.Inspector.InvalidAndEscape",

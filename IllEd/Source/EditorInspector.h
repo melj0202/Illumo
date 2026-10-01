@@ -24,7 +24,8 @@ enum class InspectorFieldKind
 };
 
 // One editable value. Keys name what it edits ("position.x",
-// "primitive.color.r", "env.sun.intensity", "component.add"...).
+// "primitive.color.r", "env.sun.intensity", "component.add"...). Asset table
+// entries use "asset.<property>:<asset id>".
 struct InspectorField
 {
   std::string key;
@@ -38,6 +39,12 @@ struct InspectorField
   int choice = 0;
   // Scrub speed in value units per pixel for Number fields.
   float step = 0.05f;
+  // Number fields: whole values only (scrubs carry fractions), and whether a
+  // drag scrubs at all (false: a click always starts typing).
+  bool integer = false;
+  bool scrub = true;
+  // Longest text a Text or Number field accepts.
+  size_t maxBytes = GuiTextEdit::kDefaultMaximumBytes;
   // Layout, in UI space.
   float x = 0.0f;
   float y = 0.0f;
@@ -130,6 +137,8 @@ private:
   std::string m_scrubKey;
   float m_scrubLastX = 0.0f;
   float m_scrubAccumulated = 0.0f;
+  // Fraction an integer scrub has not applied yet.
+  double m_scrubCarry = 0.0;
   uint64_t m_scrubSerial = 0;
   std::string m_copyText;
   bool m_copyPending = false;
@@ -167,4 +176,10 @@ private:
                  const std::string& text,
                  EditorDocument& document,
                  const EditorSelection& selection);
+  // Applies a scrub of `amount` value units to a Number field; integer
+  // fields apply whole units and carry the rest to the next call.
+  bool scrubBy(const InspectorField& target,
+               double amount,
+               EditorDocument& document,
+               const EditorSelection& selection);
 };

@@ -94,9 +94,6 @@ the plan's validation log):
         packages are not rewritten either.
   \item \textbf{\texttt{vfs mount} / \texttt{vfs unmount}:} the debug-tools
         mount commands were not added; the mount table is fixed per launch.
-  \item \textbf{Drag preview in IllEd:} a file dragged from the asset browser
-        is placed at the release point on the edit plane with no preview in
-        the viewport.
   \item \textbf{Mounted-read block speed:} 1\,MiB mounted blocks do not beat
         64\,KiB storage reads yet (about 434 versus 440\,MB/s) because the
         directory backend resolves and reopens the file for every block;

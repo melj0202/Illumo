@@ -519,9 +519,28 @@ EditorDocument::translate(const std::vector<std::string>& ids,
                           const Vector3& deltaWorld,
                           const std::string& mergeKey)
 {
+  const std::vector<Vector3> deltas(ids.size(), deltaWorld);
+  const SceneNode* first = ids.empty() ? nullptr : findNode(ids.front());
+  const std::string label =
+    ids.size() == 1 ? "Move " + (first != nullptr ? first->name : ids.front())
+                    : "Move " + std::to_string(ids.size()) + " nodes";
+  return translateEach(ids, deltas, label, mergeKey);
+}
+
+bool
+EditorDocument::translateEach(const std::vector<std::string>& ids,
+                              const std::vector<Vector3>& deltasWorld,
+                              const std::string& label,
+                              const std::string& mergeKey)
+{
+  if (ids.size() != deltasWorld.size()) {
+    return false;
+  }
   std::vector<std::string> moved;
   std::vector<Transform3D> transforms;
-  for (const std::string& id : ids) {
+  for (size_t index = 0; index < ids.size(); ++index) {
+    const std::string& id = ids[index];
+    const Vector3& deltaWorld = deltasWorld[index];
     const SceneNode* node = findNode(id);
     if (node == nullptr) {
       continue;
@@ -548,11 +567,131 @@ EditorDocument::translate(const std::vector<std::string>& ids,
   if (!m_scene->setTransforms(moved, transforms)) {
     return false;
   }
-  record(moved.size() == 1 ? "Move " + before.front().node.name
-                           : "Move " + std::to_string(moved.size()) + " nodes",
-         mergeKey,
-         before);
+  return record(label, mergeKey, before);
+}
+
+bool
+EditorDocument::subtreeWorldBounds(const std::string& id,
+                                   AxisAlignedBounds3* bounds) const
+{
+  const std::vector<std::string> subtree = m_scene->subtreeIds(id);
+  if (subtree.empty() || bounds == nullptr) {
+    return false;
+  }
+  const SceneGraph& graph = m_scene->graph();
+  bool any = false;
+  for (const std::string& member : subtree) {
+    AxisAlignedBounds3 world;
+    if (!graph.getWorldBounds(m_scene->handleOf(member), &world)) {
+      continue;
+    }
+    if (!any) {
+      *bounds = world;
+      any = true;
+    } else {
+      bounds->include(world);
+    }
+  }
+  if (!any) {
+    const Vector3 origin(m_scene->worldMatrix(id)[3]);
+    *bounds = AxisAlignedBounds3{ origin, origin };
+  }
   return true;
+}
+
+// Each node's subtree bounds and the selection's union, for arranging.
+static bool
+arrangeBounds(const EditorDocument& document,
+              const std::vector<std::string>& ids,
+              std::vector<std::string>* kept,
+              std::vector<AxisAlignedBounds3>* each,
+              AxisAlignedBounds3* all)
+{
+  for (const std::string& id : ids) {
+    AxisAlignedBounds3 bounds;
+    if (!document.subtreeWorldBounds(id, &bounds)) {
+      continue;
+    }
+    if (kept->empty()) {
+      *all = bounds;
+    } else {
+      all->include(bounds);
+    }
+    kept->push_back(id);
+    each->push_back(bounds);
+  }
+  return !kept->empty();
+}
+
+static const char*
+axisName(int axis)
+{
+  return axis == 0 ? "X" : axis == 1 ? "Y" : "Z";
+}
+
+bool
+EditorDocument::alignNodes(const std::vector<std::string>& ids,
+                           int axis,
+                           int side)
+{
+  std::vector<std::string> kept;
+  std::vector<AxisAlignedBounds3> each;
+  AxisAlignedBounds3 all;
+  if (axis < 0 || axis > 2 || ids.size() < 2 ||
+      !arrangeBounds(*this, ids, &kept, &each, &all)) {
+    return false;
+  }
+  const float target = side < 0 ? all.minimum[axis]
+                       : side > 0
+                         ? all.maximum[axis]
+                         : (all.minimum[axis] + all.maximum[axis]) * 0.5f;
+  std::vector<Vector3> deltas;
+  for (const AxisAlignedBounds3& bounds : each) {
+    const float current =
+      side < 0   ? bounds.minimum[axis]
+      : side > 0 ? bounds.maximum[axis]
+                 : (bounds.minimum[axis] + bounds.maximum[axis]) * 0.5f;
+    Vector3 delta(0.0f);
+    delta[axis] = target - current;
+    deltas.push_back(delta);
+  }
+  const char* where = side < 0 ? " min" : side > 0 ? " max" : " center";
+  return translateEach(
+    kept, deltas, std::string("Align ") + axisName(axis) + where);
+}
+
+bool
+EditorDocument::distributeNodes(const std::vector<std::string>& ids, int axis)
+{
+  std::vector<std::string> kept;
+  std::vector<AxisAlignedBounds3> each;
+  AxisAlignedBounds3 all;
+  if (axis < 0 || axis > 2 || ids.size() < 3 ||
+      !arrangeBounds(*this, ids, &kept, &each, &all) || kept.size() < 3) {
+    return false;
+  }
+  // Order by centre along the axis; the two outermost stay put.
+  std::vector<size_t> order(kept.size());
+  std::vector<float> centers(kept.size());
+  for (size_t index = 0; index < kept.size(); ++index) {
+    order[index] = index;
+    centers[index] =
+      (each[index].minimum[axis] + each[index].maximum[axis]) * 0.5f;
+  }
+  std::stable_sort(order.begin(), order.end(), [&centers](size_t a, size_t b) {
+    return centers[a] < centers[b];
+  });
+  const float first = centers[order.front()];
+  const float last = centers[order.back()];
+  const float spacing = (last - first) / static_cast<float>(kept.size() - 1);
+  std::vector<Vector3> deltas(kept.size(), Vector3(0.0f));
+  for (size_t rank = 0; rank < order.size(); ++rank) {
+    const size_t index = order[rank];
+    deltas[index][axis] =
+      first + spacing * static_cast<float>(rank) - centers[index];
+  }
+  return translateEach(
+    kept, deltas, std::string("Distribute ") + axisName(axis));
 }
 
 bool
@@ -660,6 +799,38 @@ EditorDocument::setMetadata(const SceneMetadata& metadata)
   return recordSettings("Edit metadata", {}, before);
 }
 
+static bool
+sameAsset(const SceneAsset& a, const SceneAsset& b)
+{
+  return a.type == b.type && a.path == b.path && a.faces == b.faces &&
+         a.columns == b.columns && a.rows == b.rows &&
+         a.texture.filter == b.texture.filter &&
+         a.texture.wrap == b.texture.wrap &&
+         a.texture.mipmaps == b.texture.mipmaps &&
+         a.mesh.centerAndNormalize == b.mesh.centerAndNormalize &&
+         a.mesh.targetRadius == b.mesh.targetRadius &&
+         a.mesh.flipV == b.mesh.flipV &&
+         a.mesh.generateNormals == b.mesh.generateNormals;
+}
+
+bool
+EditorDocument::setAssets(const std::vector<SceneAsset>& assets,
+                          const std::string& label,
+                          const std::string& mergeKey)
+{
+  const EditorSceneSettings before = EditorHistory::captureSettings(*m_scene);
+  bool same = assets.size() == before.assets.size();
+  for (size_t index = 0; same && index < assets.size(); ++index) {
+    same = assets[index].id == before.assets[index].id &&
+           sameAsset(assets[index], before.assets[index]);
+  }
+  std::string error;
+  if (same || !m_scene->setAssets(assets, error)) {
+    return false;
+  }
+  return recordSettings(label, mergeKey, before);
+}
+
 std::vector<std::string>
 EditorDocument::duplicate(const std::vector<std::string>& roots)
 {
@@ -707,20 +878,6 @@ EditorDocument::duplicate(const std::vector<std::string>& roots)
          {},
          before);
   return created;
-}
-
-static bool
-sameAsset(const SceneAsset& a, const SceneAsset& b)
-{
-  return a.type == b.type && a.path == b.path && a.faces == b.faces &&
-         a.columns == b.columns && a.rows == b.rows &&
-         a.texture.filter == b.texture.filter &&
-         a.texture.wrap == b.texture.wrap &&
-         a.texture.mipmaps == b.texture.mipmaps &&
-         a.mesh.centerAndNormalize == b.mesh.centerAndNormalize &&
-         a.mesh.targetRadius == b.mesh.targetRadius &&
-         a.mesh.flipV == b.mesh.flipV &&
-         a.mesh.generateNormals == b.mesh.generateNormals;
 }
 
 static void

@@ -55,6 +55,10 @@ public:
   std::string takeActivated();
   // The file row being dragged, empty when none.
   const std::string& dragging() const { return m_dragPath; }
+  // While a file is dragged: it and the pointer, in window pixels of the
+  // panel's surface (the pointer keeps reporting past the window's edge while
+  // the button is held). An empty path when nothing is dragged.
+  Drop dragPoint() const;
   const std::string& selected() const { return m_selected; }
 
   // Testing hooks.

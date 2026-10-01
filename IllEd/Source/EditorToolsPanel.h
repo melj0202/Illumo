@@ -21,12 +21,21 @@ struct EditorToolsState
   EditorCommand activeTool = EditorCommand::SelectTool;
   GizmoMode gizmoMode = GizmoMode::Translate;
   GizmoSpace gizmoSpace = GizmoSpace::World;
+  // Rotate and scale about the selection centre.
+  bool pivotCenter = false;
   bool snap = false;
+  bool gridVisible = true;
+  float gridSpacing = 1.0f;
+  float snapTranslate = 0.5f;
+  float snapRotateDegrees = 15.0f;
+  float snapScale = 0.1f;
 };
 
-// The Tools dock panel's content: world mode, transform tool, gizmo space,
-// snapping and the Create tools, drawn into the rectangle and surface it is
-// given. Every control issues an EditorCommand; the module dispatches it.
+// The Tools dock panel's content: world mode, transform tool, gizmo space and
+// pivot, grid and snap settings, arrange buttons and the Create tools, drawn
+// into the rectangle and surface it is given. Every control issues an
+// EditorCommand; the module dispatches it. Settings are steppers (a value
+// between a smaller and a larger button), so the panel never takes typing.
 class EditorToolsPanel : public DrawableBase
 {
 public:
@@ -63,7 +72,10 @@ private:
   {
     Button,
     Toggle,
-    Tool
+    Tool,
+    // Text that issues nothing: a row label, or a stepper's value.
+    Label,
+    Value
   };
   struct Control
   {
@@ -96,9 +108,18 @@ private:
   float rowHeight() const;
   // Layout helpers: each returns the y below what it added.
   float addSection(const std::string& label, float y);
+  // A row of equal buttons, after a row label when one is given.
   float addButtons(
     const std::vector<std::pair<std::string, EditorCommand>>& entries,
-    float y);
+    float y,
+    const std::string& rowLabel = {});
+  // A labelled value between a smaller and a larger button.
+  float addStepper(const std::string& rowLabel,
+                   const std::string& value,
+                   EditorCommand down,
+                   EditorCommand up,
+                   float y);
+  float rowLabelWidth() const;
   void layout();
   bool active(const Control& control) const;
   int controlAt(float x, float y) const;

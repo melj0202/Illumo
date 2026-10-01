@@ -30,6 +30,8 @@ EditorShortcuts::all()
     { EditorCommand::ScaleMode, KeyCode::R, false, false, false },
     { EditorCommand::ToggleGizmoSpace, KeyCode::X, false, false, false },
     { EditorCommand::ToggleSnap, KeyCode::G, false, false, false },
+    { EditorCommand::TogglePivot, KeyCode::P, false, false, false },
+    { EditorCommand::FindInHierarchy, KeyCode::F, true, false, false },
     { EditorCommand::SetMode2D, KeyCode::Num2, false, false, false },
     { EditorCommand::SetMode3D, KeyCode::Num3, false, false, false },
     { EditorCommand::ResetCamera, KeyCode::Home, false, false, false },

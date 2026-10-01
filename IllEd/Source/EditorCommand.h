@@ -48,6 +48,36 @@ enum class EditorCommand
   ScaleMode,
   ToggleGizmoSpace,
   ToggleSnap,
+  // Rotate and scale about the selection's bounds centre instead of the
+  // primary node's origin.
+  TogglePivot,
+  // Grid and snap view settings (never dirty the document); the steps walk
+  // fixed ladders of common values.
+  ToggleGrid,
+  GridSpacingDown,
+  GridSpacingUp,
+  SnapMoveDown,
+  SnapMoveUp,
+  SnapRotateDown,
+  SnapRotateUp,
+  SnapScaleDown,
+  SnapScaleUp,
+  // Arrange: line the selection's top-level nodes up on one side or the
+  // centre of their combined bounds, or space their centres evenly.
+  AlignMinX,
+  AlignCenterX,
+  AlignMaxX,
+  AlignMinY,
+  AlignCenterY,
+  AlignMaxY,
+  AlignMinZ,
+  AlignCenterZ,
+  AlignMaxZ,
+  DistributeX,
+  DistributeY,
+  DistributeZ,
+  // Focuses the hierarchy's filter field.
+  FindInHierarchy,
   SetMode2D,
   SetMode3D,
   CycleColor,

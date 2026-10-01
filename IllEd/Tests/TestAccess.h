@@ -184,4 +184,24 @@ public:
   {
     return module.m_assetBrowser.get();
   }
+
+  static GizmoFrame gizmoFrame(const EditorScene& module, const std::string& id)
+  {
+    return module.gizmoFrame(id);
+  }
+
+  static void frameSelection(EditorScene& module) { module.frameSelection(); }
+
+  static bool showDropPreview(EditorScene& module,
+                              const std::string& path,
+                              float pixelX,
+                              float pixelY)
+  {
+    return module.showDropPreview(path, pixelX, pixelY);
+  }
+
+  static bool dropPreviewShown(const EditorScene& module)
+  {
+    return module.m_dropPreviewShown && module.m_dropPreview != nullptr;
+  }
 };

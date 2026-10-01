@@ -76,9 +76,55 @@ testPlacementAndState()
            "a hidden panel draws nothing and takes no input");
 }
 
+static void
+testSteppersAndArrange()
+{
+  testSection("EditorToolsPanel: steppers, pivot and arrange buttons");
+  HeadlessRenderFixture fixture(1280, 1000);
+  EditorToolsPanel tools(&fixture.window, &fixture.renderer);
+  tools.setPlacement(panelArea(1030.0f, 46.0f, 250.0f, 900.0f));
+  tools.update(nullptr, 0.016f);
+  const EditorCommand commands[] = {
+    EditorCommand::TogglePivot,   EditorCommand::ToggleGrid,
+    EditorCommand::SnapMoveDown,  EditorCommand::SnapMoveUp,
+    EditorCommand::SnapRotateUp,  EditorCommand::SnapScaleDown,
+    EditorCommand::GridSpacingUp, EditorCommand::AlignMinX,
+    EditorCommand::AlignCenterY,  EditorCommand::DistributeX,
+    EditorCommand::DistributeY,
+  };
+  for (EditorCommand command : commands) {
+    float x = 0.0f;
+    float y = 0.0f;
+    testTrue(g,
+             tools.controlCenterForTesting(command, &x, &y) &&
+               tools.containsScreenPoint(x, y) &&
+               tools.clickAtForTesting(x, y) == command,
+             "a new control hits its command");
+  }
+  float x = 0.0f;
+  float y = 0.0f;
+  testTrue(g,
+           !tools.controlCenterForTesting(EditorCommand::AlignMaxZ, &x, &y) &&
+             !tools.controlCenterForTesting(EditorCommand::DistributeZ, &x, &y),
+           "a 2D world arranges on X and Y only");
+  EditorToolsState state;
+  state.is3D = true;
+  tools.setState(state);
+  tools.update(nullptr, 0.016f);
+  testTrue(g,
+           tools.controlCenterForTesting(EditorCommand::AlignMaxZ, &x, &y) &&
+             tools.clickAtForTesting(x, y) == EditorCommand::AlignMaxZ,
+           "a 3D world adds Z");
+}
+
 void
 registerEditorToolsPanelTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllEd.Tools.SteppersAndArrange", []() {
+    g = {};
+    testSteppersAndArrange();
+    return g.failures;
+  });
   registry.add("IllEd.Tools.ControlHits", []() {
     g = {};
     testToolHits();

@@ -53,6 +53,8 @@ public:
   TextureHandle atlas() const { return m_atlas; }
   void setStatus(const std::string& text);
   void setWorldMode(bool is3D);
+  // Check marks for View > Show Grid and Tools > Pivot at Selection Center.
+  void setViewToggles(bool gridVisible, bool pivotCenter);
   // The viewport rectangle between the dock columns: the mode label sits at
   // its top left and toasts at its bottom right.
   void setViewport(const GuiToolRect& viewport) { m_viewport = viewport; }
@@ -120,6 +122,8 @@ private:
   std::string m_toastMessage;
   ColorRgba m_toastColor = GuiToolPalette::accent;
   bool m_is3D = false;
+  bool m_gridVisible = true;
+  bool m_pivotCenter = false;
   std::string m_undoLabel;
   std::string m_redoLabel;
   std::vector<EditorPanelMenuEntry> m_panels;

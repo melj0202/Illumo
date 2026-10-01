@@ -2,12 +2,14 @@
 
 #include "EditorToolbar.h"
 #include "EditorUiAtlas.h"
+#include <Illumo/Gui/GuiKit.h>
 #include <Illumo/Gui/GuiToolStyle.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/InputManager.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <utility>
 
 struct ToolEntry
@@ -95,14 +97,30 @@ EditorToolsPanel::addSection(const std::string& label, float y)
 }
 
 float
+EditorToolsPanel::rowLabelWidth() const
+{
+  const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
+  return std::round(std::min(m_placement.area.w * 0.32f, 64.0f * fontScale));
+}
+
+float
 EditorToolsPanel::addButtons(
   const std::vector<std::pair<std::string, EditorCommand>>& entries,
-  float y)
+  float y,
+  const std::string& rowLabel)
 {
   const float gap = 4.0f;
-  const float left = m_placement.area.x + GuiToolStyle::kPad;
-  const float width =
-    std::max(40.0f, m_placement.area.w - GuiToolStyle::kPad * 2.0f);
+  float left = m_placement.area.x + GuiToolStyle::kPad;
+  float width = std::max(40.0f, m_placement.area.w - GuiToolStyle::kPad * 2.0f);
+  if (!rowLabel.empty()) {
+    const float label = rowLabelWidth();
+    m_controls.push_back({ ControlKind::Label,
+                           rowLabel,
+                           EditorCommand::None,
+                           { left, y, label, rowHeight() } });
+    left += label;
+    width = std::max(40.0f, width - label);
+  }
   const float count = static_cast<float>(entries.size());
   const float each = (width - gap * (count - 1.0f)) / count;
   float x = left;
@@ -115,6 +133,54 @@ EditorToolsPanel::addButtons(
     x += each + gap;
   }
   return y + rowHeight() + gap;
+}
+
+float
+EditorToolsPanel::addStepper(const std::string& rowLabel,
+                             const std::string& value,
+                             EditorCommand down,
+                             EditorCommand up,
+                             float y)
+{
+  const float row = rowHeight();
+  const float left = m_placement.area.x + GuiToolStyle::kPad;
+  const float right =
+    m_placement.area.x + m_placement.area.w - GuiToolStyle::kPad;
+  const float label = rowLabelWidth();
+  const float button = row;
+  m_controls.push_back({ ControlKind::Label,
+                         rowLabel,
+                         EditorCommand::None,
+                         { left, y, label, row } });
+  const float start = left + label;
+  m_controls.push_back(
+    { ControlKind::Button, "<", down, { start, y, button, row } });
+  m_controls.push_back({ ControlKind::Value,
+                         value,
+                         EditorCommand::None,
+                         { start + button + 2.0f,
+                           y,
+                           std::max(0.0f, right - start - button * 2.0f - 4.0f),
+                           row } });
+  m_controls.push_back(
+    { ControlKind::Button, ">", up, { right - button, y, button, row } });
+  return y + row + 4.0f;
+}
+
+// Settings as the steppers show them: up to three decimals, no trailing zeros.
+static std::string
+settingText(float value, const char* suffix = "")
+{
+  char buffer[32];
+  std::snprintf(buffer, sizeof(buffer), "%.3f", static_cast<double>(value));
+  std::string text(buffer);
+  while (!text.empty() && text.back() == '0') {
+    text.pop_back();
+  }
+  if (!text.empty() && text.back() == '.') {
+    text.pop_back();
+  }
+  return text + suffix;
 }
 
 void
@@ -143,6 +209,15 @@ EditorToolsPanel::layout()
                          EditorCommand::ToggleSnap,
                          { area.x + area.w * 0.5f, y, area.w * 0.5f, row } });
   y += row + 4.0f;
+  m_controls.push_back({ ControlKind::Toggle,
+                         "Pivot center",
+                         EditorCommand::TogglePivot,
+                         { area.x, y, area.w * 0.5f, row } });
+  m_controls.push_back({ ControlKind::Toggle,
+                         "Grid",
+                         EditorCommand::ToggleGrid,
+                         { area.x + area.w * 0.5f, y, area.w * 0.5f, row } });
+  y += row + 4.0f;
   y = addSection("Create", y);
   for (const ToolEntry& entry : kTools) {
     m_controls.push_back({ ControlKind::Tool,
@@ -150,6 +225,55 @@ EditorToolsPanel::layout()
                            entry.command,
                            { area.x, y, area.w, row } });
     y += row;
+  }
+  y = addSection("Snap and grid", y + 4.0f);
+  y = addStepper("Move",
+                 settingText(m_state.snapTranslate),
+                 EditorCommand::SnapMoveDown,
+                 EditorCommand::SnapMoveUp,
+                 y);
+  y = addStepper("Rotate",
+                 settingText(m_state.snapRotateDegrees, " deg"),
+                 EditorCommand::SnapRotateDown,
+                 EditorCommand::SnapRotateUp,
+                 y);
+  y = addStepper("Scale",
+                 settingText(m_state.snapScale),
+                 EditorCommand::SnapScaleDown,
+                 EditorCommand::SnapScaleUp,
+                 y);
+  y = addStepper("Grid",
+                 settingText(m_state.gridSpacing),
+                 EditorCommand::GridSpacingDown,
+                 EditorCommand::GridSpacingUp,
+                 y);
+  y = addSection("Arrange", y);
+  y = addButtons({ { "Min", EditorCommand::AlignMinX },
+                   { "Mid", EditorCommand::AlignCenterX },
+                   { "Max", EditorCommand::AlignMaxX } },
+                 y,
+                 "X");
+  y = addButtons({ { "Min", EditorCommand::AlignMinY },
+                   { "Mid", EditorCommand::AlignCenterY },
+                   { "Max", EditorCommand::AlignMaxY } },
+                 y,
+                 "Y");
+  if (m_state.is3D) {
+    y = addButtons({ { "Min", EditorCommand::AlignMinZ },
+                     { "Mid", EditorCommand::AlignCenterZ },
+                     { "Max", EditorCommand::AlignMaxZ } },
+                   y,
+                   "Z");
+    y = addButtons({ { "X", EditorCommand::DistributeX },
+                     { "Y", EditorCommand::DistributeY },
+                     { "Z", EditorCommand::DistributeZ } },
+                   y,
+                   "Spread");
+  } else {
+    y = addButtons({ { "X", EditorCommand::DistributeX },
+                     { "Y", EditorCommand::DistributeY } },
+                   y,
+                   "Spread");
   }
   m_contentHeight = y + m_scroll - area.y + 4.0f;
 }
@@ -171,6 +295,10 @@ EditorToolsPanel::active(const Control& control) const
       return m_state.gizmoSpace == GizmoSpace::Local;
     case EditorCommand::ToggleSnap:
       return m_state.snap;
+    case EditorCommand::TogglePivot:
+      return m_state.pivotCenter;
+    case EditorCommand::ToggleGrid:
+      return m_state.gridVisible;
     default:
       return control.command == m_state.activeTool;
   }
@@ -270,6 +398,33 @@ EditorToolsPanel::rebuildVisual()
     }
     if (control.kind == ControlKind::Toggle) {
       GuiToolStyle::toggle(m_visual, control.rect, control.label, on, hovered);
+      continue;
+    }
+    const float textY =
+      control.rect.y +
+      std::max(0.0f, std::round((control.rect.h - font) * 0.5f)) - 1.0f;
+    if (control.kind == ControlKind::Label) {
+      GuiToolStyle::fittedText(m_visual,
+                               control.label,
+                               control.rect.x,
+                               textY,
+                               control.rect.w - 4.0f,
+                               font,
+                               GuiToolPalette::dim);
+      continue;
+    }
+    if (control.kind == ControlKind::Value) {
+      m_visual.addFilledRect(control.rect.x,
+                             control.rect.y,
+                             control.rect.w,
+                             control.rect.h,
+                             GuiToolPalette::field);
+      GuiKit::drawTextCentered(m_visual,
+                               control.label,
+                               control.rect.x + control.rect.w * 0.5f,
+                               control.rect.y + control.rect.h * 0.5f,
+                               font,
+                               GuiToolPalette::text);
       continue;
     }
     GuiToolStyle::row(m_visual, control.rect, on, hovered && !on);

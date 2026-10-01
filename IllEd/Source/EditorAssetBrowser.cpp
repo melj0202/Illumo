@@ -335,6 +335,17 @@ EditorAssetBrowser::rebuild(const std::vector<GuiFileTreeRow>& rows)
 }
 
 EditorAssetBrowser::Drop
+EditorAssetBrowser::dragPoint() const
+{
+  if (m_dragPath.empty()) {
+    return Drop{};
+  }
+  return {
+    m_dragPath, m_placement.surface, m_pointer.pixelX(), m_pointer.pixelY()
+  };
+}
+
+EditorAssetBrowser::Drop
 EditorAssetBrowser::takeDrop()
 {
   Drop drop = std::move(m_drop);

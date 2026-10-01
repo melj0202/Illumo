@@ -135,12 +135,14 @@ cleared on load.
 | Rename / Delete / Unparent / Show-Hide | F2 / Del / U / H |
 | Select, Move, Rotate, Scale tools | Q, W, E, R |
 | World or local space / snapping | X / G |
+| Pivot at the selection centre | P |
+| Find in the hierarchy (filter field) | Ctrl+F |
 | 2D or 3D world | 2 / 3 |
 | Frame selection / reset camera | F / Home |
 
 Camera navigation uses the arrows, PageUp/PageDown and the mouse, so letters
-stay free for commands. While an inspector text field has focus it consumes
-keys and characters, so no shortcut fires.
+stay free for commands. While an inspector field or the hierarchy's filter
+field has focus it consumes keys and characters, so no shortcut fires.
 
 ## Transform tools
 
@@ -150,17 +152,31 @@ pointer positions into rays and deltas into transforms.
 - Translate (axes, planes, center), rotate (three rings; only the Z ring in
   2D) and scale (axes and a uniform center), drawn at constant screen size.
 - World space, or the primary node's local axes (X toggles).
-- Rotation pivots on the primary node; scaling keeps each node's own axes and
-  spreads positions from the pivot. Grabbing a node's body still moves the
-  selection on the edit plane.
+- The pivot is the primary node's origin, or (P, or Pivot center in the Tools
+  panel) the centre of the selection's top-level subtree bounds. Rotation
+  turns about the pivot; scaling keeps each node's own axes and spreads
+  positions from the pivot. Grabbing a node's body still moves the selection
+  on the edit plane. The pivot choice is session state, like the space.
 - Deltas are cumulative from the press and applied to the transforms captured
   at the press, so drags never drift. Every drag is one merged history command
   (`EditorDocument::setTransforms`).
 - Snapping (G toggles, Ctrl inverts while dragging) quantizes translation per
   gizmo axis, angles and scale factors. The increments (default 0.5 units,
-  15 degrees, 0.1) live in the scene's `editor` block.
-- Frame selection (F) fits the selection's world bounds. Selection boxes are
-  oriented per selected node.
+  15 degrees, 0.1) and the grid (shown or hidden, spacing) live in the
+  scene's `editor` block. The Tools panel sets them with steppers that walk
+  fixed ladders (move 0.05-5, rotate 1-90 degrees, scale 0.01-1, grid
+  0.1-10); a hand-edited value between steps moves to the next step in the
+  chosen direction. View > Show Grid also toggles the grid.
+- Frame selection (F) fits the selection's world bounds into the visible
+  viewport between the dock columns and centres it there; Reset Camera (Home)
+  likewise centres the origin. In 3D the target shifts along the camera's
+  right and up axes by the pixel offset at the target distance. Selection
+  boxes are oriented per selected node.
+- **Arrange** (menu and Tools panel): Align X/Y/Z Min, Center or Max lines up
+  the selection's top-level subtree bounds on the combined bounds; Distribute
+  X/Y/Z spaces three or more bounds centres evenly between the outermost.
+  Each is one command (`EditorDocument::alignNodes`, `distributeNodes`, over
+  `translateEach`); 2D worlds offer X and Y only.
 - The Tools menu mirrors the tool keys, and the status bar shows mode, space
   and snap.
 
@@ -185,7 +201,13 @@ pointer positions into rays and deltas into transforms.
   dimmed when hidden). Drops land before, into or after a row by thirds,
   drawn as an insertion line, and reorder through
   `SceneGraph::setParent(node, parent, insertBefore)` (D-E26). Double-click
-  renames. The right-click menu offers Rename, Duplicate, Copy, Cut, Paste,
+  renames. Ctrl+click toggles a row; Shift+click selects the visible rows
+  from the anchor (the last row clicked without Shift) to the clicked one,
+  which becomes primary; Ctrl+Shift adds that range. A filter field above the
+  tree (click it or Ctrl+F) keeps rows whose name or id contains its text in
+  any case, plus their ancestors drawn dimmed, and ignores folding while it
+  holds text; Enter keeps the filter, Escape or its clear button clears it.
+  The right-click menu offers Rename, Duplicate, Copy, Cut, Paste,
   Add Child, Show/Hide, Enable/Disable, Unparent and Delete; the panel hands
   its choice to `EditorScene` through `takeCommand()`.
 
@@ -195,30 +217,46 @@ pointer positions into rays and deltas into transforms.
 caret, selection and clipboard, drawn by `GuiKit::drawTextField`; D-UI6).
 Fields are rebuilt from the document every frame.
 
-- With a selection: name (F2 focuses it), enabled and visible, position,
-  rotation as Euler degrees (stored as a quaternion), scale, and each
-  component: primitive shape, extent and color; mesh asset, tint and shadow
-  casting; sprite texture, size, facing, tint and flip; light color,
-  intensity and shadows; camera projection, field of view, clip planes, zoom
-  and primary. Each core component has a Remove button, and an Add component
-  section adds a Shape, Light or Camera the node does not have yet;
-  namespaced components are read-only.
-- With nothing selected: the scene's world mode, metadata and environment
-  (skybox asset, ambient color, and the sun's direction, color, intensity and
-  shadows).
+- With a selection: name (F2 focuses it), enabled and visible, tags (typed
+  comma separated; trimmed and deduplicated), position, rotation as Euler
+  degrees (stored as a quaternion), scale, and each component: primitive
+  shape, extent and color; mesh asset, tint and shadow casting; sprite
+  texture, source (a normalized region U/V min and max, or an atlas cell
+  column and row), size, facing, tint and flip; light color, intensity and
+  shadows; camera projection, field of view, clip planes, zoom and primary.
+  Mesh assets and sprite textures are choices among the compatible
+  asset-table entries; picking a plain texture returns a sprite to its
+  region. Each core component has a Remove button, and an Add component
+  section adds a Shape, Mesh, Sprite, Light or Camera the node does not have
+  yet (Mesh and Sprite only when a compatible asset exists, starting on the
+  first); namespaced components are read-only.
+- With nothing selected: the scene's world mode and metadata (title, author,
+  a description of up to 4096 bytes), the environment (skybox as a choice
+  among cubemap assets or none, its tint while one is set, ambient color, and
+  the sun's direction, color, intensity and shadows), and the asset table:
+  each entry shows its file and, for images, its type (texture, atlas or
+  cubemap cross), atlas columns and rows, filter, wrap and mipmaps; for
+  meshes, centre-and-normalize, target radius (typed only, since every asset
+  change rebuilds the scene's attachments), flip V and generated normals.
+  Cubemap-faces entries show their first face read-only. Entries nothing
+  references offer Remove. Asset edits are settings commands
+  (`EditorDocument::setAssets`); a table the scene rejects (an atlas grid
+  that would orphan a sprite cell, a skybox that would stop being a cubemap)
+  leaves the field invalid or the choice where it was.
 - Enter commits one history command, Escape cancels, invalid text is rejected
   in place. Number fields scrub by dragging their label, one merged command
-  per scrub. Multi-selection shows shared values, marks mixed ones with a
-  dash, and applies one command to every selected node
-  (`EditorDocument::editNodes`, which restores every node if any edit is
-  rejected).
+  per scrub; whole-number fields carry fractions between frames. Multi-
+  selection shows shared values, marks mixed ones with a dash, and applies
+  one command to every selected node (`EditorDocument::editNodes`, which
+  restores every node if any edit is rejected).
 
 ## Content and assets
 
 - **Node kinds:** Create adds an empty node, every primitive shape (Rect,
   Ellipse, Triangle, Cube, Pyramid, Sphere, Wire Cube, Wire Sphere), Light and
   Camera (placed at the view center). Mesh and sprite nodes come from
-  dropping a file from the asset browser (or `scene_place`).
+  dropping a file from the asset browser (or `scene_place`), or from adding a
+  Mesh or Sprite component to a node once the scene holds such an asset.
 - **Asset browser** (`EditorAssetBrowser`, over `GuiFileTree`): docked below
   the hierarchy (38% of the left column), it lists the virtual file tree
   (`/app`, `/engine`, `/packages/<id>`, `/project`) through
@@ -230,7 +268,10 @@ Fields are rebuilt from the document every frame.
   `EditorDocument::placeAsset`, which adds an asset entry (fresh id, reference
   package-relative to the document's package root, an identical entry
   reused) plus a mesh-renderer or world-sprite node at the release point on
-  the edit plane, as one command. There is no drag preview yet.
+  the edit plane, as one command. While the drag is over the viewport, from
+  the docked or a detached Assets panel (`EditorAssetBrowser::dragPoint`), a
+  ghost on the edit plane shows where the node will land: a unit box for a
+  mesh, the default sprite square for a texture.
 - **Loading** collects the scene's references (`collectSceneFetches`),
   fetches them with `IllEdPlatform::fetchAssets` (in the guest,
   `GuestSceneFetches` over the `GuestVfsAssets` cache, then an OBJ's MTL
@@ -255,11 +296,13 @@ scripts and package tests use them to reach the same flows as the UI.
 ## UI
 
 The editor is drawn in the plain tool look (`GuiToolStyle`, D-UI7): a File /
-Edit / Create / Tools / View menu bar and a status bar (`EditorToolbar`), the
-viewport, and one `GuiPanelDock` holding four panels. The left column has the
-Hierarchy (`EditorSceneGraphView`) above the Assets browser
-(`EditorAssetBrowser`); the right column has Tools (`EditorToolsPanel`: 2D/3D
-mode, Move/Rotate/Scale, local axes, snap and the Create tools) above the
+Edit / Create / Tools / Arrange / View menu bar and a status bar
+(`EditorToolbar`), the viewport, and one `GuiPanelDock` holding four panels.
+The left column has the Hierarchy (`EditorSceneGraphView`) above the Assets
+browser (`EditorAssetBrowser`); the right column has Tools
+(`EditorToolsPanel`: 2D/3D mode, Move/Rotate/Scale, local axes, snap, pivot
+and grid toggles, the Create tools, snap and grid steppers, and the Align and
+Distribute buttons; it issues commands only and never takes typing) above the
 Inspector (`EditorInspector`). Splitters resize the columns and the panels
 within them. Each panel's title bar can hide it or pop it out into its own
 window (where the host offers `IllumoContext::panelSurfaces`, D-E27), and
@@ -306,7 +349,11 @@ selection), `IllEd.Selection.BoxSelect2D`/`BoxSelect3D`, `IllEd.Clipboard.*`
 (id remap round trip, foreign or oversize text, paste position),
 `IllEd.Hierarchy.*` (row window, reorder undo, fold and visibility),
 `IllEd.Assets.*` (kinds and ids, the texture-cap import check, browsing the
-tree, the project flow), `IllEd.Tools.*`, `IllEd.Toolbar.*` (menu hits,
+tree, the project flow), `IllEd.Tools.*` (including the steppers and arrange
+buttons), `IllEd.Document.AlignAndDistribute`,
+`IllEd.Module.SettingStepsPivotAndArrange`, `IllEd.Module.DropPreview`,
+`IllEd.Module.FindFocusesHierarchyFilter`,
+`IllEd.SceneGraphView.RangeSelectAndFilter`, `IllEd.Toolbar.*` (menu hits,
 chrome metrics, View panel items), `IllEd.Panels.*` (pop-out and dock,
 detached text entry, cross-window asset drop, layout persistence, all through
 `FakePanelSurfaces`), and the scene-graph view, UI atlas and config cases. `IllEd.Wasm.Package` drives the real package through the

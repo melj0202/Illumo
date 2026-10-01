@@ -165,6 +165,18 @@ public:
                  const Vector3& deltaWorld,
                  const std::string& mergeKey = {});
   bool translate(const std::string& id, const Vector3& deltaWorld);
+  // Moves each node by its own world-space delta, as one command.
+  bool translateEach(const std::vector<std::string>& ids,
+                     const std::vector<Vector3>& deltasWorld,
+                     const std::string& label,
+                     const std::string& mergeKey = {});
+  // Moves top-level nodes so their subtree bounds line up on one world axis
+  // (0-2) at the selection's combined minimum (side < 0), centre (0) or
+  // maximum (side > 0), as one command.
+  bool alignNodes(const std::vector<std::string>& ids, int axis, int side);
+  // Spaces the subtree bounds centres of three or more top-level nodes evenly
+  // along one world axis between the two outermost, as one command.
+  bool distributeNodes(const std::vector<std::string>& ids, int axis);
   // Sets local transforms of several nodes as one (mergeable) command.
   bool setTransforms(const std::vector<std::string>& ids,
                      const std::vector<Transform3D>& transforms,
@@ -180,6 +192,12 @@ public:
   bool setEnvironment(const SceneEnvironment& environment,
                       const std::string& mergeKey = {});
   bool setMetadata(const SceneMetadata& metadata);
+  // Replaces the asset table as one settings command (commands sharing a
+  // merge key collapse into one). Returns false when nothing changed or the
+  // scene rejected the table, which then stays as it was.
+  bool setAssets(const std::vector<SceneAsset>& assets,
+                 const std::string& label,
+                 const std::string& mergeKey = {});
   // Copies each subtree next to its original; returns the new root ids.
   std::vector<std::string> duplicate(const std::vector<std::string>& ids);
   // Adds a mesh (.obj) or texture file from the virtual file tree as an asset
@@ -203,6 +221,10 @@ public:
                const Vector3& direction,
                std::string* id) const;
   Matrix4 worldMatrix(const std::string& id) const;
+  // World bounds of a node and its descendants; a node that draws nothing
+  // counts as its origin. False for an unknown id.
+  bool subtreeWorldBounds(const std::string& id,
+                          AxisAlignedBounds3* bounds) const;
   // A transform at a point of the edit plane (XY at z=0 in 2D, XZ at y=0 in
   // 3D).
   Transform3D makeEditPlaneTransform(float planeX, float planeY) const;

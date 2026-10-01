@@ -1,5 +1,6 @@
 #include "EditorScene.h"
 
+#include "EditorAssets.h"
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Rendering/Camera.h>
@@ -283,19 +284,90 @@ EditorScene::frameSelection()
   }
   const Vector3 center = (bounds.minimum + bounds.maximum) * 0.5f;
   const Vector3 size = glm::max(bounds.maximum - bounds.minimum, Vector3(0.5f));
-  const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
-  const float width = static_cast<float>(std::max(1, dimensions[0]));
-  const float height = static_cast<float>(std::max(1, dimensions[1]));
+  // Fit the visible viewport between the dock columns, not the window.
+  float width = 0.0f;
+  float height = 0.0f;
+  viewportPixels(&width, &height, nullptr, nullptr);
   if (m_document.worldMode() == SceneWorldMode::World3D) {
-    ic->camera->SetPositionPrecise(center.x, center.z);
-    m_cameraTargetY = center.y;
     const float radius = glm::length(size) * 0.5f;
     const float distance = std::max(2.0f, radius * 2.6f);
-    ic->camera->SetZoom(std::clamp(32.0f * 12.0f / distance, 0.5f, 100.0f));
+    placeCamera(center, std::clamp(32.0f * 12.0f / distance, 0.5f, 100.0f));
   } else {
-    ic->camera->SetPositionPrecise(center.x, center.y);
     const float zoom = std::min(width / size.x, height / size.y) * 0.6f;
-    ic->camera->SetZoom(std::clamp(zoom, 0.5f, 100.0f));
+    placeCamera(center, std::clamp(zoom, 0.5f, 100.0f));
+  }
+}
+
+void
+EditorScene::viewportPixels(float* width,
+                            float* height,
+                            float* offsetX,
+                            float* offsetY) const
+{
+  const std::array<int, 2> dimensions = ic != nullptr && ic->window != nullptr
+                                          ? ic->window->getWindowDimensions()
+                                          : std::array<int, 2>{ 1, 1 };
+  const float windowWidth = static_cast<float>(std::max(1, dimensions[0]));
+  const float windowHeight = static_cast<float>(std::max(1, dimensions[1]));
+  float w = windowWidth;
+  float h = windowHeight;
+  float dx = 0.0f;
+  float dy = 0.0f;
+  const GuiToolRect center = m_dock.center();
+  if (ic != nullptr && center.w > 1.0f && center.h > 1.0f) {
+    const float scale =
+      GuiPanelLayout::viewport(ic->window, ic->renderer).layoutScale;
+    w = center.w * scale;
+    h = center.h * scale;
+    dx = (center.x + center.w * 0.5f) * scale - windowWidth * 0.5f;
+    dy = (center.y + center.h * 0.5f) * scale - windowHeight * 0.5f;
+  }
+  if (width != nullptr) {
+    *width = w;
+  }
+  if (height != nullptr) {
+    *height = h;
+  }
+  if (offsetX != nullptr) {
+    *offsetX = dx;
+  }
+  if (offsetY != nullptr) {
+    *offsetY = dy;
+  }
+}
+
+void
+EditorScene::placeCamera(const Vector3& point, float zoom)
+{
+  if (ic == nullptr || ic->camera == nullptr || ic->window == nullptr) {
+    return;
+  }
+  // The camera looks at the window's centre; shift its target so `point`
+  // lands on the viewport's centre instead.
+  float offsetX = 0.0f;
+  float offsetY = 0.0f;
+  viewportPixels(nullptr, nullptr, &offsetX, &offsetY);
+  ic->camera->SetZoom(zoom);
+  if (m_document.worldMode() == SceneWorldMode::World3D) {
+    // World units per pixel at the target, from the editor camera's fixed
+    // 50 degree field of view and its zoom-to-distance mapping.
+    const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
+    const float distance =
+      std::max(2.0f, 12.0f / std::max(0.15f, zoom / 32.0f));
+    const float perPixel = 2.0f * distance * std::tan(glm::radians(25.0f)) /
+                           static_cast<float>(std::max(1, dimensions[1]));
+    const SceneEditorState& state = m_document.editorState();
+    const Vector3 right(std::cos(state.yaw), 0.0f, -std::sin(state.yaw));
+    const Vector3 up(-std::sin(state.pitch) * std::sin(state.yaw),
+                     std::cos(state.pitch),
+                     -std::sin(state.pitch) * std::cos(state.yaw));
+    const Vector3 target =
+      point - right * (offsetX * perPixel) + up * (offsetY * perPixel);
+    ic->camera->SetPositionPrecise(target.x, target.z);
+    m_cameraTargetY = target.y;
+  } else {
+    ic->camera->SetPositionPrecise(point.x - offsetX / zoom,
+                                   point.y + offsetY / zoom);
   }
   applyWorldCamera();
 }
@@ -323,6 +395,57 @@ addOrientedBox(MeshVisual& visual,
   for (const int* edge : edges) {
     visual.addLine(corners[edge[0]], corners[edge[1]], color);
   }
+}
+
+void
+EditorScene::updateDropPreview()
+{
+  float pixelX = 0.0f;
+  float pixelY = 0.0f;
+  const EditorAssetBrowser::Drop drag =
+    m_assetBrowser ? m_assetBrowser->dragPoint() : EditorAssetBrowser::Drop{};
+  if (drag.path.empty() || !dropToMain(drag, &pixelX, &pixelY)) {
+    showDropPreview({}, 0.0f, 0.0f);
+    return;
+  }
+  showDropPreview(drag.path, pixelX, pixelY);
+}
+
+bool
+EditorScene::showDropPreview(const std::string& path,
+                             float pixelX,
+                             float pixelY)
+{
+  const bool wasShown = m_dropPreviewShown;
+  m_dropPreviewShown = false;
+  const EditorAssetKind kind = EditorAssets::kindFor(path);
+  float worldX = 0.0f;
+  float worldY = 0.0f;
+  if (m_dropPreview && ic != nullptr && !path.empty() &&
+      (kind == EditorAssetKind::Mesh || kind == EditorAssetKind::Texture)) {
+    const float scale =
+      GuiPanelLayout::viewport(ic->window, ic->renderer).layoutScale;
+    if (!uiBlocksWorld(pixelX / scale, pixelY / scale) &&
+        screenToWorld(pixelX, pixelY, &worldX, &worldY)) {
+      // Where placeAsset would put the node: a unit box for a mesh, the
+      // default sprite square for a texture.
+      const Matrix4 world =
+        m_document.makeEditPlaneTransform(worldX, worldY).toMatrix();
+      const float depth = kind == EditorAssetKind::Mesh ? 0.5f : 0.0f;
+      m_dropPreview->clearPrimitives();
+      addOrientedBox(*m_dropPreview,
+                     world,
+                     AxisAlignedBounds3{ Vector3(-0.5f, -0.5f, -depth),
+                                         Vector3(0.5f, 0.5f, depth) },
+                     1.0f,
+                     ColorRgba{ 66, 214, 210, 220 });
+      m_dropPreviewShown = true;
+    }
+  }
+  if (wasShown && !m_dropPreviewShown && m_dropPreview) {
+    m_dropPreview->clearPrimitives();
+  }
+  return m_dropPreviewShown;
 }
 
 void
@@ -383,6 +506,10 @@ EditorScene::gizmoFrame(const std::string& id) const
   GizmoFrame frame;
   const Matrix4 world = m_document.worldMatrix(id);
   frame.origin = Vector3(world[3]);
+  Vector3 center(0.0f);
+  if (m_pivotCenter && selectionCenter(&center)) {
+    frame.origin = center;
+  }
   frame.is3D = m_document.worldMode() == SceneWorldMode::World3D;
   frame.scale = gizmoScale(frame.origin);
   if (m_gizmoSpace == GizmoSpace::Local) {
@@ -395,6 +522,29 @@ EditorScene::gizmoFrame(const std::string& id) const
     }
   }
   return frame;
+}
+
+bool
+EditorScene::selectionCenter(Vector3* center) const
+{
+  bool any = false;
+  AxisAlignedBounds3 all;
+  for (const std::string& id : m_selection.topLevel(m_document.scene())) {
+    AxisAlignedBounds3 bounds;
+    if (!m_document.subtreeWorldBounds(id, &bounds)) {
+      continue;
+    }
+    if (!any) {
+      all = bounds;
+      any = true;
+    } else {
+      all.include(bounds);
+    }
+  }
+  if (any) {
+    *center = (all.minimum + all.maximum) * 0.5f;
+  }
+  return any;
 }
 
 GizmoSnap

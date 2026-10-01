@@ -593,7 +593,9 @@ Design and this record written. No code changed.
   - a folder dialog;
   - remapping ids inside opaque extension data;
   - `vfs mount`/`unmount`;
-  - an IllEd drag preview;
+  - an IllEd drag preview (done 2026-10-01 in
+    `docs/illed-editing-wave2-plan.md`, which also lets Add component offer
+    mesh and sprite);
   - faster mounted reads (the directory backend reopens per block);
   - loading mod modules from `mod` packages;
   - `--open x.ilpk` in the viewer;

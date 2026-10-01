@@ -10,6 +10,14 @@
 #include <cstdlib>
 #include <functional>
 #include <glm/gtc/quaternion.hpp>
+#include <unordered_set>
+
+// The leading choice of an optional asset reference (the skybox).
+static const char* const kNoAsset = "(none)";
+// The format's limits for a scene description and, with separators, a node's
+// tags (32 of at most 64 bytes).
+static constexpr size_t kMaximumDescriptionBytes = 4096;
+static constexpr size_t kMaximumTagsBytes = 2304;
 
 // ---------------------------------------------------------------------------
 // Values: every numeric key resolves to a float or a color byte inside a node
@@ -85,14 +93,147 @@ componentOf(SceneNode& node)
   return nullptr;
 }
 
-// A float field or a color byte inside a node for a key, or nothing.
+// A float, integer or color byte inside a node (or an asset) for a key, or
+// nothing.
 struct NumberSlot
 {
   float* number = nullptr;
+  int* integer = nullptr;
   unsigned char* byte = nullptr;
   // Euler degree axis 0-2 for rotation keys, else -1.
   int rotationAxis = -1;
 };
+
+static bool
+readSlot(const NumberSlot& slot, double* value)
+{
+  if (slot.number != nullptr) {
+    *value = *slot.number;
+    return true;
+  }
+  if (slot.integer != nullptr) {
+    *value = *slot.integer;
+    return true;
+  }
+  if (slot.byte != nullptr) {
+    *value = *slot.byte;
+    return true;
+  }
+  return false;
+}
+
+static bool
+writeSlot(const NumberSlot& slot, double value)
+{
+  if (slot.number != nullptr) {
+    *slot.number = static_cast<float>(value);
+    return true;
+  }
+  if (slot.integer != nullptr) {
+    *slot.integer =
+      static_cast<int>(std::lround(std::clamp(value, -1.0e9, 1.0e9)));
+    return true;
+  }
+  if (slot.byte != nullptr) {
+    *slot.byte =
+      static_cast<unsigned char>(std::lround(std::clamp(value, 0.0, 255.0)));
+    return true;
+  }
+  return false;
+}
+
+// Asset table fields are keyed "asset.<property>:<asset id>"; the property
+// never holds a colon, so the first one splits them.
+static bool
+splitAssetKey(const std::string& key, std::string* property, std::string* id)
+{
+  const std::string prefix = "asset.";
+  const size_t colon = key.find(':');
+  if (!key.starts_with(prefix) || colon == std::string::npos) {
+    return false;
+  }
+  *property = key.substr(prefix.size(), colon - prefix.size());
+  *id = key.substr(colon + 1);
+  return true;
+}
+
+static NumberSlot
+resolveAsset(SceneAsset& asset, const std::string& property)
+{
+  NumberSlot slot;
+  if (property == "radius") {
+    slot.number = &asset.mesh.targetRadius;
+  } else if (property == "columns") {
+    slot.integer = &asset.columns;
+  } else if (property == "rows") {
+    slot.integer = &asset.rows;
+  }
+  return slot;
+}
+
+// Copies the asset table, mutates one entry and records the result as one
+// command; false when the asset is gone, the mutator declines or the scene
+// rejects the table.
+static bool
+editAsset(EditorDocument& document,
+          const std::string& id,
+          const std::string& label,
+          const std::string& mergeKey,
+          const std::function<bool(SceneAsset&)>& mutate)
+{
+  std::vector<SceneAsset> assets = document.scene().document().assets;
+  for (SceneAsset& asset : assets) {
+    if (asset.id == id) {
+      return mutate(asset) && document.setAssets(assets, label, mergeKey);
+    }
+  }
+  return false;
+}
+
+static const SceneAsset*
+findAsset(const EditorDocument& document, const std::string& id)
+{
+  return document.scene().document().findAsset(id);
+}
+
+// Tags as typed: comma separated, trimmed, empty and repeated ones dropped.
+static std::vector<std::string>
+parseTags(const std::string& text)
+{
+  std::vector<std::string> tags;
+  size_t start = 0;
+  while (start <= text.size()) {
+    size_t end = text.find(',', start);
+    if (end == std::string::npos) {
+      end = text.size();
+    }
+    size_t first = start;
+    size_t last = end;
+    while (first < last && text[first] == ' ') {
+      ++first;
+    }
+    while (last > first && text[last - 1] == ' ') {
+      --last;
+    }
+    const std::string tag = text.substr(first, last - first);
+    if (!tag.empty() &&
+        std::find(tags.begin(), tags.end(), tag) == tags.end()) {
+      tags.push_back(tag);
+    }
+    start = end + 1;
+  }
+  return tags;
+}
+
+static std::string
+joinTags(const std::vector<std::string>& tags)
+{
+  std::string text;
+  for (const std::string& tag : tags) {
+    text += text.empty() ? tag : ", " + tag;
+  }
+  return text;
+}
 
 static unsigned char*
 colorByte(ColorRgba& color, char channel)
@@ -134,12 +275,27 @@ resolveNode(SceneNode& node, const std::string& key)
     }
   } else if (key.starts_with("sprite.")) {
     SceneSprite* sprite = componentOf<SceneSprite>(node);
-    if (sprite != nullptr && key == "sprite.size.w") {
+    if (sprite == nullptr) {
+      return slot;
+    }
+    if (key == "sprite.size.w") {
       slot.number = &sprite->width;
-    } else if (sprite != nullptr && key == "sprite.size.h") {
+    } else if (key == "sprite.size.h") {
       slot.number = &sprite->height;
-    } else if (sprite != nullptr && key.starts_with("sprite.tint.")) {
+    } else if (key.starts_with("sprite.tint.")) {
       slot.byte = colorByte(sprite->tint, last);
+    } else if (key == "sprite.region.u0") {
+      slot.number = &sprite->u0;
+    } else if (key == "sprite.region.v0") {
+      slot.number = &sprite->v0;
+    } else if (key == "sprite.region.u1") {
+      slot.number = &sprite->u1;
+    } else if (key == "sprite.region.v1") {
+      slot.number = &sprite->v1;
+    } else if (key == "sprite.cell.column") {
+      slot.integer = &sprite->column;
+    } else if (key == "sprite.cell.row") {
+      slot.integer = &sprite->row;
     }
   } else if (key.starts_with("light.")) {
     SceneLight* light = componentOf<SceneLight>(node);
@@ -174,15 +330,7 @@ readNumber(const SceneNode& source, const std::string& key, double* value)
     *value = euler[slot.rotationAxis];
     return true;
   }
-  if (slot.number != nullptr) {
-    *value = *slot.number;
-    return true;
-  }
-  if (slot.byte != nullptr) {
-    *value = *slot.byte;
-    return true;
-  }
-  return false;
+  return readSlot(slot, value);
 }
 
 static bool
@@ -195,22 +343,16 @@ writeNumber(SceneNode& node, const std::string& key, double value)
     node.transform.rotation = glm::normalize(Quaternion(euler));
     return true;
   }
-  if (slot.number != nullptr) {
-    *slot.number = static_cast<float>(value);
-    return true;
-  }
-  if (slot.byte != nullptr) {
-    *slot.byte =
-      static_cast<unsigned char>(std::clamp(std::lround(value), 0l, 255l));
-    return true;
-  }
-  return false;
+  return writeSlot(slot, value);
 }
 
 static float*
 resolveEnvironment(SceneEnvironment& environment, const std::string& key)
 {
   const char last = key.empty() ? '\0' : key.back();
+  if (key.starts_with("env.tint.")) {
+    return &environment.skyboxTint[axisIndex(last)];
+  }
   if (key.starts_with("env.ambient.")) {
     return &environment.ambient[axisIndex(last)];
   }
@@ -332,6 +474,138 @@ EditorInspector::refreshFields(const EditorDocument& document,
   m_fieldsSelection = selection.ids();
 }
 
+using InspectorSection = std::function<void(const std::string&)>;
+using InspectorRowAdder =
+  std::function<void(const std::string&, std::vector<InspectorField>)>;
+using InspectorToggle =
+  std::function<InspectorField(const std::string&, const char*, bool)>;
+using InspectorChoice = std::function<InspectorField(const std::string&,
+                                                     const char*,
+                                                     std::vector<std::string>,
+                                                     int)>;
+using InspectorButton =
+  std::function<InspectorField(const std::string&, const char*)>;
+
+static InspectorField
+assetNumber(const SceneAsset& asset,
+            const std::string& property,
+            const char* label,
+            float step)
+{
+  InspectorField field;
+  field.key = "asset." + property + ":" + asset.id;
+  field.label = label;
+  field.kind = InspectorFieldKind::Number;
+  field.step = step;
+  SceneAsset copy = asset;
+  const NumberSlot slot = resolveAsset(copy, property);
+  double value = 0.0;
+  if (readSlot(slot, &value)) {
+    field.value = formatNumber(value);
+  }
+  field.integer = slot.integer != nullptr;
+  return field;
+}
+
+static InspectorField
+readOnly(const std::string& key, const char* label, const std::string& value)
+{
+  InspectorField field;
+  field.key = key;
+  field.label = label;
+  field.kind = InspectorFieldKind::ReadOnly;
+  field.value = value;
+  return field;
+}
+
+// The scene view's asset table: one section per entry with its import and
+// sampling options, and Remove for entries nothing references.
+static void
+buildAssetFields(const SceneDocument& scene,
+                 const InspectorSection& section,
+                 const InspectorRowAdder& row,
+                 const InspectorToggle& toggle,
+                 const InspectorChoice& choice,
+                 const InspectorButton& button)
+{
+  section("Assets");
+  if (scene.assets.empty()) {
+    row("", { readOnly("assets.none", "Assets", "Drop a mesh or texture") });
+    return;
+  }
+  std::unordered_set<std::string> used;
+  used.insert(scene.environment.skybox);
+  for (const SceneNode& node : scene.nodes) {
+    for (const SceneComponent& component : node.components) {
+      if (const SceneMeshRenderer* mesh =
+            std::get_if<SceneMeshRenderer>(&component.value)) {
+        used.insert(mesh->asset);
+      } else if (const SceneSprite* sprite =
+                   std::get_if<SceneSprite>(&component.value)) {
+        used.insert(sprite->texture);
+      }
+    }
+  }
+  for (const SceneAsset& asset : scene.assets) {
+    const std::string suffix = ":" + asset.id;
+    section(asset.id);
+    const bool faces = asset.type == SceneAssetType::CubemapFaces;
+    row("File",
+        { readOnly("asset.path" + suffix,
+                   "File",
+                   faces ? asset.faces[0] + " +5" : asset.path) });
+    if (asset.type == SceneAssetType::Mesh) {
+      row("Type", { readOnly("asset.type" + suffix, "Type", "mesh") });
+      InspectorField radius = assetNumber(asset, "radius", "Radius", 0.01f);
+      // Every change rebuilds the scene's attachments, so radius is typed.
+      radius.scrub = false;
+      row("Normalize",
+          { toggle(
+              "asset.center" + suffix, "Center", asset.mesh.centerAndNormalize),
+            radius });
+      row("Import",
+          { toggle("asset.flipv" + suffix, "Flip V", asset.mesh.flipV),
+            toggle("asset.normals" + suffix,
+                   "Normals",
+                   asset.mesh.generateNormals) });
+    } else {
+      if (faces) {
+        row("Type",
+            { readOnly("asset.type" + suffix, "Type", "cubemap faces") });
+      } else {
+        const int current = asset.type == SceneAssetType::Atlas          ? 1
+                            : asset.type == SceneAssetType::CubemapCross ? 2
+                                                                         : 0;
+        row("Type",
+            { choice("asset.type" + suffix,
+                     "Type",
+                     { "texture", "atlas", "cubemap cross" },
+                     current) });
+      }
+      if (asset.type == SceneAssetType::Atlas) {
+        row("Grid",
+            { assetNumber(asset, "columns", "Cols", 0.1f),
+              assetNumber(asset, "rows", "Rows", 0.1f) });
+      }
+      row("Sampling",
+          { choice("asset.filter" + suffix,
+                   "Filter",
+                   { "nearest", "linear" },
+                   asset.texture.filter == SceneTextureFilter::Linear ? 1 : 0),
+            choice("asset.wrap" + suffix,
+                   "Wrap",
+                   { "clamp", "repeat" },
+                   asset.texture.wrap == SceneTextureWrap::Repeat ? 1 : 0) });
+      row(
+        "Mipmaps",
+        { toggle("asset.mipmaps" + suffix, "Mipmaps", asset.texture.mipmaps) });
+    }
+    if (used.find(asset.id) == used.end()) {
+      row("", { button("asset.remove" + suffix, "Remove unused") });
+    }
+  }
+}
+
 void
 EditorInspector::buildFields(const EditorDocument& document,
                              const EditorSelection& selection)
@@ -433,8 +707,45 @@ EditorInspector::buildFields(const EditorDocument& document,
         return field;
       };
 
+  const SceneDocument& scene = document.scene().document();
+  // A choice among the asset table entries of some types. With offerNone the
+  // first choice is "(none)" for an empty reference; a reference to a missing
+  // entry stays visible as its own choice.
+  const std::function<InspectorField(const std::string&,
+                                     const char*,
+                                     const std::string&,
+                                     const std::vector<SceneAssetType>&,
+                                     bool)>
+    assetChoice = [&scene, &choice](const std::string& key,
+                                    const char* label,
+                                    const std::string& current,
+                                    const std::vector<SceneAssetType>& types,
+                                    bool offerNone) {
+      std::vector<std::string> ids;
+      int selected = -1;
+      if (offerNone) {
+        ids.push_back(kNoAsset);
+        if (current.empty()) {
+          selected = 0;
+        }
+      }
+      for (const SceneAsset& asset : scene.assets) {
+        if (std::find(types.begin(), types.end(), asset.type) == types.end()) {
+          continue;
+        }
+        if (asset.id == current) {
+          selected = static_cast<int>(ids.size());
+        }
+        ids.push_back(asset.id);
+      }
+      if (selected < 0) {
+        selected = static_cast<int>(ids.size());
+        ids.push_back(current);
+      }
+      return choice(key, label, std::move(ids), selected);
+    };
+
   if (primary == nullptr) {
-    const SceneDocument& scene = document.scene().document();
     const SceneEnvironment& environment = scene.environment;
     section("Scene");
     row("Mode",
@@ -444,8 +755,18 @@ EditorInspector::buildFields(const EditorDocument& document,
                  scene.worldMode == SceneWorldMode::World3D ? 1 : 0) });
     row("Title", { text("meta.title", "Title", scene.metadata.title) });
     row("Author", { text("meta.author", "Author", scene.metadata.author) });
+    InspectorField description =
+      text("meta.description", "Description", scene.metadata.description);
+    description.maxBytes = kMaximumDescriptionBytes;
+    row("Description", { description });
     section("Environment");
-    row("Skybox", { text("env.skybox", "Skybox", environment.skybox) });
+    row("Skybox",
+        { assetChoice(
+          "env.skybox",
+          "Skybox",
+          environment.skybox,
+          { SceneAssetType::CubemapCross, SceneAssetType::CubemapFaces },
+          true) });
     const std::function<InspectorField(const std::string&, const char*, float)>
       environmentNumber =
         [&environment](const std::string& key, const char* label, float step) {
@@ -459,6 +780,12 @@ EditorInspector::buildFields(const EditorDocument& document,
           field.value = slot == nullptr ? std::string() : formatNumber(*slot);
           return field;
         };
+    if (!environment.skybox.empty()) {
+      row("Sky tint",
+          { environmentNumber("env.tint.r", "R", 0.01f),
+            environmentNumber("env.tint.g", "G", 0.01f),
+            environmentNumber("env.tint.b", "B", 0.01f) });
+    }
     row("Ambient",
         { environmentNumber("env.ambient.r", "R", 0.01f),
           environmentNumber("env.ambient.g", "G", 0.01f),
@@ -477,6 +804,7 @@ EditorInspector::buildFields(const EditorDocument& document,
           { environmentNumber("env.sun.intensity", "I", 0.01f),
             toggle("env.sun.shadows", "Shadows", environment.sun.shadows) });
     }
+    buildAssetFields(scene, section, row, toggle, choice, button);
     return;
   }
 
@@ -491,6 +819,12 @@ EditorInspector::buildFields(const EditorDocument& document,
   row("Flags",
       { toggle("enabled", "Enabled", primary->enabled),
         toggle("visible", "Visible", primary->visible) });
+  InspectorField tags = text("tags", "Tags", joinTags(primary->tags));
+  tags.maxBytes = kMaximumTagsBytes;
+  for (const SceneNode* other : nodes) {
+    tags.mixed = tags.mixed || other->tags != primary->tags;
+  }
+  row("Tags", { tags });
   section("Transform");
   row("Position",
       { number("position.x", "X", 0.05f),
@@ -537,7 +871,12 @@ EditorInspector::buildFields(const EditorDocument& document,
     } else if (const SceneMeshRenderer* mesh =
                  std::get_if<SceneMeshRenderer>(&component.value)) {
       section("Mesh");
-      row("Asset", { text("mesh.asset", "Asset", mesh->asset) });
+      row("Asset",
+          { assetChoice("mesh.asset",
+                        "Asset",
+                        mesh->asset,
+                        { SceneAssetType::Mesh },
+                        false) });
       row("Tint",
           { number("mesh.tint.r", "R", 1.0f),
             number("mesh.tint.g", "G", 1.0f),
@@ -549,7 +888,31 @@ EditorInspector::buildFields(const EditorDocument& document,
     } else if (const SceneSprite* sprite =
                  std::get_if<SceneSprite>(&component.value)) {
       section("Sprite");
-      row("Texture", { text("sprite.texture", "Texture", sprite->texture) });
+      row("Texture",
+          { assetChoice("sprite.texture",
+                        "Texture",
+                        sprite->texture,
+                        { SceneAssetType::Texture, SceneAssetType::Atlas },
+                        false) });
+      row("Source",
+          { choice("sprite.source",
+                   "Source",
+                   { "region", "atlas cell" },
+                   sprite->hasCell ? 1 : 0) });
+      if (sprite->hasCell) {
+        InspectorField column = number("sprite.cell.column", "Col", 0.1f);
+        InspectorField cellRow = number("sprite.cell.row", "Row", 0.1f);
+        column.integer = true;
+        cellRow.integer = true;
+        row("Cell", { column, cellRow });
+      } else {
+        row("Region min",
+            { number("sprite.region.u0", "U", 0.005f),
+              number("sprite.region.v0", "V", 0.005f) });
+        row("Region max",
+            { number("sprite.region.u1", "U", 0.005f),
+              number("sprite.region.v1", "V", 0.005f) });
+      }
       row("Size",
           { number("sprite.size.w", "W", 0.01f),
             number("sprite.size.h", "H", 0.01f) });
@@ -611,14 +974,33 @@ EditorInspector::buildFields(const EditorDocument& document,
   if (primary->find(SceneComponentType::Primitive) == nullptr) {
     adds.push_back(button("component.add.primitive", "Shape"));
   }
+  // Mesh and sprite need an asset to show; they start on the first one.
+  bool haveMesh = false;
+  bool haveImage = false;
+  for (const SceneAsset& asset : scene.assets) {
+    haveMesh = haveMesh || asset.type == SceneAssetType::Mesh;
+    haveImage = haveImage || asset.type == SceneAssetType::Texture ||
+                asset.type == SceneAssetType::Atlas;
+  }
+  if (haveMesh && primary->find(SceneComponentType::Mesh) == nullptr) {
+    adds.push_back(button("component.add.mesh", "Mesh"));
+  }
+  if (haveImage && primary->find(SceneComponentType::Sprite) == nullptr) {
+    adds.push_back(button("component.add.sprite", "Sprite"));
+  }
   if (primary->find(SceneComponentType::Light) == nullptr) {
     adds.push_back(button("component.add.light", "Light"));
   }
   if (primary->find(SceneComponentType::Camera) == nullptr) {
     adds.push_back(button("component.add.camera", "Camera"));
   }
-  if (!adds.empty()) {
-    row("", adds);
+  // At most three buttons a row keeps their labels readable.
+  for (size_t start = 0; start < adds.size(); start += 3) {
+    const size_t end = std::min(adds.size(), start + 3);
+    row("",
+        std::vector<InspectorField>(
+          adds.begin() + static_cast<std::ptrdiff_t>(start),
+          adds.begin() + static_cast<std::ptrdiff_t>(end)));
   }
 }
 
@@ -642,6 +1024,23 @@ EditorInspector::applyNumber(const std::string& key,
     *slot = static_cast<float>(relative ? *slot + value : value);
     return document.setEnvironment(environment, mergeKey);
   }
+  std::string property;
+  std::string assetId;
+  if (splitAssetKey(key, &property, &assetId)) {
+    return editAsset(document,
+                     assetId,
+                     "Edit asset " + assetId,
+                     mergeKey,
+                     [&property, value, relative](SceneAsset& asset) {
+                       const NumberSlot slot = resolveAsset(asset, property);
+                       double current = 0.0;
+                       if (!readSlot(slot, &current)) {
+                         return false;
+                       }
+                       return writeSlot(slot,
+                                        relative ? current + value : value);
+                     });
+  }
   const std::string label = "Set " + key;
   return document.editNodes(
     selection.ids(), label, mergeKey, [&key, value, relative](SceneNode& node) {
@@ -662,31 +1061,33 @@ EditorInspector::applyText(const std::string& key,
   if (key == "name") {
     return document.setName(selection.primary(), text);
   }
-  if (key == "meta.title" || key == "meta.author") {
+  if (key == "meta.title" || key == "meta.author" ||
+      key == "meta.description") {
     SceneMetadata metadata = document.scene().document().metadata;
-    (key == "meta.title" ? metadata.title : metadata.author) = text;
+    std::string& slot = key == "meta.title"    ? metadata.title
+                        : key == "meta.author" ? metadata.author
+                                               : metadata.description;
+    slot = text;
     return document.setMetadata(metadata);
   }
-  if (key == "env.skybox") {
-    SceneEnvironment environment = document.scene().document().environment;
-    environment.skybox = text;
-    return document.setEnvironment(environment, {});
-  }
-  if (key == "mesh.asset" || key == "sprite.texture") {
+  if (key == "tags") {
+    const std::vector<std::string> tags = parseTags(text);
+    bool unchanged = true;
+    for (const std::string& id : selection.ids()) {
+      const SceneNode* node = document.findNode(id);
+      unchanged = unchanged && (node == nullptr || node->tags == tags);
+    }
+    // Retyping the same tags (spacing aside) is accepted without an edit.
+    if (unchanged) {
+      return true;
+    }
     return document.editNodes(
-      selection.ids(), "Set " + key, {}, [&key, &text](SceneNode& node) {
-        if (key == "mesh.asset") {
-          SceneMeshRenderer* mesh = componentOf<SceneMeshRenderer>(node);
-          if (mesh != nullptr) {
-            mesh->asset = text;
-          }
-          return mesh != nullptr;
+      selection.ids(), "Set tags", {}, [&tags](SceneNode& node) {
+        if (node.tags == tags) {
+          return false;
         }
-        SceneSprite* sprite = componentOf<SceneSprite>(node);
-        if (sprite != nullptr) {
-          sprite->texture = text;
-        }
-        return sprite != nullptr;
+        node.tags = tags;
+        return true;
       });
   }
   double value = 0.0;
@@ -716,12 +1117,35 @@ EditorInspector::activate(const InspectorField& target,
                           const EditorSelection& selection)
 {
   const std::string& key = target.key;
+  std::string property;
+  std::string assetId;
+  const bool assetField = splitAssetKey(key, &property, &assetId);
   if (target.kind == InspectorFieldKind::Text ||
       target.kind == InspectorFieldKind::Number) {
     return beginEdit(target);
   }
   if (target.kind == InspectorFieldKind::Toggle) {
     const bool next = !target.toggle;
+    if (assetField) {
+      return editAsset(document,
+                       assetId,
+                       "Edit asset " + assetId,
+                       {},
+                       [&property, next](SceneAsset& asset) {
+                         bool* flag =
+                           property == "mipmaps" ? &asset.texture.mipmaps
+                           : property == "center"
+                             ? &asset.mesh.centerAndNormalize
+                           : property == "flipv"   ? &asset.mesh.flipV
+                           : property == "normals" ? &asset.mesh.generateNormals
+                                                   : nullptr;
+                         if (flag == nullptr) {
+                           return false;
+                         }
+                         *flag = next;
+                         return true;
+                       });
+    }
     if (key == "env.sun" || key == "env.sun.shadows") {
       SceneEnvironment environment = document.scene().document().environment;
       (key == "env.sun" ? environment.hasSun : environment.sun.shadows) = next;
@@ -772,11 +1196,62 @@ EditorInspector::activate(const InspectorField& target,
                                              : SceneWorldMode::World2D);
     }
     const std::string picked = target.choices[static_cast<size_t>(next)];
+    if (key == "env.skybox") {
+      // The first choice is "(none)".
+      SceneEnvironment environment = document.scene().document().environment;
+      environment.skybox = next == 0 ? std::string() : picked;
+      return document.setEnvironment(environment, {});
+    }
+    if (assetField) {
+      return editAsset(
+        document,
+        assetId,
+        "Edit asset " + assetId,
+        {},
+        [&property, next](SceneAsset& asset) {
+          if (property == "type") {
+            const SceneAssetType types[] = { SceneAssetType::Texture,
+                                             SceneAssetType::Atlas,
+                                             SceneAssetType::CubemapCross };
+            asset.type = types[std::clamp(next, 0, 2)];
+          } else if (property == "filter") {
+            asset.texture.filter = next == 0 ? SceneTextureFilter::Nearest
+                                             : SceneTextureFilter::Linear;
+          } else if (property == "wrap") {
+            asset.texture.wrap =
+              next == 0 ? SceneTextureWrap::Clamp : SceneTextureWrap::Repeat;
+          } else {
+            return false;
+          }
+          return true;
+        });
+    }
     return document.editNodes(
       selection.ids(),
       "Set " + key,
       {},
-      [&key, &picked, next](SceneNode& node) {
+      [&key, &picked, next, &document](SceneNode& node) {
+        if (key == "mesh.asset") {
+          SceneMeshRenderer* mesh = componentOf<SceneMeshRenderer>(node);
+          return mesh != nullptr && ((mesh->asset = picked), true);
+        }
+        if (key == "sprite.texture" || key == "sprite.source") {
+          SceneSprite* sprite = componentOf<SceneSprite>(node);
+          if (sprite == nullptr) {
+            return false;
+          }
+          if (key == "sprite.source") {
+            sprite->hasCell = next == 1;
+            return true;
+          }
+          sprite->texture = picked;
+          // Only an atlas has cells; a plain texture shows its region.
+          const SceneAsset* asset = findAsset(document, picked);
+          if (asset == nullptr || asset->type != SceneAssetType::Atlas) {
+            sprite->hasCell = false;
+          }
+          return true;
+        }
         if (key == "primitive.shape") {
           ScenePrimitive* primitive = componentOf<ScenePrimitive>(node);
           return primitive != nullptr &&
@@ -804,6 +1279,13 @@ EditorInspector::activate(const InspectorField& target,
       });
   }
   if (target.kind == InspectorFieldKind::Button) {
+    if (assetField && property == "remove") {
+      std::vector<SceneAsset> assets = document.scene().document().assets;
+      std::erase_if(assets, [&assetId](const SceneAsset& asset) {
+        return asset.id == assetId;
+      });
+      return document.setAssets(assets, "Remove asset " + assetId);
+    }
     if (key.starts_with("component.remove.")) {
       const std::string kind = key.substr(17);
       const SceneComponentType type =
@@ -819,24 +1301,48 @@ EditorInspector::activate(const InspectorField& target,
     }
     if (key.starts_with("component.add.")) {
       const std::string kind = key.substr(14);
+      // Mesh and sprite components start on the first compatible asset.
+      std::string meshAsset;
+      std::string imageAsset;
+      for (const SceneAsset& asset : document.scene().document().assets) {
+        if (meshAsset.empty() && asset.type == SceneAssetType::Mesh) {
+          meshAsset = asset.id;
+        }
+        if (imageAsset.empty() && (asset.type == SceneAssetType::Texture ||
+                                   asset.type == SceneAssetType::Atlas)) {
+          imageAsset = asset.id;
+        }
+      }
       return document.editNodes(
-        selection.ids(), "Add " + kind, {}, [&kind](SceneNode& node) {
+        selection.ids(),
+        "Add " + kind,
+        {},
+        [&kind, &meshAsset, &imageAsset](SceneNode& node) {
           SceneComponent component;
+          SceneComponentType type = SceneComponentType::Camera;
           if (kind == "primitive") {
-            if (node.find(SceneComponentType::Primitive) != nullptr) {
-              return false;
-            }
+            type = SceneComponentType::Primitive;
             component.value = ScenePrimitive{};
+          } else if (kind == "mesh" && !meshAsset.empty()) {
+            type = SceneComponentType::Mesh;
+            SceneMeshRenderer mesh;
+            mesh.asset = meshAsset;
+            component.value = mesh;
+          } else if (kind == "sprite" && !imageAsset.empty()) {
+            type = SceneComponentType::Sprite;
+            SceneSprite sprite;
+            sprite.texture = imageAsset;
+            component.value = sprite;
           } else if (kind == "light") {
-            if (node.find(SceneComponentType::Light) != nullptr) {
-              return false;
-            }
+            type = SceneComponentType::Light;
             component.value = SceneLight{};
-          } else {
-            if (node.find(SceneComponentType::Camera) != nullptr) {
-              return false;
-            }
+          } else if (kind == "camera") {
             component.value = SceneCamera{};
+          } else {
+            return false;
+          }
+          if (node.find(type) != nullptr) {
+            return false;
           }
           node.components.push_back(component);
           return true;
@@ -853,7 +1359,7 @@ EditorInspector::beginEdit(const InspectorField& target)
       target.kind != InspectorFieldKind::Number) {
     return false;
   }
-  m_edit.begin(target.mixed ? std::string() : target.value);
+  m_edit.begin(target.mixed ? std::string() : target.value, target.maxBytes);
   m_editKey = target.key;
   m_invalid = false;
   return false;
@@ -915,14 +1421,38 @@ EditorInspector::scrubForTesting(const std::string& key,
   }
   if (m_scrubKey != key) {
     m_scrubKey = key;
+    m_scrubCarry = 0.0;
     ++m_scrubSerial;
   }
-  return applyNumber(key,
-                     static_cast<double>(pixels * target->step),
+  // Like a real drag, so the release on the next update does not start
+  // typing into the field.
+  m_scrubAccumulated = std::max(m_scrubAccumulated, 1000.0f);
+  const InspectorField copy = *target;
+  return scrubBy(
+    copy, static_cast<double>(pixels * copy.step), *document, *selection);
+}
+
+bool
+EditorInspector::scrubBy(const InspectorField& target,
+                         double amount,
+                         EditorDocument& document,
+                         const EditorSelection& selection)
+{
+  double applied = amount;
+  if (target.integer) {
+    m_scrubCarry += amount;
+    applied = std::trunc(m_scrubCarry);
+    m_scrubCarry -= applied;
+    if (applied == 0.0) {
+      return false;
+    }
+  }
+  return applyNumber(target.key,
+                     applied,
                      true,
                      "scrub:" + std::to_string(m_scrubSerial),
-                     *document,
-                     *selection);
+                     document,
+                     selection);
 }
 
 // ---------------------------------------------------------------------------
@@ -1039,11 +1569,12 @@ EditorInspector::update(InputManager* input,
     }
     if (hit >= 0) {
       const InspectorField target = m_fields[static_cast<size_t>(hit)];
-      if (target.kind == InspectorFieldKind::Number) {
+      if (target.kind == InspectorFieldKind::Number && target.scrub) {
         // Held and dragged, a number scrubs; clicked, it edits.
         m_scrubKey = target.key;
         m_scrubLastX = mouseX;
         m_scrubAccumulated = 0.0f;
+        m_scrubCarry = 0.0;
         ++m_scrubSerial;
       } else if (!m_edit.active() || target.key != m_editKey) {
         const bool reverse = input != nullptr && input->isShiftPressed() &&
@@ -1061,12 +1592,11 @@ EditorInspector::update(InputManager* input,
       m_scrubAccumulated += std::fabs(delta);
       m_scrubLastX = mouseX;
       if (m_scrubAccumulated > 3.0f && delta != 0.0f && !target->mixed) {
-        changed = applyNumber(target->key,
-                              static_cast<double>(delta * target->step),
-                              true,
-                              "scrub:" + std::to_string(m_scrubSerial),
-                              *document,
-                              *selection) ||
+        const InspectorField copy = *target;
+        changed = scrubBy(copy,
+                          static_cast<double>(delta * copy.step),
+                          *document,
+                          *selection) ||
                   changed;
       }
       m_consumedPress = true;

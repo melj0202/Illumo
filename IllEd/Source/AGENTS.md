@@ -39,7 +39,9 @@ oracle suite.
 - `EditorSelection` is an ordered set with a primary node; bulk edits use
   `topLevel()` roots. New nodes are created at the root. Box select (a drag
   from empty viewport space) tests projected bounds centers and skips hidden
-  nodes, like picking.
+  nodes, like picking. Pivot, align and distribute use subtree world bounds
+  (`EditorDocument::subtreeWorldBounds`); arrange moves go through
+  `translateEach` as one command.
 - `SceneInstance::findNode` records carry an empty `parentId`; the parent
   lives in the graph, so ask `SceneInstance::parentOf`.
 - Copy/paste goes through `EditorClipboard`: an `.ilsc` format 2 fragment
@@ -47,9 +49,19 @@ oracle suite.
   `EditorDocument::paste` remaps every id and merges assets (reuse identical,
   rename conflicting) as one command. Never paste untagged text.
 - The hierarchy panel draws and hits only rows inside its row window; fold,
-  eye, drop-before/into/after and the context menu live in
-  `EditorSceneGraphView`, which hands menu choices to the scene through
-  `takeCommand()` rather than editing beyond drops and visibility itself.
+  eye, drop-before/into/after, Shift ranges, the filter field and the
+  context menu live in `EditorSceneGraphView`, which hands menu choices to
+  the scene through `takeCommand()` rather than editing beyond drops and
+  visibility itself. Like a focused inspector field, the focused filter field
+  takes the keyboard before shortcuts (`EditorScene::updateHierarchyFilter`
+  runs before the toolbar).
+- The inspector validates nothing itself: it applies an edit and lets
+  `SceneInstance` refuse it (the field stays invalid). Asset-table edits go
+  through `EditorDocument::setAssets` as settings commands; asset fields are
+  keyed `asset.<property>:<asset id>`.
+- The Tools panel only issues `EditorCommand`s (settings are steppers over
+  fixed ladders); it never takes typing. Grid and snap settings are editor
+  view state and never dirty the document.
 - The asset browser (`EditorAssetBrowser`, over `GuiFileTree`) lists the
   virtual file tree through `IllEdPlatform::listDirectory`; dropping a mesh or
   texture into the viewport calls `EditorDocument::placeAsset` (asset entry
@@ -65,7 +77,9 @@ oracle suite.
   oracle serves the tree from `IllEdNativeTree::install`; tests install one.
 - `EditorShortcuts` is the only key map; menus show `labelFor()` and the
   toolbar dispatches `match()`. Camera navigation uses arrows, PageUp/PageDown
-  and the mouse so letters stay free for commands.
+  and the mouse so letters stay free for commands. Framing and Reset Camera
+  aim at the dock's centre rectangle (`EditorScene::placeCamera`), not the
+  window centre.
 - `EditorScene` is split by concern: `EditorScene.cpp` (lifetime, frame,
   drawables), `EditorScenePanels.cpp` (dock, placements, saved layout),
   `EditorSceneCommands.cpp` (dispatch, files, node commands),

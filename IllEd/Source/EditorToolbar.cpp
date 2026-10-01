@@ -48,6 +48,16 @@ EditorToolbar::setWorldMode(bool is3D)
 }
 
 void
+EditorToolbar::setViewToggles(bool gridVisible, bool pivotCenter)
+{
+  if (gridVisible != m_gridVisible || pivotCenter != m_pivotCenter) {
+    m_gridVisible = gridVisible;
+    m_pivotCenter = pivotCenter;
+    rebuildMenus();
+  }
+}
+
+void
 EditorToolbar::showToast(const std::string& message,
                          ColorRgba color,
                          float duration)
@@ -163,6 +173,9 @@ EditorToolbar::rebuildMenus()
   editMenu.items.push_back(item("Delete", EditorCommand::DeleteNode));
   editMenu.items.push_back(item("Unparent", EditorCommand::UnparentNode));
   editMenu.items.push_back(item("Show/Hide", EditorCommand::ToggleVisible));
+  editMenu.items.push_back(separator());
+  editMenu.items.push_back(
+    item("Find in Hierarchy", EditorCommand::FindInHierarchy));
   m_menus.push_back(editMenu);
 
   Menu createMenu;
@@ -192,7 +205,46 @@ EditorToolbar::rebuildMenus()
   toolsMenu.items.push_back(
     item("Toggle World/Local", EditorCommand::ToggleGizmoSpace));
   toolsMenu.items.push_back(item("Toggle Snap", EditorCommand::ToggleSnap));
+  MenuItem pivot =
+    item("Pivot at Selection Center", EditorCommand::TogglePivot);
+  pivot.checked = m_pivotCenter;
+  toolsMenu.items.push_back(pivot);
   m_menus.push_back(toolsMenu);
+
+  Menu arrangeMenu;
+  arrangeMenu.title = "Arrange";
+  const char* axes[] = { "X", "Y", "Z" };
+  const EditorCommand aligns[3][3] = {
+    { EditorCommand::AlignMinX,
+      EditorCommand::AlignCenterX,
+      EditorCommand::AlignMaxX },
+    { EditorCommand::AlignMinY,
+      EditorCommand::AlignCenterY,
+      EditorCommand::AlignMaxY },
+    { EditorCommand::AlignMinZ,
+      EditorCommand::AlignCenterZ,
+      EditorCommand::AlignMaxZ },
+  };
+  const EditorCommand distributes[3] = { EditorCommand::DistributeX,
+                                         EditorCommand::DistributeY,
+                                         EditorCommand::DistributeZ };
+  // 2D worlds arrange on X and Y only.
+  const int axisCount = m_is3D ? 3 : 2;
+  for (int axis = 0; axis < axisCount; ++axis) {
+    const std::string name = axes[axis];
+    arrangeMenu.items.push_back(
+      item(("Align " + name + " Min").c_str(), aligns[axis][0]));
+    arrangeMenu.items.push_back(
+      item(("Align " + name + " Center").c_str(), aligns[axis][1]));
+    arrangeMenu.items.push_back(
+      item(("Align " + name + " Max").c_str(), aligns[axis][2]));
+  }
+  arrangeMenu.items.push_back(separator());
+  for (int axis = 0; axis < axisCount; ++axis) {
+    arrangeMenu.items.push_back(item(
+      (std::string("Distribute ") + axes[axis]).c_str(), distributes[axis]));
+  }
+  m_menus.push_back(arrangeMenu);
 
   Menu viewMenu;
   viewMenu.title = "View";
@@ -202,6 +254,9 @@ EditorToolbar::rebuildMenus()
   MenuItem world3d = item("3D World", EditorCommand::SetMode3D);
   world3d.checked = m_is3D;
   viewMenu.items.push_back(world3d);
+  MenuItem grid = item("Show Grid", EditorCommand::ToggleGrid);
+  grid.checked = m_gridVisible;
+  viewMenu.items.push_back(grid);
   viewMenu.items.push_back(
     item("Frame Selection", EditorCommand::FrameSelection));
   viewMenu.items.push_back(item("Reset Camera", EditorCommand::ResetCamera));

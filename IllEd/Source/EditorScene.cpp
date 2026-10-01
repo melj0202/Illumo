@@ -105,6 +105,9 @@ EditorScene::start(IllumoContext& startContext)
   m_gridBuilt = false;
   m_selectionOverlay = std::make_unique<MeshVisual>();
   m_selectionOverlay->prepare(ic->renderer);
+  m_dropPreview = std::make_unique<MeshVisual>();
+  m_dropPreview->prepare(ic->renderer);
+  m_dropPreviewShown = false;
   m_marquee = std::make_unique<GameVisual>(16u);
   m_marquee->setSpace(PrimitiveSpace::Pixels);
   m_marquee->setLayerHint(RenderLayerId::UI);
@@ -160,6 +163,8 @@ EditorScene::stop()
   m_document.setRenderer(nullptr);
   m_gridBuilt = false;
   m_selectionOverlay.reset();
+  m_dropPreview.reset();
+  m_dropPreviewShown = false;
   m_marquee.reset();
   m_grid.reset();
   m_confirm.reset();
@@ -304,6 +309,8 @@ EditorScene::update(double dt)
 
   if (m_toolbar) {
     m_toolbar->setWorldMode(m_document.worldMode() == SceneWorldMode::World3D);
+    m_toolbar->setViewToggles(m_document.editorState().gridVisible,
+                              m_pivotCenter);
     m_toolbar->setHistoryLabels(m_document.history().undoLabel(),
                                 m_document.history().redoLabel());
   }
@@ -341,9 +348,10 @@ EditorScene::update(double dt)
     // A dialog or file transfer is in flight; editing resumes after it.
   } else if (m_toolbar) {
     if (!consoleOpen) {
-      // A focused inspector field consumes the keys first, so typing never
-      // triggers editor shortcuts.
+      // A focused inspector or hierarchy filter field consumes the keys
+      // first, so typing never triggers editor shortcuts.
       updateInspector(dtF);
+      updateHierarchyFilter(dtF);
       handleCommand(m_toolbar->update(ic->inputManager, dtF));
       if (m_sceneGraphView) {
         m_sceneGraphView->update(
@@ -400,6 +408,7 @@ EditorScene::update(double dt)
     }
   }
 
+  updateDropPreview();
   if (m_document.revision() != revisionBefore) {
     refreshView();
   }
@@ -415,7 +424,14 @@ EditorScene::update(double dt)
     state.activeTool = m_activeTool;
     state.gizmoMode = m_gizmoMode;
     state.gizmoSpace = m_gizmoSpace;
-    state.snap = m_document.editorState().snapEnabled;
+    state.pivotCenter = m_pivotCenter;
+    const SceneEditorState& view = m_document.editorState();
+    state.snap = view.snapEnabled;
+    state.gridVisible = view.gridVisible;
+    state.gridSpacing = view.gridSpacing;
+    state.snapTranslate = view.snapTranslate;
+    state.snapRotateDegrees = view.snapRotateDegrees;
+    state.snapScale = view.snapScale;
     m_tools->setState(state);
   }
   applyWorldCamera();
@@ -557,6 +573,28 @@ EditorScene::updateInspector(float dt)
 }
 
 void
+EditorScene::updateHierarchyFilter(float dt)
+{
+  if (!m_sceneGraphView || ic == nullptr) {
+    return;
+  }
+  m_sceneGraphView->updateFilterInput(ic->inputManager, dt);
+  std::string copied;
+  if (m_sceneGraphView->takeFilterCopy(&copied)) {
+    IllEdPlatform::current().setClipboardText(copied);
+  }
+  if (m_sceneGraphView->takeFilterPaste()) {
+    const std::weak_ptr<bool> alive = m_lifetime;
+    IllEdPlatform::current().requestClipboardText(
+      [this, alive](const std::string& text) {
+        if (!alive.expired() && m_sceneGraphView) {
+          m_sceneGraphView->provideFilterPaste(text);
+        }
+      });
+  }
+}
+
+void
 EditorScene::dispatch(DrawList& frame)
 {
   DrawList* scene = &frame;
@@ -570,6 +608,9 @@ EditorScene::dispatch(DrawList& frame)
   scene->AddDrawable(&m_document.scene().drawable(), RenderLayerId::World);
   if (m_selectionOverlay) {
     scene->AddDrawable(m_selectionOverlay.get(), RenderLayerId::World);
+  }
+  if (m_dropPreview && m_dropPreviewShown) {
+    scene->AddDrawable(m_dropPreview.get(), RenderLayerId::World);
   }
   if (m_marquee && m_boxSelecting) {
     scene->AddDrawable(m_marquee.get(), RenderLayerId::UI);
