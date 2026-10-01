@@ -8,9 +8,13 @@ This file specializes the repository `AGENTS.md` for
 Rendering defines backend-neutral command tokens, queueing, handles, assets,
 drawables, camera/style values, and the backend contract. Concrete OpenGL
 execution belongs only in `OpenGL/`, Vulkan execution only in `Vulkan/`
-(D-R33, selected by `GraphicsAPI`); headless semantic execution belongs in
-`Mock/`. Game and Services consume this boundary without importing GL or
-Vulkan types.
+(D-R33) and Direct3D 12 execution only in `D3D12/` (D-R36, Windows), each
+selected by `GraphicsAPI`; headless semantic execution belongs in `Mock/`.
+`Gpu/` holds what the explicit-API backends share and is free of their types:
+the GLSL to SPIR-V front end with OpenGL program reflection, OpenGL program
+uniform state and attribute layouts, and CPU texel conversions. Game and
+Services consume this boundary without importing GL, Vulkan or Direct3D
+types.
 
 ## Required invariants
 

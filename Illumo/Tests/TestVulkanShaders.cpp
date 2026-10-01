@@ -1,9 +1,9 @@
 // Headless checks of the Vulkan backend's device-free pieces: GLSL
-// preparation and reflection (VulkanShaderCompiler) and texel conversion
-// (VulkanTexels). The GPU paths are covered by IllumoGpuTests.
+// preparation and reflection (GlslToSpirv) and texel conversion
+// (GpuTexels). The GPU paths are covered by IllumoGpuTests.
 
-#include "Rendering/Vulkan/VulkanShaderCompiler.h"
-#include "Rendering/Vulkan/VulkanTexels.h"
+#include "Rendering/Gpu/GlslToSpirv.h"
+#include "Rendering/Gpu/GpuTexels.h"
 #include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -64,7 +64,7 @@ testPrepareGlsl()
   const std::string vertex = "#version 330 core\n"
                              "layout (location = 0) in vec3 aPos;\n"
                              "void main() { gl_Position = vec4(aPos, 1.0); }\n";
-  const std::string prepared = prepareGlslForVulkan(vertex, true);
+  const std::string prepared = prepareGlslForSpirv(vertex, true);
   testTrue(counters,
            prepared.compare(0, 13, "#version 450\n") == 0,
            "the version becomes 450");
@@ -81,13 +81,13 @@ testPrepareGlsl()
   testTrue(counters,
            prepared.find("gl_PointSize = 1.0") != std::string::npos,
            "vertex shaders write OpenGL's default point size");
-  const std::string fragment = prepareGlslForVulkan(
+  const std::string fragment = prepareGlslForSpirv(
     "#version 330 core\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n", false);
   testTrue(counters,
            fragment.find("illumo_user_main") == std::string::npos,
            "fragment shaders are not wrapped");
   const std::string unversioned =
-    prepareGlslForVulkan("void main() {}\n", false);
+    prepareGlslForSpirv("void main() {}\n", false);
   testTrue(counters,
            unversioned.compare(0, 13, "#version 450\n") == 0 &&
              unversioned.find("#line 1\n") != std::string::npos,

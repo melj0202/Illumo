@@ -18,8 +18,9 @@ or persistence parsing.
 - Treat dialog cancellation as a normal empty result; selection must not mutate
   game state.
 - `PlatformSessionLocked()` (`SessionState.h`; Windows via WTS session flags,
-  false elsewhere) tells the Vulkan backend to pause presents while the login
-  session is locked (D-R33). It is polled, not event-driven; keep it cheap.
+  false elsewhere) tells the Vulkan and Direct3D 12 backends to pause presents
+  while the login session is locked (D-R33, D-R36). It is polled, not
+  event-driven; keep it cheap.
 - `PixelWindow` secondary windows are `GLFW_NO_API` and presented from CPU
   images by the per-OS presenter; never give them an OpenGL context or share
   the main context (D-UI5). Create, pump, present, and destroy them on the

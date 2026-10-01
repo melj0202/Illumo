@@ -11,9 +11,9 @@ struct GLFWwindow;
 
 // GLFW window for one graphics API. For OpenGL it also hosts the context;
 // GLEW/backend initialization is owned by the backend factory after the
-// context exists. For Vulkan the window has no client API: the backend
-// creates the surface and presents, and swapBuffers only follows the vsync
-// setting.
+// context exists. For Vulkan and Direct3D 12 the window has no client API:
+// the backend creates the surface or swapchain and presents, and swapBuffers
+// only follows the vsync setting.
 class RenderWindow : public IRenderWindow
 {
 public:

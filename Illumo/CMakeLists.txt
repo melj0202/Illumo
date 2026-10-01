@@ -72,6 +72,9 @@ add_subdirectory("thirdparty/glfw-3.4" SYSTEM)
 add_subdirectory("thirdparty/glm" SYSTEM)
 add_subdirectory("thirdparty/freetype-2.13.3" SYSTEM)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/IllumoVulkanDeps.cmake")
+if(WIN32)
+  include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/IllumoD3D12Deps.cmake")
+endif()
 
 if(NOT TARGET glew_s)
   add_library(glew_s STATIC
@@ -149,6 +152,9 @@ add_library(Illumo STATIC
   Source/Rendering/OpenGL/CreateOpenGLBackend.cpp
   Source/Rendering/OpenGL/GLBackend.cpp
   Source/Rendering/OpenGL/GLDevice.cpp
+  Source/Rendering/Gpu/GlslToSpirv.cpp
+  Source/Rendering/Gpu/GpuProgramState.cpp
+  Source/Rendering/Gpu/GpuTexels.cpp
   Source/Rendering/Vulkan/CreateVulkanBackend.cpp
   Source/Rendering/Vulkan/VulkanBackend.cpp
   Source/Rendering/Vulkan/VulkanContext.cpp
@@ -156,8 +162,6 @@ add_library(Illumo STATIC
   Source/Rendering/Vulkan/VulkanDeviceCommands.cpp
   Source/Rendering/Vulkan/VulkanDevicePresent.cpp
   Source/Rendering/Vulkan/VulkanDeviceResources.cpp
-  Source/Rendering/Vulkan/VulkanShaderCompiler.cpp
-  Source/Rendering/Vulkan/VulkanTexels.cpp
   Source/Engine/Illumo.cpp
   Source/Engine/Application.cpp
   Source/Gui/GridAtlas.cpp
@@ -182,6 +186,20 @@ endif()
 target_sources(Illumo PRIVATE
   $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:${CMAKE_CURRENT_SOURCE_DIR}/Source/Engine/DebugOverlay.cpp>)
 add_library(Illumo::Illumo ALIAS Illumo)
+# The Direct3D 12 backend (docs/d3d12-backend-plan.md) is Windows-only; other
+# platforms parse its GraphicsAPI name and fall back to OpenGL.
+if(WIN32)
+  target_sources(Illumo PRIVATE
+    Source/Rendering/D3D12/CreateD3D12Backend.cpp
+    Source/Rendering/D3D12/D3D12Backend.cpp
+    Source/Rendering/D3D12/D3D12Context.cpp
+    Source/Rendering/D3D12/D3D12Device.cpp
+    Source/Rendering/D3D12/D3D12DeviceCommands.cpp
+    Source/Rendering/D3D12/D3D12DevicePresent.cpp
+    Source/Rendering/D3D12/D3D12DeviceResources.cpp
+    Source/Rendering/D3D12/D3D12ShaderCompiler.cpp)
+  target_link_libraries(Illumo PRIVATE illumo_spirv_cross d3d12 dxgi d3dcompiler)
+endif()
 
 # Build version vYY.MM_B (cmake/IllumoVersion.cmake). Computed here for the
 # configure log, then again on every build so each commit is stamped without
@@ -324,6 +342,7 @@ if(BUILD_TESTING)
     Tests/TestVisualStore.cpp
     Tests/TestShaderPreprocessor.cpp
     Tests/TestVulkanShaders.cpp
+    Tests/TestD3D12Shaders.cpp
     Tests/TestGuiKit.cpp
     Tests/TestGuiDropdownList.cpp
     Tests/TestGuiFileTree.cpp
@@ -402,6 +421,17 @@ if(BUILD_TESTING)
     Illumo.Gpu.VulkanInstancingParity Illumo.Gpu.VulkanRenderWorldParity
     Illumo.Gpu.BackendParity
     PROPERTIES LABELS "IllumoGpu" SKIP_RETURN_CODE 77 TIMEOUT 60)
+  if(WIN32)
+    add_test(NAME Illumo.Gpu.D3D12InstancingParity
+      COMMAND IllumoGpuTests instancing --api d3d12
+      WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
+    add_test(NAME Illumo.Gpu.D3D12RenderWorldParity
+      COMMAND IllumoGpuTests renderworld --api d3d12
+      WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
+    set_tests_properties(Illumo.Gpu.D3D12InstancingParity
+      Illumo.Gpu.D3D12RenderWorldParity
+      PROPERTIES LABELS "IllumoGpu" SKIP_RETURN_CODE 77 TIMEOUT 60)
+  endif()
 
   add_executable(IllumoPublicHeaderSmoke Tests/PublicHeaderSmoke.cpp)
   target_link_libraries(IllumoPublicHeaderSmoke PRIVATE Illumo::Illumo)

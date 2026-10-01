@@ -1,8 +1,9 @@
 #pragma once
 
+#include "Rendering/Gpu/GlslToSpirv.h"
+#include "Rendering/Gpu/GpuProgramState.h"
 #include "VulkanCommon.h"
 #include "VulkanContext.h"
-#include "VulkanShaderCompiler.h"
 #include <Illumo/Rendering/CommandQueue.h>
 #include <Illumo/Rendering/FrameReadback.h>
 #include <Illumo/Rendering/IBackend.h>
@@ -142,25 +143,6 @@ struct VulkanPipelineKeyEqual
                   const VulkanPipelineKey& right) const;
 };
 
-struct VulkanUniformSlot
-{
-  GlslValueType type = GlslValueType::Other;
-  unsigned offset = 0;
-  unsigned arraySize = 1;
-  unsigned arrayStride = 0;
-  // Sampler uniforms: index into samplerUnits instead of block storage.
-  int sampler = -1;
-};
-
-struct TransparentStringHash
-{
-  using is_transparent = void;
-  size_t operator()(std::string_view value) const noexcept
-  {
-    return std::hash<std::string_view>{}(value);
-  }
-};
-
 // A linked program, with the uniform state an OpenGL program object keeps:
 // values persist across draws and frames and start at zero.
 struct VulkanProgram
@@ -170,14 +152,7 @@ struct VulkanProgram
   VkShaderModule fragmentModule = VK_NULL_HANDLE;
   VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
   VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-  std::unordered_map<std::string,
-                     VulkanUniformSlot,
-                     TransparentStringHash,
-                     std::equal_to<>>
-    uniforms;
-  std::vector<unsigned char> blockData;
-  std::vector<int> samplerUnits;
-  bool blockDirty = true;
+  GpuProgramUniforms uniforms;
   uint64_t blockSerial = 0;
   VkBuffer blockBuffer = VK_NULL_HANDLE;
   VkDeviceSize blockOffset = 0;

@@ -4,9 +4,11 @@
 #include <string>
 #include <vector>
 
-// GLSL as the renderer writes it for OpenGL 3.3, compiled for Vulkan with
-// OpenGL's program semantics (docs/vulkan-backend-plan.md, section 5.2).
-// Nothing here needs a Vulkan device, so it is exercised headlessly.
+// GLSL as the renderer writes it for OpenGL 3.3, compiled to SPIR-V with
+// OpenGL's program semantics (docs/vulkan-backend-plan.md, section 5.2). The
+// Vulkan backend runs the SPIR-V; the Direct3D 12 backend translates the same
+// SPIR-V to HLSL (docs/d3d12-backend-plan.md). Nothing here needs a device,
+// so it is exercised headlessly.
 
 enum class GlslValueType : unsigned char
 {
@@ -77,12 +79,13 @@ struct GlslProgram
   uint32_t fragmentOutputs = 0;
 };
 
-// Rewrites preprocessed OpenGL GLSL for the Vulkan compiler: the version
+// Rewrites preprocessed OpenGL GLSL for the SPIR-V compiler: the version
 // becomes 450, and a vertex shader's main is wrapped so its clip depth maps
-// from OpenGL's [-w, w] to Vulkan's [0, w] and its point size is OpenGL's
-// default of one. Line numbers of the original source are kept.
+// from OpenGL's [-w, w] to the [0, w] Vulkan and Direct3D 12 both use, and
+// its point size is OpenGL's default of one. Line numbers of the original
+// source are kept.
 std::string
-prepareGlslForVulkan(const std::string& source, bool vertexStage);
+prepareGlslForSpirv(const std::string& source, bool vertexStage);
 
 // Starts and ends the compiler's process-wide state; reference counted.
 bool

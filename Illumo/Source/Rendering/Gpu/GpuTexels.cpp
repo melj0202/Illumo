@@ -1,4 +1,4 @@
-#include "VulkanTexels.h"
+#include "GpuTexels.h"
 
 #include <cmath>
 #include <cstring>

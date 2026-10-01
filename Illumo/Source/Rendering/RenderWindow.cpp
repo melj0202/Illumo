@@ -47,8 +47,10 @@ RenderWindow::RenderWindow(const int width,
                            BackendDef graphicsApi)
   : IRenderWindow(width, height, title, envVars)
   , m_captureOnly(captureOnly)
-  , m_graphicsApi(graphicsApi == BackendDef::VULKAN ? BackendDef::VULKAN
-                                                    : BackendDef::OPENGL)
+  , m_graphicsApi(graphicsApi == BackendDef::VULKAN ||
+                      graphicsApi == BackendDef::DIRECTX12
+                    ? graphicsApi
+                    : BackendDef::OPENGL)
 {
 
   /*Init member variables*/
@@ -86,6 +88,9 @@ RenderWindow::initialize()
   glfwInitialized = true;
   Logger::LogTrace(std::string("GLFW ") + glfwGetVersionString());
   const bool openGl = m_graphicsApi == BackendDef::OPENGL;
+  const char* apiName = openGl                                   ? "OpenGL"
+                        : m_graphicsApi == BackendDef::DIRECTX12 ? "Direct3D 12"
+                                                                 : "Vulkan";
   glfwDefaultWindowHints();
   glfwWindowHint(GLFW_VISIBLE, m_captureOnly ? GLFW_FALSE : GLFW_TRUE);
   if (openGl) {
@@ -107,7 +112,8 @@ RenderWindow::initialize()
   if (m_captureOnly) {
     samples = 0;
   }
-  // A Vulkan backend reads the count back and builds its own backbuffer.
+  // Vulkan and Direct3D 12 backends read the count back and build their own
+  // backbuffer.
   if (openGl) {
     glfwWindowHint(GLFW_SAMPLES, samples);
   }
@@ -133,8 +139,8 @@ RenderWindow::initialize()
     const char* description = nullptr;
     glfwGetError(&description);
     Logger::LogError(
-      std::string(openGl ? "Failed to create an OpenGL 3.3 core window"
-                         : "Failed to create a window for Vulkan") +
+      (openGl ? std::string("Failed to create an OpenGL 3.3 core window")
+              : std::string("Failed to create a window for ") + apiName) +
       (description != nullptr ? std::string(": ") + description
                               : std::string()));
     glfwTerminate();
@@ -156,12 +162,12 @@ RenderWindow::initialize()
         " at " + std::to_string(mode->refreshRate) + " Hz");
     }
   }
-  Logger::LogTrace(
-    std::string("Window created: ") + std::to_string(windowWidth) + "x" +
-    std::to_string(windowHeight) +
-    (isFullScreen ? ", fullscreen" : ", windowed") +
-    (m_captureOnly ? ", hidden for capture" : "") + ", " +
-    std::to_string(samples) + "x MSAA, " + (openGl ? "OpenGL" : "Vulkan"));
+  Logger::LogTrace(std::string("Window created: ") +
+                   std::to_string(windowWidth) + "x" +
+                   std::to_string(windowHeight) +
+                   (isFullScreen ? ", fullscreen" : ", windowed") +
+                   (m_captureOnly ? ", hidden for capture" : "") + ", " +
+                   std::to_string(samples) + "x MSAA, " + apiName);
   recordWindowSize(envVars, windowWidth, windowHeight, false);
   if (!isFullScreen) {
     centerWindow();
@@ -227,7 +233,8 @@ RenderWindow::syncPresentationMode()
     return;
   }
 
-  // A Vulkan backend reads isFramePaced and picks its present mode.
+  // Vulkan and Direct3D 12 backends read isFramePaced and pick their
+  // present mode.
   if (m_graphicsApi == BackendDef::OPENGL) {
     glfwSwapInterval(requestedVsync ? 1 : 0);
   }

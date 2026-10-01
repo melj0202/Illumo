@@ -14,8 +14,15 @@
 #include <iostream>
 #include <vector>
 
-// --api vulkan runs the checks that need no OpenGL introspection on Vulkan.
-static bool g_vulkan = false;
+// --api vulkan or --api d3d12 runs the checks that need no OpenGL
+// introspection on that backend.
+static std::string g_api = "opengl";
+
+static bool
+explicitApi()
+{
+  return g_api != "opengl";
+}
 
 static FrameCaptureOptions
 captureOptions(int width, int height)
@@ -23,7 +30,7 @@ captureOptions(int width, int height)
   FrameCaptureOptions options;
   options.width = width;
   options.height = height;
-  options.graphicsApi = g_vulkan ? "vulkan" : "opengl";
+  options.graphicsApi = g_api;
   return options;
 }
 
@@ -182,7 +189,7 @@ testInvalidTextureUpload(Renderer& renderer, Camera&, std::string& error)
   renderer.pushUpdateTexture(
     texture, 0, 1, 256, 256, 4, replacement.data(), 256);
   renderer.SubmitOnly();
-  if (!g_vulkan) {
+  if (!explicitApi()) {
     glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
     if (!std::all_of(pixels.begin(), pixels.end(), [](unsigned char value) {
           return value == 17u;
@@ -461,32 +468,35 @@ runOpenGlStateChecks(const FrameCaptureOptions& options)
   return failures;
 }
 
-// The same capture through OpenGL and Vulkan must give the same pixels.
+// The same capture through OpenGL and the chosen backend must give the same
+// pixels.
 static int
-runVulkanOnlyChecks(const FrameCaptureOptions&)
+runExplicitApiChecks(const FrameCaptureOptions&)
 {
-  g_vulkan = false;
+  const std::string api = g_api;
+  g_api = "opengl";
   const FrameCaptureResult openGl = captureSceneShadows(true, true);
-  g_vulkan = true;
-  const FrameCaptureResult vulkan = captureSceneShadows(true, true);
+  g_api = api;
+  const FrameCaptureResult candidate = captureSceneShadows(true, true);
   size_t differing = 0;
   for (size_t index = 0;
-       openGl.success() && vulkan.success() &&
+       openGl.success() && candidate.success() &&
        index < openGl.image.pixels.size() &&
-       openGl.image.pixels.size() == vulkan.image.pixels.size();
+       openGl.image.pixels.size() == candidate.image.pixels.size();
        ++index) {
     const int difference = static_cast<int>(openGl.image.pixels[index]) -
-                           static_cast<int>(vulkan.image.pixels[index]);
+                           static_cast<int>(candidate.image.pixels[index]);
     differing += difference > 2 || difference < -2 ? 1u : 0u;
   }
-  if (!openGl.success() || !vulkan.success() ||
-      openGl.image.pixels.size() != vulkan.image.pixels.size() ||
+  if (!openGl.success() || !candidate.success() ||
+      openGl.image.pixels.size() != candidate.image.pixels.size() ||
       differing * 500 > openGl.image.pixels.size()) {
-    std::cerr << "Capture differs between OpenGL and Vulkan (" << differing
-              << " bytes): " << openGl.error << "; " << vulkan.error << '\n';
+    std::cerr << "Capture differs between OpenGL and " << g_api << " ("
+              << differing << " bytes): " << openGl.error << "; "
+              << candidate.error << '\n';
     return 1;
   }
-  std::cout << "OpenGL and Vulkan captures match (" << differing
+  std::cout << "OpenGL and " << g_api << " captures match (" << differing
             << " bytes differ by more than 2)\n";
   return 0;
 }
@@ -506,11 +516,11 @@ main(int argc, char** argv)
     return 0;
   }
   if (argc == 3 && std::string(argv[1]) == "--api" &&
-      std::string(argv[2]) == "vulkan") {
-    g_vulkan = true;
+      (std::string(argv[2]) == "vulkan" || std::string(argv[2]) == "d3d12")) {
+    g_api = argv[2];
   } else if (argc != 1) {
     std::cerr << "Usage: IllumoCaptureGpuTests [--profiler-preview "
-                 "output.png | --api vulkan]\n";
+                 "output.png | --api vulkan|d3d12]\n";
     return 2;
   }
   const FrameCaptureOptions options = captureOptions(32, 32);
@@ -582,8 +592,8 @@ main(int argc, char** argv)
     }
     previousTextPixels = text.image.pixels;
   }
-  if (g_vulkan) {
-    failures += runVulkanOnlyChecks(options);
+  if (explicitApi()) {
+    failures += runExplicitApiChecks(options);
   } else {
     failures += runOpenGlStateChecks(options);
   }
@@ -621,7 +631,7 @@ main(int argc, char** argv)
       }
       backend->releaseReadbackStream(1);
       backend->DestroyFramebuffer(target);
-      return g_vulkan || glGetError() == GL_NO_ERROR;
+      return explicitApi() || glGetError() == GL_NO_ERROR;
     });
   if (!readback.success()) {
     std::cerr << "Framebuffer readback checks: " << readback.error << '\n';

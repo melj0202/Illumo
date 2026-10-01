@@ -577,12 +577,20 @@ testBackendConfigTokens()
            parseBackendDef("OpenGL", &parsed) && parsed == BackendDef::OPENGL,
            "mixed-case OpenGL parses");
   testTrue(g,
+           parseBackendDef("d3d12", &parsed) && parsed == BackendDef::DIRECTX12,
+           "d3d12 names Direct3D 12");
+#ifdef _WIN32
+  const bool direct3d12 = true;
+#else
+  const bool direct3d12 = false;
+#endif
+  testTrue(g,
            isBackendImplemented(BackendDef::OPENGL) &&
              isBackendImplemented(BackendDef::VULKAN) &&
              !isBackendImplemented(BackendDef::OPENGL_ES) &&
-             !isBackendImplemented(BackendDef::DIRECTX12) &&
+             isBackendImplemented(BackendDef::DIRECTX12) == direct3d12 &&
              !isBackendImplemented(BackendDef::DIRECTX11),
-           "OpenGL and Vulkan are the implemented backends");
+           "OpenGL, Vulkan and (on Windows) Direct3D 12 are implemented");
 }
 
 static void

@@ -4,8 +4,9 @@
 #include <cstddef>
 #include <cstdint>
 
-// CPU texel work the Vulkan backend does where OpenGL's pixel transfer would
-// convert: uploads into the stored formats and readbacks into top-down RGBA8.
+// CPU texel work the Vulkan and Direct3D 12 backends do where OpenGL's pixel
+// transfer would convert: uploads into the stored formats and readbacks into
+// top-down RGBA8.
 
 // The same rectangle, channel and stride rules as the OpenGL backend's
 // texture updates (TextureUploadPolicy::validLayout).

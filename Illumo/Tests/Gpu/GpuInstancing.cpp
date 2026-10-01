@@ -3,13 +3,15 @@
 //   and in one instanced call through LitMeshInstanced give the same image.
 // - renderworld: a shadowed scene drawn by one MeshVisual per object and by
 //   one RenderWorld give the same image, shadows included.
-// - backendparity: OpenGL and Vulkan draw the same scenes to the same pixels
-//   (GpuBackendParity.cpp).
-// Options: `--api vulkan` runs instancing and renderworld on Vulkan instead;
+// - backendparity: Vulkan and (on Windows) Direct3D 12 draw the same scenes
+//   to the same pixels as OpenGL (GpuBackendParity.cpp).
+// Options: `--api vulkan` or `--api d3d12` runs instancing and renderworld on
+// that backend instead;
 // `--dump <dir>` saves the backendparity images. Returns 77 (skipped) when the
 // chosen API has no device or context.
 
 #include "GpuShared.h"
+#include "Rendering/D3D12/CreateD3D12Backend.h"
 #include "Rendering/OpenGL/CreateOpenGLBackend.h"
 #include "Rendering/Vulkan/CreateVulkanBackend.h"
 #include <GLFW/glfw3.h>
@@ -539,19 +541,19 @@ main(int argc, char** argv)
                 test.c_str());
     return 2;
   }
-  if (api != "opengl" && api != "vulkan") {
-    std::printf("Unknown API %s (opengl or vulkan)\n", api.c_str());
+  if (api != "opengl" && api != "vulkan" && api != "d3d12") {
+    std::printf("Unknown API %s (opengl, vulkan or d3d12)\n", api.c_str());
     return 2;
   }
   if (glfwInit() != GLFW_TRUE) {
     std::printf("SKIPPED: GLFW could not initialize\n");
     return kSkipped;
   }
-  // Vulkan renders offscreen with no window; OpenGL and the parity case need
-  // a hidden 3.3 context.
-  const bool vulkan = api == "vulkan" && test != "backendparity";
+  // Vulkan and Direct3D 12 render offscreen with no window; OpenGL and the
+  // parity case need a hidden 3.3 context.
+  const bool explicitApi = api != "opengl" && test != "backendparity";
   GLFWwindow* context = nullptr;
-  if (!vulkan) {
+  if (!explicitApi) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -574,15 +576,22 @@ main(int argc, char** argv)
     env.setVar("WinX", kSize);
     env.setVar("WinY", kSize);
     Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
-    std::unique_ptr<IBackend> backend = vulkan
-                                          ? CreateVulkanBackend(&window, false)
-                                          : CreateOpenGLBackend(&window);
+    std::unique_ptr<IBackend> backend;
+    if (!explicitApi) {
+      backend = CreateOpenGLBackend(&window);
+    } else if (api == "vulkan") {
+      backend = CreateVulkanBackend(&window, false);
+#ifdef _WIN32
+    } else {
+      backend = CreateD3D12Backend(&window, false);
+#endif
+    }
     if (backend && backend->Initialize()) {
       Renderer renderer(&window, &env, &camera, std::move(backend));
       result = test == "instancing" ? runInstancingParity(renderer)
                                     : runRenderWorldParity(renderer);
-    } else if (vulkan) {
-      std::printf("SKIPPED: the Vulkan backend did not initialize\n");
+    } else if (explicitApi) {
+      std::printf("SKIPPED: the %s backend did not initialize\n", api.c_str());
       result = kSkipped;
     } else {
       std::printf("FAILED: the OpenGL backend did not initialize\n");

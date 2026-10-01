@@ -1,5 +1,6 @@
-// Real-GPU parity of the OpenGL and Vulkan backends: every scene renders
-// through both in one process and the images are compared. Scenes cover the
+// Real-GPU parity of the OpenGL backend with Vulkan and (on Windows)
+// Direct3D 12: every scene renders through each in one process and each
+// image is compared with OpenGL's. Scenes cover the
 // token contract end to end: lit, shadowed and instanced 3D with a sky, 2D
 // shapes, sprites and text through the offscreen panel path, raw tokens
 // (culling, points, lines, wireframe, blending, depth, scissored clears,
@@ -9,6 +10,7 @@
 // passes.
 
 #include "GpuShared.h"
+#include "Rendering/D3D12/CreateD3D12Backend.h"
 #include "Rendering/OpenGL/CreateOpenGLBackend.h"
 #include "Rendering/Vulkan/CreateVulkanBackend.h"
 #include <GLFW/glfw3.h>
@@ -62,9 +64,18 @@ private:
   GLFWwindow* window;
 };
 
+enum class ParityApi
+{
+  OpenGl,
+  Vulkan,
+  Direct3D12,
+};
+
 struct ParityRig
 {
   const char* name = "";
+  // The suffix of the images saveComparison writes.
+  const char* tag = "";
   std::unique_ptr<ParityWindow> window;
   std::unique_ptr<EnvVars> env;
   std::unique_ptr<Camera> camera;
@@ -80,18 +91,32 @@ struct ParityScene
 };
 
 static bool
-makeRig(ParityRig& rig, const char* name, GLFWwindow* context)
+makeRig(ParityRig& rig, ParityApi api, GLFWwindow* context)
 {
-  rig.name = name;
-  rig.window = std::make_unique<ParityWindow>(context);
+  rig.window = std::make_unique<ParityWindow>(
+    api == ParityApi::OpenGl ? context : nullptr);
   rig.env = std::make_unique<EnvVars>();
   rig.env->setVar("WinX", kSize);
   rig.env->setVar("WinY", kSize);
   rig.camera =
     std::make_unique<Camera>(glm::vec2(0.0f, 0.0f), 1.0f, rig.env.get());
-  std::unique_ptr<IBackend> backend =
-    context != nullptr ? CreateOpenGLBackend(rig.window.get())
-                       : CreateVulkanBackend(rig.window.get(), false);
+  std::unique_ptr<IBackend> backend;
+  if (api == ParityApi::OpenGl) {
+    rig.name = "OpenGL";
+    rig.tag = "gl";
+    backend = CreateOpenGLBackend(rig.window.get());
+  } else if (api == ParityApi::Vulkan) {
+    rig.name = "Vulkan";
+    rig.tag = "vk";
+    backend = CreateVulkanBackend(rig.window.get(), false);
+  } else {
+    rig.name = "Direct3D 12";
+    rig.tag = "dx12";
+#ifdef _WIN32
+    backend = CreateD3D12Backend(rig.window.get(), false);
+#endif
+  }
+  const char* name = rig.name;
   if (!backend || !backend->Initialize()) {
     std::printf("SKIPPED: the %s backend did not initialize\n", name);
     return false;
@@ -1034,14 +1059,15 @@ sceneBackbuffer(Renderer& renderer, FrameReadback& image)
 }
 
 static bool
-compareImages(const char* label,
+compareImages(const std::string& label,
+              const char* candidateName,
               const FrameReadback& reference,
               const FrameReadback& candidate,
               double tolerance)
 {
   if (reference.pixels.size() != candidate.pixels.size() ||
       reference.pixels.empty()) {
-    std::printf("FAILED: %s images have different sizes\n", label);
+    std::printf("FAILED: %s images have different sizes\n", label.c_str());
     return false;
   }
   size_t differing = 0;
@@ -1061,33 +1087,31 @@ compareImages(const char* label,
   const double share =
     static_cast<double>(differing) / static_cast<double>(total);
   std::printf("%s: %zu of %zu pixels differ by more than 2 (largest %d)\n",
-              label,
+              label.c_str(),
               differing,
               total,
               largest);
   if (share > tolerance) {
-    std::printf("FAILED: %s differs between OpenGL and Vulkan\n", label);
+    std::printf("FAILED: %s differs between OpenGL and %s\n",
+                label.c_str(),
+                candidateName);
     return false;
   }
   return true;
 }
 
-// Writes both images as PPM files into `directory` for inspection.
+// Writes an image as `<label>-<tag>.ppm` into `directory` for inspection.
 static void
-saveComparison(const std::string& directory,
-               const char* label,
-               const FrameReadback& openGl,
-               const FrameReadback& vulkan)
+saveImage(const std::string& directory,
+          const char* label,
+          const char* tag,
+          const FrameReadback& image)
 {
-  for (int which = 0; which < 2; ++which) {
-    const FrameReadback& image = which == 0 ? openGl : vulkan;
-    const std::string path =
-      directory + "/" + label + (which == 0 ? "-gl.ppm" : "-vk.ppm");
-    std::ofstream file(path, std::ios::binary);
-    file << "P6\n" << image.width << " " << image.height << "\n255\n";
-    for (size_t index = 0; index + 3 < image.pixels.size(); index += 4) {
-      file.write(reinterpret_cast<const char*>(image.pixels.data() + index), 3);
-    }
+  const std::string path = directory + "/" + label + "-" + tag + ".ppm";
+  std::ofstream file(path, std::ios::binary);
+  file << "P6\n" << image.width << " " << image.height << "\n255\n";
+  for (size_t index = 0; index + 3 < image.pixels.size(); index += 4) {
+    file.write(reinterpret_cast<const char*>(image.pixels.data() + index), 3);
   }
 }
 
@@ -1095,9 +1119,23 @@ int
 runBackendParity(GLFWwindow* context, const std::string& dumpDirectory)
 {
   ParityRig openGl;
-  ParityRig vulkan;
-  if (!makeRig(openGl, "OpenGL", context) ||
-      !makeRig(vulkan, "Vulkan", nullptr)) {
+  if (!makeRig(openGl, ParityApi::OpenGl, context)) {
+    return 77;
+  }
+  // Every other backend this platform has is compared with OpenGL; one that
+  // cannot start here is skipped.
+  std::vector<std::unique_ptr<ParityRig>> candidates;
+  std::vector<ParityApi> apis = { ParityApi::Vulkan };
+#ifdef _WIN32
+  apis.push_back(ParityApi::Direct3D12);
+#endif
+  for (ParityApi api : apis) {
+    std::unique_ptr<ParityRig> rig = std::make_unique<ParityRig>();
+    if (makeRig(*rig, api, context)) {
+      candidates.push_back(std::move(rig));
+    }
+  }
+  if (candidates.empty()) {
     return 77;
   }
   const std::vector<ParityScene> scenes = {
@@ -1112,27 +1150,36 @@ runBackendParity(GLFWwindow* context, const std::string& dumpDirectory)
   int failures = 0;
   for (const ParityScene& scene : scenes) {
     FrameReadback reference;
-    FrameReadback candidate;
-    const bool openGlRendered = scene.render(*openGl.renderer, reference);
-    const bool vulkanRendered = scene.render(*vulkan.renderer, candidate);
-    if (!openGlRendered || !vulkanRendered) {
-      std::printf("FAILED: %s did not render (OpenGL %s, Vulkan %s)\n",
-                  scene.name,
-                  openGlRendered ? "ok" : "failed",
-                  vulkanRendered ? "ok" : "failed");
+    if (!scene.render(*openGl.renderer, reference)) {
+      std::printf("FAILED: %s did not render on OpenGL\n", scene.name);
       failures += 1;
       continue;
     }
     if (!dumpDirectory.empty()) {
-      saveComparison(dumpDirectory, scene.name, reference, candidate);
+      saveImage(dumpDirectory, scene.name, openGl.tag, reference);
     }
-    if (!compareImages(scene.name, reference, candidate, scene.tolerance)) {
-      failures += 1;
+    for (const std::unique_ptr<ParityRig>& rig : candidates) {
+      FrameReadback candidate;
+      const std::string label =
+        std::string(scene.name) + " (" + rig->name + ")";
+      if (!scene.render(*rig->renderer, candidate)) {
+        std::printf("FAILED: %s did not render\n", label.c_str());
+        failures += 1;
+        continue;
+      }
+      if (!dumpDirectory.empty()) {
+        saveImage(dumpDirectory, scene.name, rig->tag, candidate);
+      }
+      if (!compareImages(
+            label, rig->name, reference, candidate, scene.tolerance)) {
+        failures += 1;
+      }
     }
   }
-  std::printf(
-    "Backend parity: %d of %zu scenes differ\n", failures, scenes.size());
-  vulkan.renderer.reset();
+  std::printf("Backend parity: %d of %zu comparisons differ\n",
+              failures,
+              scenes.size() * candidates.size());
+  candidates.clear();
   openGl.renderer.reset();
   return failures == 0 ? 0 : 1;
 }

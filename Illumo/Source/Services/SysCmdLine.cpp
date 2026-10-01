@@ -13,7 +13,7 @@ static const SysCmdLineOption g_windowOptions[] = {
   { "--graphics-api",
     "name",
     "GraphicsAPI",
-    "Rendering backend, opengl or vulkan (saved for later launches)" },
+    "Rendering backend, opengl, vulkan or d3d12 (saved for later launches)" },
 };
 
 static SysCmdLineResult

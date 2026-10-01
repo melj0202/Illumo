@@ -3232,6 +3232,36 @@ proxied visuals travel as items and are rebuilt on the host.\\
 \textbf{Extends:} D-R34
 \end{decisionbox}
 
+\subsection*{D-R36 --- A Direct3D 12 backend with OpenGL's behaviour}
+\begin{decisionbox}[title={D-R36 \quad 2026-10-01}]
+\textbf{Decision:} \texttt{Rendering/D3D12/} implements \symbolref{IBackend}
+on Direct3D 12 (feature level 11.0, Windows only) with the contract of D-R33:
+images stored bottom row first and flipped by the present pass, OpenGL's
+state machine and program uniforms, uploads ordered with draws through
+resource-state transitions, the sRGB-format multisample resolve with mirrored
+sample positions, narrow multisampled lines, bounded presentation that pauses
+on a locked session, and the same error text. The SPIR-V the Vulkan backend
+compiles (now shared from \texttt{Rendering/Gpu/} with the uniform state,
+attribute layouts and texel conversions) is translated by SPIRV-Cross to HLSL
+5.1 and compiled by the system FXC. Bindings keep their numbers as registers,
+the pixel stage declares the vertex outputs it does not read, and input
+layouts follow the compiled signature. It is chosen by \texttt{GraphicsAPI}
+(\texttt{DIRECTX12} or \texttt{d3d12}), \texttt{--graphics-api}, the console
+or CSim's Video tab (Display wire version~6 adds backend code~3, which earlier
+versions report as unknown); a start that fails falls back to OpenGL.\\
+\textbf{Why:} The owner asked for DirectX 12 support ``just like we did with
+Vulkan''. Direct3D 12 shares Vulkan's $[0,w]$ clip depth, so one SPIR-V
+compile serves both backends and only the $y$ flip and stage linkage are
+Direct3D's own.\\
+\textbf{Consequences:} \texttt{Illumo.Gpu.BackendParity} now compares
+Vulkan and Direct3D 12 with OpenGL; on all seven scenes Direct3D 12 matches as
+closely as Vulkan, and package captures match OpenGL. One dependency is added
+with the owner's approval: SPIRV-Cross (Vulkan SDK 1.4.363.0, Apache-2.0 or
+MIT), built without exceptions with its errors ending the process through
+\texttt{illumoFatal}; nothing new ships, as Windows supplies Direct3D 12,
+DXGI and \texttt{d3dcompiler\_47.dll}.\\
+\textbf{Extends:} D-R33
+\end{decisionbox}
 \subsection*{D-UI8 --- Liquid, bouncy menu motion}
 \begin{decisionbox}[title={D-UI8 \quad 2026-09-23}]
 \textbf{Decision:} The glass menus move like liquid. A travelling selection

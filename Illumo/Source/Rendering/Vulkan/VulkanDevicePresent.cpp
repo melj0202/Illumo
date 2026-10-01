@@ -1,5 +1,5 @@
+#include "Rendering/Gpu/GpuTexels.h"
 #include "VulkanDevice.h"
-#include "VulkanTexels.h"
 
 #include "Platform/SessionState.h"
 

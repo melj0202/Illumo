@@ -57,13 +57,17 @@ public:
   }
 
   // The rendering backend the environment asks for, "OPENGL" unless it
-  // names Vulkan (in any letter case).
+  // names Vulkan or Direct3D 12 (in any letter case; "D3D12" reads as
+  // "DIRECTX12").
   static std::string graphicsApi(IEnvVars* environment)
   {
     std::string name = environment->getVar("GraphicsAPI").value;
     for (char& character : name) {
       character =
         static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+    }
+    if (name == "DIRECTX12" || name == "D3D12") {
+      return "DIRECTX12";
     }
     return name == "VULKAN" ? name : std::string("OPENGL");
   }

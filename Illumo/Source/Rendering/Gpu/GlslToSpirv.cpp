@@ -1,4 +1,4 @@
-#include "VulkanShaderCompiler.h"
+#include "GlslToSpirv.h"
 
 #include <SPIRV/GlslangToSpv.h>
 #include <glslang/Public/ResourceLimits.h>
@@ -128,7 +128,7 @@ countNewlines(const std::string& text, size_t end)
 }
 
 std::string
-prepareGlslForVulkan(const std::string& source, bool vertexStage)
+prepareGlslForSpirv(const std::string& source, bool vertexStage)
 {
   std::string body = source;
   size_t firstBodyLine = 1;
@@ -225,8 +225,8 @@ compileGlslProgram(const std::string& vertexSource,
                    std::string* error)
 {
   *program = GlslProgram{};
-  const std::string vertexText = prepareGlslForVulkan(vertexSource, true);
-  const std::string fragmentText = prepareGlslForVulkan(fragmentSource, false);
+  const std::string vertexText = prepareGlslForSpirv(vertexSource, true);
+  const std::string fragmentText = prepareGlslForSpirv(fragmentSource, false);
   const char* const vertexString = vertexText.c_str();
   const char* const fragmentString = fragmentText.c_str();
   const int vertexLength = static_cast<int>(vertexText.size());

@@ -124,7 +124,7 @@ static const char* const kSettingHelp[] = {
   "Synchronize frame presentation to the monitor.",
   "Frame-rate limit; far right is uncapped. VSync still caps at refresh.",
   "Multisample anti-aliasing: Off, 2x, 4x, 8x. (*Requires restart)",
-  "Graphics API: OpenGL or Vulkan; both draw the same. (*Requires restart)",
+  "Graphics API: OpenGL, Vulkan or DirectX 12. (*Requires restart)",
   "Show frames per second and frame time in the top-left corner.",
   "Show the game's memory use in the top-left corner.",
   "Sound effect volume, off to 100%; each step previews the new level.",
@@ -185,6 +185,13 @@ static const double kPanSpeedStops[] = {
 static const double kAutosaveStops[] = { 0, 1, 2, 5, 10, 15, 30, 60 };
 
 static const long kMsaaOptions[] = { 0, 2, 4, 8 };
+// The Renderer row: GraphicsAPI values and their labels, in order.
+static const char* const kRendererOptions[] = { "OPENGL",
+                                                "VULKAN",
+                                                "DIRECTX12" };
+static const char* const kRendererLabels[] = { "OpenGL",
+                                               "Vulkan",
+                                               "DirectX 12" };
 
 static std::span<const ConfigurationSetting>
 tabRows(ConfigurationTab tab)
@@ -397,7 +404,12 @@ ConfigurationMenu::open(const SimulatorConfiguration& current)
               ? std::min(current.uiScale, 8.0)
               : 1.0;
   msaa = current.msaa;
-  graphicsApi = current.graphicsApi == "VULKAN" ? "VULKAN" : "OPENGL";
+  graphicsApi = "OPENGL";
+  for (const char* api : kRendererOptions) {
+    if (current.graphicsApi == api) {
+      graphicsApi = api;
+    }
+  }
   fpsCapText = std::to_string(std::max(0L, current.fpsCap));
   showInspector = current.showInspector;
   reducedUiMotion = current.reducedUiMotion;
@@ -845,10 +857,10 @@ ConfigurationMenu::segmentCount(ConfigurationSetting setting) const
   if (setting == ConfigurationSetting::Msaa) {
     return static_cast<int>(std::size(kMsaaOptions));
   }
-  return setting == ConfigurationSetting::CellStyle ||
-             setting == ConfigurationSetting::Renderer
-           ? 2
-           : 0;
+  if (setting == ConfigurationSetting::Renderer) {
+    return static_cast<int>(std::size(kRendererOptions));
+  }
+  return setting == ConfigurationSetting::CellStyle ? 2 : 0;
 }
 
 int
@@ -858,7 +870,13 @@ ConfigurationMenu::segmentIndex(ConfigurationSetting setting) const
     return ledCells ? 0 : 1;
   }
   if (setting == ConfigurationSetting::Renderer) {
-    return graphicsApi == "VULKAN" ? 1 : 0;
+    for (int index = 0; index < static_cast<int>(std::size(kRendererOptions));
+         ++index) {
+      if (graphicsApi == kRendererOptions[index]) {
+        return index;
+      }
+    }
+    return 0;
   }
   for (int index = 0; index < static_cast<int>(std::size(kMsaaOptions));
        ++index) {
@@ -877,7 +895,7 @@ ConfigurationMenu::segmentLabel(ConfigurationSetting setting, int index) const
     return index == 0 ? "LED keys" : "Flat";
   }
   if (setting == ConfigurationSetting::Renderer) {
-    return index == 0 ? "OpenGL" : "Vulkan";
+    return kRendererLabels[index];
   }
   return kMsaaOptions[index] == 0 ? "Off"
                                   : std::to_string(kMsaaOptions[index]) + "x";
@@ -892,7 +910,7 @@ ConfigurationMenu::setSegment(ConfigurationSetting setting, int index)
   } else if (setting == ConfigurationSetting::CellStyle) {
     ledCells = clamped == 0;
   } else if (setting == ConfigurationSetting::Renderer) {
-    graphicsApi = clamped == 1 ? "VULKAN" : "OPENGL";
+    graphicsApi = kRendererOptions[clamped];
   }
 }
 

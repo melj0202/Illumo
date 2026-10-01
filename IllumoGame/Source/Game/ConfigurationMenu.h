@@ -30,7 +30,7 @@ struct SimulatorConfiguration
   double uiScale = 1.0;
   long msaa = 4;
   // The rendering backend for the next launch, as GraphicsAPI spells it:
-  // "OPENGL" or "VULKAN".
+  // "OPENGL", "VULKAN" or "DIRECTX12".
   std::string graphicsApi = "OPENGL";
   long fpsCap = 60;
   bool showInspector = false;

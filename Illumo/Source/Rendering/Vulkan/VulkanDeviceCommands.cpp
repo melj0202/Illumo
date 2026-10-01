@@ -1,5 +1,5 @@
+#include "Rendering/Gpu/GpuTexels.h"
 #include "VulkanDevice.h"
-#include "VulkanTexels.h"
 
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
@@ -317,34 +317,6 @@ VulkanDevice::executeCommand(const RenderCommand& command)
   }
 }
 
-static bool
-acceptsValue(GlslValueType slot, GlslValueType given)
-{
-  switch (given) {
-    case GlslValueType::Float:
-      return slot == GlslValueType::Float || slot == GlslValueType::Bool;
-    case GlslValueType::Vec2:
-      return slot == GlslValueType::Vec2 || slot == GlslValueType::BVec2;
-    case GlslValueType::Vec3:
-      return slot == GlslValueType::Vec3 || slot == GlslValueType::BVec3;
-    case GlslValueType::Vec4:
-      return slot == GlslValueType::Vec4 || slot == GlslValueType::BVec4;
-    case GlslValueType::Int:
-      return slot == GlslValueType::Int || slot == GlslValueType::Bool;
-    case GlslValueType::Mat4:
-      return slot == GlslValueType::Mat4;
-    default:
-      return false;
-  }
-}
-
-static bool
-isBoolType(GlslValueType type)
-{
-  return type == GlslValueType::Bool || type == GlslValueType::BVec2 ||
-         type == GlslValueType::BVec3 || type == GlslValueType::BVec4;
-}
-
 void
 VulkanDevice::setUniform(const char* name,
                          GlslValueType given,
@@ -354,81 +326,8 @@ VulkanDevice::setUniform(const char* name,
   // Uniform calls reach only the program bound in this submission, as
   // glUniform* reaches only the program in use.
   VulkanProgram* program = resolveProgram(m_program);
-  if (program == nullptr || name == nullptr) {
-    return;
-  }
-  std::string_view base(name);
-  unsigned element = 0;
-  const size_t bracket = base.find('[');
-  if (bracket != std::string_view::npos) {
-    const size_t close = base.find(']', bracket);
-    if (close == std::string_view::npos || close != base.size() - 1) {
-      return;
-    }
-    element = 0;
-    for (size_t index = bracket + 1; index < close; ++index) {
-      const char digit = base[index];
-      if (digit < '0' || digit > '9') {
-        return;
-      }
-      element = element * 10u + static_cast<unsigned>(digit - '0');
-    }
-    base = base.substr(0, bracket);
-  }
-  const std::unordered_map<std::string,
-                           VulkanUniformSlot,
-                           TransparentStringHash,
-                           std::equal_to<>>::const_iterator found =
-    program->uniforms.find(base);
-  if (found == program->uniforms.end()) {
-    return;
-  }
-  const VulkanUniformSlot& slot = found->second;
-  if (slot.sampler >= 0) {
-    if (given == GlslValueType::Int && element == 0) {
-      int unit = 0;
-      std::memcpy(&unit, value, sizeof(unit));
-      program->samplerUnits[static_cast<size_t>(slot.sampler)] = unit;
-    }
-    return;
-  }
-  if (!acceptsValue(slot.type, given) || element >= slot.arraySize) {
-    return;
-  }
-  const size_t offset = static_cast<size_t>(slot.offset) +
-                        element * static_cast<size_t>(slot.arrayStride);
-  if (offset + bytes > program->blockData.size()) {
-    return;
-  }
-  unsigned char* destination = program->blockData.data() + offset;
-  if (isBoolType(slot.type)) {
-    // Booleans are 32-bit words that read true when nonzero.
-    const size_t components = bytes / 4u;
-    for (size_t component = 0; component < components; ++component) {
-      uint32_t word = 0;
-      if (given == GlslValueType::Int) {
-        int source = 0;
-        std::memcpy(&source,
-                    static_cast<const unsigned char*>(value) + component * 4u,
-                    4);
-        word = source != 0 ? 1u : 0u;
-      } else {
-        float source = 0.0f;
-        std::memcpy(&source,
-                    static_cast<const unsigned char*>(value) + component * 4u,
-                    4);
-        word = source != 0.0f ? 1u : 0u;
-      }
-      if (std::memcmp(destination + component * 4u, &word, 4) != 0) {
-        std::memcpy(destination + component * 4u, &word, 4);
-        program->blockDirty = true;
-      }
-    }
-  } else if (std::memcmp(destination, value, bytes) != 0) {
-    // An unchanged value (the same screen matrix on every 2D draw) keeps
-    // the uploaded block and the pushed descriptors.
-    std::memcpy(destination, value, bytes);
-    program->blockDirty = true;
+  if (program != nullptr) {
+    program->uniforms.set(name, given, value, bytes);
   }
 }
 
@@ -759,57 +658,16 @@ VulkanDevice::clear(bool color,
     m_slots[m_slotIndex].main, count, attachments.data(), 1, &clearRect);
 }
 
-struct MeshAttribute
+static VkFormat
+vertexFormat(GpuAttributeFormat format)
 {
-  uint32_t location;
-  VkFormat format;
-  uint32_t offset;
-};
-
-// The attribute layouts GLMesh::setupAttributes configures.
-static unsigned
-meshAttributes(MeshVertexLayout layout,
-               std::array<MeshAttribute, 4>& attributes,
-               uint32_t* stride)
-{
-  const VkFormat vec3 = VK_FORMAT_R32G32B32_SFLOAT;
-  const VkFormat vec2 = VK_FORMAT_R32G32_SFLOAT;
-  const VkFormat color8 = VK_FORMAT_R8G8B8A8_UNORM;
-  switch (layout) {
-    case MeshVertexLayout::Pos3Color4U8:
-      *stride = 16;
-      attributes[0] = { 0, vec3, 0 };
-      attributes[1] = { 1, color8, 12 };
-      return 2;
-    case MeshVertexLayout::Pos3Color4U8Uv2:
-      *stride = 24;
-      attributes[0] = { 0, vec3, 0 };
-      attributes[1] = { 1, color8, 12 };
-      attributes[2] = { 2, vec2, 16 };
-      return 3;
-    case MeshVertexLayout::Pos3Norm3Color4U8Uv2:
-      *stride = 36;
-      attributes[0] = { 0, vec3, 0 };
-      attributes[1] = { 3, vec3, 12 };
-      attributes[2] = { 1, color8, 24 };
-      attributes[3] = { 2, vec2, 28 };
-      return 4;
-    case MeshVertexLayout::Pos3Norm3Uv2:
-      *stride = 32;
-      attributes[0] = { 0, vec3, 0 };
-      attributes[1] = { 3, vec3, 12 };
-      attributes[2] = { 2, vec2, 24 };
-      return 3;
-    case MeshVertexLayout::Pos3:
-      *stride = 12;
-      attributes[0] = { 0, vec3, 0 };
-      return 1;
+  switch (format) {
+    case GpuAttributeFormat::Float2:
+      return VK_FORMAT_R32G32_SFLOAT;
+    case GpuAttributeFormat::Unorm8x4:
+      return VK_FORMAT_R8G8B8A8_UNORM;
     default:
-      *stride = 32;
-      attributes[0] = { 0, vec3, 0 };
-      attributes[1] = { 1, vec3, 12 };
-      attributes[2] = { 2, vec2, 24 };
-      return 3;
+      return VK_FORMAT_R32G32B32_SFLOAT;
   }
 }
 
@@ -893,10 +751,10 @@ VulkanDevice::pipelineFor(VulkanProgram& program,
   }
   ILLUMO_PROFILE_ZONE("VulkanDevice.createPipeline");
 
-  std::array<MeshAttribute, 4> meshLayout{};
+  std::array<GpuMeshAttribute, 4> meshLayout{};
   uint32_t meshStride = 0;
   const unsigned meshCount =
-    meshAttributes(mesh.layout, meshLayout, &meshStride);
+    gpuMeshAttributes(mesh.layout, meshLayout, &meshStride);
   std::vector<VkVertexInputAttributeDescription> attributes;
   bool usesMesh = false;
   bool usesInstances = false;
@@ -910,7 +768,7 @@ VulkanDevice::pipelineFor(VulkanProgram& program,
       for (unsigned index = 0; index < meshCount && !placed; ++index) {
         if (meshLayout[index].location == location) {
           attribute.binding = 0;
-          attribute.format = meshLayout[index].format;
+          attribute.format = vertexFormat(meshLayout[index].format);
           attribute.offset = meshLayout[index].offset;
           usesMesh = true;
           placed = true;
@@ -1111,9 +969,9 @@ VulkanDevice::draw(DrawKind kind,
   }
   const bool indexed =
     kind == DrawKind::Indexed || kind == DrawKind::IndexedInstanced;
-  std::array<MeshAttribute, 4> meshLayout{};
+  std::array<GpuMeshAttribute, 4> meshLayout{};
   uint32_t stride = 0;
-  meshAttributes(mesh->layout, meshLayout, &stride);
+  gpuMeshAttributes(mesh->layout, meshLayout, &stride);
   // Out-of-range reads are undefined in both APIs; Vulkan may fault, so
   // those draws are skipped.
   if (indexed) {
@@ -1169,25 +1027,26 @@ VulkanDevice::draw(DrawKind kind,
     write.dstBinding = binding.binding;
     write.descriptorCount = 1;
     if (binding.kind == GlslBindingKind::DefaultBlock) {
-      if (program->blockDirty || program->blockSerial != m_recordingSerial) {
+      if (program->uniforms.dirty() ||
+          program->blockSerial != m_recordingSerial) {
+        const std::vector<unsigned char>& block = program->uniforms.block();
         StagingSpan span;
-        if (!allocateStaging(program->blockData.size(),
+        if (!allocateStaging(block.size(),
                              m_context.limits().minUniformBufferOffsetAlignment,
                              &span)) {
           reportFrameError("Vulkan staging memory is exhausted");
           return;
         }
-        std::memcpy(
-          span.mapped, program->blockData.data(), program->blockData.size());
+        std::memcpy(span.mapped, block.data(), block.size());
         program->blockBuffer = span.buffer;
         program->blockOffset = span.offset;
         program->blockSerial = m_recordingSerial;
-        program->blockDirty = false;
+        program->uniforms.markUploaded();
       }
       buffers[index] = { program->blockBuffer,
                          program->blockOffset,
-                         std::max<VkDeviceSize>(program->blockData.size(),
-                                                16) };
+                         std::max<VkDeviceSize>(
+                           program->uniforms.block().size(), 16) };
       write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
       write.pBufferInfo = &buffers[index];
     } else if (binding.kind == GlslBindingKind::NamedBlock) {
@@ -1210,7 +1069,7 @@ VulkanDevice::draw(DrawKind kind,
       write.pBufferInfo = &buffers[index];
     } else {
       const bool cube = binding.kind == GlslBindingKind::SamplerCube;
-      const int unit = program->samplerUnits[binding.sampler];
+      const int unit = program->uniforms.samplerUnit(binding.sampler);
       TextureHandle handle{};
       if (unit >= 0 && static_cast<unsigned>(unit) < kTextureUnits) {
         handle = cube ? m_units[static_cast<size_t>(unit)].cube

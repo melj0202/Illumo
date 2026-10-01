@@ -21,8 +21,10 @@ public headers, guests and products never see it.
 
 - `VulkanContext`: instance, surface, device selection, queue, VMA, optional
   features (line rasterization, sample locations), format mapping.
-- `VulkanShaderCompiler`: glslang, GLSL 330 to SPIR-V with reflection.
-- `VulkanTexels`: CPU texel and readback conversions (headless-tested).
+- Shared with Direct3D 12 in `Rendering/Gpu/`: `GlslToSpirv` (glslang, GLSL
+  330 to SPIR-V with reflection), `GpuProgramState` (OpenGL program uniform
+  state, attribute layouts) and `GpuTexels` (CPU texel and readback
+  conversions), all headless-tested.
 - `VulkanDevice*`: the token executor, resources, submissions, presentation.
 - `VulkanBackend`: the `IBackend` facade (queue, statistics, validation text).
 - Dependencies: `thirdparty/{vulkan-headers,volk,vma,glslang}` built by
@@ -38,7 +40,7 @@ public headers, guests and products never see it.
   row first with an unflipped viewport; presentation flips. Front faces are
   inverted and vertex shaders remap clip z. Never flip per pass.
 - Shaders stay the frontend's GLSL 330 text; rewriting happens here only
-  (`prepareGlslForVulkan`). Loose uniforms live in a per-program default block
+  (`prepareGlslForSpirv`). Loose uniforms live in a per-program default block
   whose values persist like OpenGL program uniforms.
 - Updates are ordered with draws: an upload goes to the recording's upload
   command buffer until the resource is used in the main one, then inline.

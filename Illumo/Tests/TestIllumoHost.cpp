@@ -896,8 +896,21 @@ testGraphicsApiSelection()
   testTrue(g,
            saved == "Vulkan",
            "the fallback keeps the saved preference for the next launch");
+#ifdef _WIN32
   started =
-    startedGraphicsApis("DIRECTX12", BackendDef::VULKAN, &initialized, &saved);
+    startedGraphicsApis("d3d12", BackendDef::VULKAN, &initialized, &saved);
+  testTrue(g,
+           initialized && started == "window:DIRECTX12 backend:DIRECTX12 ",
+           "a d3d12 setting starts Direct3D 12 on Windows");
+  started = startedGraphicsApis(
+    "DIRECTX12", BackendDef::DIRECTX12, &initialized, &saved);
+  testTrue(g,
+           initialized && started == "window:DIRECTX12 backend:DIRECTX12 "
+                                     "window:OPENGL backend:OPENGL ",
+           "a Direct3D 12 start that fails falls back to OpenGL");
+#endif
+  started =
+    startedGraphicsApis("DIRECTX11", BackendDef::VULKAN, &initialized, &saved);
   testTrue(g,
            initialized && started == "window:OPENGL backend:OPENGL ",
            "an unimplemented backend starts OpenGL");

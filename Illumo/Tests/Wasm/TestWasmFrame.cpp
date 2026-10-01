@@ -1140,8 +1140,37 @@ run(const std::string& name)
       };
     testTrue(counters,
              apiDecodes(0u, 0u) && apiDecodes(1u, 2u) && apiDecodes(2u, 1u) &&
-               !apiDecodes(3u, 0u) && !apiDecodes(0u, 3u),
-             "Backend decoding accepts unset, OpenGL and Vulkan only");
+               apiDecodes(3u, 0u) && apiDecodes(0u, 3u),
+             "Backend decoding accepts unset, OpenGL, Vulkan and Direct3D 12");
+    // A code beyond the version's range is refused (writers never send one).
+    GuestWireWriter beyond;
+    beyond.u32(kGuestDisplayVersion);
+    beyond.u32(1u);
+    const std::uint32_t beyondFields[] = {
+      0u, 1u, 60u, 100u, 0u, 4u, GuestDisplayState::kUnknownMsaa, 4u, 0u
+    };
+    for (std::uint32_t field : beyondFields) {
+      beyond.u32(field);
+    }
+    GuestDisplayRequest beyondRequest;
+    testTrue(counters,
+             !GuestDisplayRequest::read(beyond.data(), beyondRequest),
+             "An unknown backend code is refused");
+    // Version 5 knows no Direct3D 12 code: it neither decodes one nor gets
+    // one in a report.
+    GuestDisplayState direct3d;
+    direct3d.graphicsApi = GuestDisplayState::kGraphicsApiDirectX12;
+    direct3d.activeGraphicsApi = GuestDisplayState::kGraphicsApiDirectX12;
+    GuestWireWriter version5Report;
+    direct3d.write(version5Report, 5u);
+    GuestWireReader version5Reader(version5Report.data());
+    GuestDisplayState version5State;
+    testTrue(
+      counters,
+      GuestDisplayState::read(version5Reader, version5State, 5u) &&
+        version5State.graphicsApi == GuestDisplayState::kGraphicsApiUnset &&
+        version5State.activeGraphicsApi == GuestDisplayState::kGraphicsApiUnset,
+      "A version 5 report names Direct3D 12 unknown");
     window.graphicsApiName = "OPENGL";
     env.setVar("GraphicsAPI", "opengl");
     GuestDisplayState apiState;
@@ -1162,18 +1191,37 @@ run(const std::string& name)
                env.getVar("GraphicsAPI").value == "VULKAN" &&
                keepReply.graphicsApi == GuestDisplayState::kGraphicsApiVulkan,
              "An unset backend leaves the saved choice alone");
+#ifdef _WIN32
+    window.graphicsApiName = "DIRECTX12";
+    GuestDisplayState direct3dState;
+    direct3dState.graphicsApi = GuestDisplayState::kGraphicsApiDirectX12;
+    GuestDisplayState direct3dReply;
+    testTrue(counters,
+             displayRoundTrip({ true, direct3dState }, 12, &direct3dReply) &&
+               env.getVar("GraphicsAPI").value == "DIRECTX12" &&
+               direct3dReply.graphicsApi ==
+                 GuestDisplayState::kGraphicsApiDirectX12 &&
+               direct3dReply.activeGraphicsApi ==
+                 GuestDisplayState::kGraphicsApiDirectX12,
+             "A version 6 request saves Direct3D 12 and reports it running");
+    window.graphicsApiName = "OPENGL";
+    GuestDisplayState backState;
+    backState.graphicsApi = GuestDisplayState::kGraphicsApiVulkan;
+    GuestDisplayState backReply;
+    displayRoundTrip({ true, backState }, 13, &backReply);
+#endif
     GuestDisplayRequest olderApi{ true, {} };
     olderApi.version = 4u;
     GuestDisplayState olderApiReply;
     testTrue(counters,
-             displayRoundTrip(olderApi, 12, &olderApiReply) &&
+             displayRoundTrip(olderApi, 14, &olderApiReply) &&
                env.getVar("GraphicsAPI").value == "VULKAN",
              "A version 4 request leaves the saved backend alone");
     window.graphicsApiName.clear();
     env.setVar("GraphicsAPI", "");
     GuestDisplayState unknownApiReply;
     testTrue(counters,
-             displayRoundTrip({ false, {} }, 13, &unknownApiReply) &&
+             displayRoundTrip({ false, {} }, 15, &unknownApiReply) &&
                unknownApiReply.graphicsApi ==
                  GuestDisplayState::kGraphicsApiOpenGl &&
                unknownApiReply.activeGraphicsApi ==

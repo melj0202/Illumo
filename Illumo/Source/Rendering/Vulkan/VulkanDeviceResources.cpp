@@ -1,5 +1,5 @@
+#include "Rendering/Gpu/GpuTexels.h"
 #include "VulkanDevice.h"
-#include "VulkanTexels.h"
 
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
@@ -247,22 +247,7 @@ VulkanDevice::buildProgram(const ShaderSources& sources, std::string* error)
     *error = "The shader program's pipeline layout could not be created";
     return nullptr;
   }
-  program->blockData.assign(reflection.defaultBlockSize, 0);
-  program->samplerUnits.assign(reflection.samplerNames.size(), 0);
-  for (const GlslUniform& uniform : reflection.uniforms) {
-    VulkanUniformSlot slot;
-    slot.type = uniform.type;
-    slot.offset = uniform.offset;
-    slot.arraySize = uniform.arraySize;
-    slot.arrayStride = uniform.arrayStride;
-    program->uniforms[uniform.name] = slot;
-  }
-  for (size_t index = 0; index < reflection.samplerNames.size(); ++index) {
-    VulkanUniformSlot slot;
-    slot.type = GlslValueType::Int;
-    slot.sampler = static_cast<int>(index);
-    program->uniforms[reflection.samplerNames[index]] = slot;
-  }
+  program->uniforms.configure(reflection);
   return program;
 }
 

@@ -1,4 +1,5 @@
 #include "BackendConfig.h"
+#include "D3D12/CreateD3D12Backend.h"
 #include "OpenGL/CreateOpenGLBackend.h"
 #include "RenderWindow.h"
 #include "Vulkan/CreateVulkanBackend.h"
@@ -37,7 +38,11 @@ FrameCapture::validate(const FrameCaptureOptions& options)
   BackendDef api = BackendDef::OPENGL;
   if (!parseBackendDef(options.graphicsApi, &api) ||
       !isBackendImplemented(api)) {
+#ifdef _WIN32
+    return "Capture graphics API must be opengl, vulkan or directx12";
+#else
     return "Capture graphics API must be opengl or vulkan";
+#endif
   }
   return {};
 }
@@ -58,23 +63,32 @@ renderCapture(const FrameCaptureOptions& options,
   }
   BackendDef api = BackendDef::OPENGL;
   parseBackendDef(options.graphicsApi, &api);
-  const bool vulkan = api == BackendDef::VULKAN;
+  const bool openGl = api == BackendDef::OPENGL;
   result.stage = "context";
   std::unique_ptr<IRenderWindow> window =
     CreateCaptureWindowFor(options.width, options.height, api);
   if (!window) {
-    result.error = vulkan ? "Unable to create the hidden capture window"
-                          : "Unable to create the requested hidden OpenGL "
-                            "context";
+    result.error = openGl ? "Unable to create the requested hidden OpenGL "
+                            "context"
+                          : "Unable to create the hidden capture window";
     return result;
   }
   result.stage = "backend";
-  std::unique_ptr<IBackend> backend =
-    vulkan ? CreateVulkanBackend(window.get(), false)
-           : CreateOpenGLBackend(window.get());
+  std::unique_ptr<IBackend> backend;
+  const char* failure = "Unable to initialize OpenGL backend";
+  if (api == BackendDef::VULKAN) {
+    backend = CreateVulkanBackend(window.get(), false);
+    failure = "Unable to initialize Vulkan backend";
+#ifdef _WIN32
+  } else if (api == BackendDef::DIRECTX12) {
+    backend = CreateD3D12Backend(window.get(), false);
+    failure = "Unable to initialize Direct3D 12 backend";
+#endif
+  } else {
+    backend = CreateOpenGLBackend(window.get());
+  }
   if (!backend || !backend->Initialize()) {
-    result.error = vulkan ? "Unable to initialize Vulkan backend"
-                          : "Unable to initialize OpenGL backend";
+    result.error = failure;
     return result;
   }
   Camera camera;

@@ -517,10 +517,11 @@ only when the host window is created: Display wire version 4 saves it for
 the next window, and after Apply, when it differs from the running window's
 samples, the canvas and main menu ask "Restart CSim?" (Later / Restart now,
 `ExitConfirmDialog::openRestart`); Restart now relaunches the runtime
-(D-UI13). The Video tab's Renderer row (OpenGL or Vulkan) works the same way
-through Display wire version 5: the host saves GraphicsAPI for its next
-launch and reports the running backend, and a choice unlike it offers the same
-restart (D-R33). The guest only sends a backend choice once the host has
+(D-UI13). The Video tab's Renderer row (OpenGL, Vulkan or DirectX 12) works
+the same way through Display wire version 6 (version 5 without the
+Direct3D 12 code): the host saves GraphicsAPI for its next launch and reports
+the running backend, and a choice unlike it offers the same restart (D-R33,
+D-R36). The guest only sends a backend choice once the host has
 reported its own, so a choice made on the host (--graphics-api, the console)
 is never overridden by a stale local value. The world sliders keep
 both axes finite or both infinite. Applying a topology change drains the

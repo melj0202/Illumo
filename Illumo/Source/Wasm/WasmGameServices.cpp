@@ -293,13 +293,19 @@ WasmGameServices::completeDisplay(GuestServices& results)
                                           static_cast<std::uint32_t>(running))
                           ? static_cast<std::uint32_t>(running)
                           : GuestDisplayState::kUnknownMsaa;
-    // The saved choice as the next launch reads it (anything but Vulkan
-    // starts OpenGL), and the backend the running window was created for.
-    actual.graphicsApi = GuestDisplayState::graphicsApiCode(
-                           m_environment->getVar("GraphicsAPI").value) ==
-                             GuestDisplayState::kGraphicsApiVulkan
-                           ? GuestDisplayState::kGraphicsApiVulkan
-                           : GuestDisplayState::kGraphicsApiOpenGl;
+    // The saved choice as the next launch reads it (a backend this build
+    // cannot start starts OpenGL; Direct3D 12 is Windows-only), and the
+    // backend the running window was created for.
+    const std::uint32_t savedApi = GuestDisplayState::graphicsApiCode(
+      m_environment->getVar("GraphicsAPI").value);
+#ifdef _WIN32
+    const bool startable = savedApi == GuestDisplayState::kGraphicsApiVulkan ||
+                           savedApi == GuestDisplayState::kGraphicsApiDirectX12;
+#else
+    const bool startable = savedApi == GuestDisplayState::kGraphicsApiVulkan;
+#endif
+    actual.graphicsApi =
+      startable ? savedApi : GuestDisplayState::kGraphicsApiOpenGl;
     actual.activeGraphicsApi =
       GuestDisplayState::graphicsApiCode(m_window->graphicsApi());
     // Each completion is written in its request's version, so a version 1

@@ -55,7 +55,8 @@ public:
   // Multisample count the framebuffer was created with, or -1 when unknown.
   virtual int getMsaaSamples() const { return -1; }
   // The rendering backend the window was created for, spelled as the
-  // GraphicsAPI setting spells it ("OPENGL", "VULKAN"); empty when unknown.
+  // GraphicsAPI setting spells it ("OPENGL", "VULKAN", "DIRECTX12"); empty
+  // when unknown.
   virtual std::string graphicsApi() const { return {}; }
   // Hosts that learn the product name after creation (a package runtime)
   // retitle the window. Windows without a title bar ignore it.

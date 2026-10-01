@@ -44,8 +44,9 @@ cd build-workspace\Release
   It requires `--capture`. A malformed step, or a console command that has not
   registered within 600 frames, fails the capture.
 - `-ww` / `-wh`: window width and height, which set the captured size.
-- `--graphics-api opengl|vulkan`: the rendering backend (D-R33). Both give
-  the same image; this is how the Vulkan backend is compared with OpenGL.
+- `--graphics-api opengl|vulkan|d3d12`: the rendering backend (D-R33, D-R36;
+  Direct3D 12 on Windows). All give the same image; this is how the Vulkan and
+  Direct3D 12 backends are compared with OpenGL.
 - `--app`, `--open`, `--package`, `--storage`, `--game`, `--mod`, `--worker`,
   `--memory-mib`, `--fuel` and `--deadline-ms` select and configure the app as
   they do for a normal launch. `--app` defaults to `game` and cannot be
@@ -130,10 +131,11 @@ of `IllumoWorkspace`).
 `FrameCapture::render(options, producer)` in
 `Illumo/Include/Illumo/Rendering/FrameCapture.h` is the reusable bounded
 service. It creates a hidden GLFW window (an OpenGL context, or with
-`options.graphicsApi = "vulkan"` an offscreen Vulkan device; D-R33), submits
-synchronously, reads the backbuffer before swap, destroys content and GPU
-resources, then destroys the window. `validate` refuses a graphics API that is
-not `opengl` or `vulkan` (any letter case). The producer receives `Renderer&`, `Camera&`, and an error string. It
+`options.graphicsApi = "vulkan"` or `"d3d12"` an offscreen Vulkan or
+Direct3D 12 device; D-R33, D-R36), submits synchronously, reads the
+backbuffer before swap, destroys content and GPU resources, then destroys the
+window. `validate` refuses a graphics API that is not `opengl`, `vulkan` or
+(on Windows) `directx12`/`d3d12` (any letter case). The producer receives `Renderer&`, `Camera&`, and an error string. It
 must create, submit and destroy all renderer-bound content within the
 callback, returning false on required-resource failure. It may use
 `RenderScene` or direct tokens plus `SubmitOnly`. Payload storage must survive
@@ -175,11 +177,13 @@ python tools/verify_capture.py build-workspace/Release/IllumoRuntime.exe --outpu
 cmake --build build --config Release --target IllumoCaptureGpuTests
 build/Release/IllumoCaptureGpuTests.exe
 build/Release/IllumoCaptureGpuTests.exe --api vulkan
+build/Release/IllumoCaptureGpuTests.exe --api d3d12
 ```
 
-`--api vulkan` runs the checks that need no OpenGL state inspection through a
-Vulkan `FrameCapture` (error propagation, recovery, readback, text, shadows)
-and requires the same capture to match its OpenGL counterpart.
+`--api vulkan` and `--api d3d12` run the checks that need no OpenGL state
+inspection through a Vulkan or Direct3D 12 `FrameCapture` (error
+propagation, recovery, readback, text, shadows) and require the same capture
+to match its OpenGL counterpart.
 
 Use a fresh output directory for each image verification run. The explicit
 GPU test executable checks the `FrameCapture` API with actual hidden OpenGL:

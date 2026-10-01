@@ -33,7 +33,7 @@ parseBackendDef(const std::string& token, BackendDef* definition)
     parsed = BackendDef::OPENGL_ES;
   } else if (upper == "VULKAN") {
     parsed = BackendDef::VULKAN;
-  } else if (upper == "DIRECTX12") {
+  } else if (upper == "DIRECTX12" || upper == "D3D12") {
     parsed = BackendDef::DIRECTX12;
   } else if (upper == "DIRECTX11") {
     parsed = BackendDef::DIRECTX11;
@@ -74,8 +74,14 @@ TokenToString(BackendDef def)
 }
 
 // The backends this build can start; the others parse, then fall back.
+// Direct3D 12 exists on Windows only.
 inline bool
 isBackendImplemented(BackendDef def)
 {
+#ifdef _WIN32
+  if (def == BackendDef::DIRECTX12) {
+    return true;
+  }
+#endif
   return def == BackendDef::OPENGL || def == BackendDef::VULKAN;
 }

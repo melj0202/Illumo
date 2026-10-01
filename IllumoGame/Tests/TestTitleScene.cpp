@@ -851,8 +851,8 @@ testSettingsShared()
              reread.panSpeed == 900 && reread.ruleSet == "GAME_OF_LIFE",
            "written settings read back");
 
-  // The renderer reads as OpenGL unless the setting names Vulkan, and a
-  // choice unlike the running window's asks for a restart.
+  // The renderer reads as OpenGL unless the setting names Vulkan or
+  // Direct3D 12, and a choice unlike the running window's asks for a restart.
   fixture.env.setVar("GraphicsAPI", "vulkan");
   SimulatorConfiguration vulkan;
   SimulatorSettings::read(&fixture.env, &vulkan);
@@ -872,6 +872,14 @@ testSettingsShared()
   testTrue(g,
            fixture.env.getVar("GraphicsAPI").value == "VULKAN",
            "the renderer choice is written as GraphicsAPI");
+  fixture.env.setVar("GraphicsAPI", "d3d12");
+  SimulatorConfiguration direct3d;
+  SimulatorSettings::read(&fixture.env, &direct3d);
+  running.graphicsApiName = "DIRECTX12";
+  testTrue(g,
+           direct3d.graphicsApi == "DIRECTX12" &&
+             !SimulatorSettings::restartNeeded(direct3d, &running),
+           "d3d12 reads as the DirectX 12 renderer it is running on");
 
   // The canvas reads the same settings over its live world, and refuses what
   // the title refuses.

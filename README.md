@@ -22,7 +22,7 @@ Rulesets, or IllEd. Application policy stays in the consuming product.
 |---|---|
 | `Illumo/` | Static library: runner, platform, services, SceneGraph, OpenGL token renderer, assets |
 | `IllumoGame/` | Cellular-automata sandbox, shipped only as the isolated `IllumoGame.wasm` package. Saves write sparse `.csim` version 4; loads versions 4, 3, and 2 plus legacy dense / `.illumo` |
-| `IllumoRuntime` | Generic native host (Windows x64): window, OpenGL or Vulkan, services and a Wasmtime sandbox. Runs every interactive client program as a WASM package staged beside it in `apps/<name>/`, and captures PNG frames with `--capture` ([docs/wasm-game-runtime-design.md](docs/wasm-game-runtime-design.md), [docs/frame-capture.md](docs/frame-capture.md)) |
+| `IllumoRuntime` | Generic native host (Windows x64): window, OpenGL, Vulkan or Direct3D 12, services and a Wasmtime sandbox. Runs every interactive client program as a WASM package staged beside it in `apps/<name>/`, and captures PNG frames with `--capture` ([docs/wasm-game-runtime-design.md](docs/wasm-game-runtime-design.md), [docs/frame-capture.md](docs/frame-capture.md)) |
 | `IllumoGuest/` | Guest SDK and WASI build tree: ABI wire headers, guest-side engine and program (`GuestProgram`), recording backend |
 | `IllEd/` | SceneGraph world editor, shipped as the `IllEd.wasm` package (`--app illed`). Writes `.ilsc` format 2 scenes for later Illumo applications; its Hierarchy, Assets, Tools and Inspector panels dock or pop out into their own windows |
 | `IllMeshViewer/` | `.obj` mesh and `.ilsc` scene viewer with orbit, pan, zoom, and rotate, and detachable Info and Display panels, shipped as the `IllMeshViewer.wasm` package (`--app meshviewer`) |
@@ -337,7 +337,7 @@ Installed packages live in `apps\<name>\` (or `apps\<name>.ilpk`), each with an
 | `meshviewer` | `IllMeshViewer.wasm` | `launchAccess: "read"`; preloads `Assets/Skybox/skybox-daylight.png` | `storage\meshviewer\` |
 
 ```text
-IllumoRuntime.exe [--app name] [--open file] [-ww width] [-wh height] [--graphics-api opengl|vulkan]
+IllumoRuntime.exe [--app name] [--open file] [-ww width] [-wh height] [--graphics-api opengl|vulkan|d3d12]
 IllumoRuntime.exe [--app name] [--open file] --capture new.png [--capture-frame n] [--capture-script file]
 IllumoRuntime.exe --package dir|file.ilpk [--storage dir]
 IllumoRuntime.exe [--app name] [--mount dir|file.ilpk]... [--project dir]
@@ -384,10 +384,12 @@ Rendering uses OpenGL by default. To switch to the Vulkan backend (Vulkan 1.3
 driver required, no SDK), launch once with `--graphics-api vulkan`, set
 `"GraphicsAPI": "VULKAN"` in the runtime's `envvars.json`, or enter
 `set GraphicsAPI vulkan` in the developer console; the choice is saved and
-applies from the next launch. `--graphics-api opengl` switches back. Both
-backends draw the same images; if Vulkan cannot start, the runtime logs why and
-starts with OpenGL, keeping the saved choice. `--capture` and `--bench-frames`
-work with either.
+applies from the next launch. The Direct3D 12 backend (Windows, feature level
+11.0 GPU) works the same way with `d3d12` (`"GraphicsAPI": "DIRECTX12"`), and
+`--graphics-api opengl` switches back. All three backends draw the same images;
+if the chosen one cannot start, the runtime logs why and starts with OpenGL,
+keeping the saved choice. `--capture` and `--bench-frames` work with any of
+them.
 
 ### IllumoGame
 

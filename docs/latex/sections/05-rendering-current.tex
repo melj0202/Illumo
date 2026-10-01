@@ -8,13 +8,15 @@ frame path is acquire/enroll + tokens + submit via
 \symbolref{Renderer}/\symbolref{IBackend}.
 Drawables emit tokens through \texttt{AppendCommands}; GL draw submission is
 confined to private \pathref{Illumo/Source/Rendering/OpenGL/} (plus window
-bootstrap), and Vulkan's to \pathref{Illumo/Source/Rendering/Vulkan/} (D-R33),
+bootstrap), Vulkan's to \pathref{Illumo/Source/Rendering/Vulkan/} (D-R33) and
+Direct3D 12's to \pathref{Illumo/Source/Rendering/D3D12/} (D-R36, Windows),
 chosen per launch. Headless \pathref{Illumo/TestSupport/Include/Illumo/Testing/MockBackend.h}
 powers \texttt{IllumoTests}. CanvasView
 presentation is \textbf{a padded camera cache + bounded CPU RGB fade + one RGB
 display texture/quad} with tiled multi-rect uploads (see canonical note in
 \pathref{docs/architecture-consensus.md}).
-OpenGL and Vulkan execute the same tokens with the same results.
+OpenGL, Vulkan and Direct3D 12 execute the same tokens with the same
+results.
 \end{statusbox}
 
 \subsection{What actually draws frames today}
@@ -479,6 +481,43 @@ detached-panel readback loop, and the default framebuffer with motion blur ---
 and compares the pixels. The dependencies are Vulkan-Headers, volk, glslang and
 the Vulkan Memory Allocator, pinned to Vulkan SDK 1.4.363.0 and built from
 \texttt{Illumo/thirdparty}; the driver supplies \texttt{vulkan-1.dll}.
+
+\subsection{Direct3D 12 backend (D-R36)}
+\texttt{Rendering/D3D12/} is a third complete \symbolref{IBackend}, built and
+offered on Windows only (\texttt{GraphicsAPI} \texttt{DIRECTX12} or
+\texttt{d3d12}). It is selected, created in a \texttt{GLFW\_NO\_API} window and
+replaced by OpenGL on failure exactly as the Vulkan backend is, and it keeps
+the same contract: images stored bottom row first with a flipping present
+pass, OpenGL's state machine and program uniforms, ordered uploads,
+gamma-correct resolves with mirrored sample positions, and bounded
+presentation that pauses on a locked session. What Vulkan and Direct3D 12
+share --- the GLSL to SPIR-V front end with OpenGL program reflection, the
+program uniform state, attribute layouts and texel conversions --- lives in
+\texttt{Rendering/Gpu/}.
+\begin{itemize}
+  \item Shaders: the shared SPIR-V is translated by SPIRV-Cross to HLSL shader
+        model 5.1, with vertex clip $y$ negated, and compiled by the system's
+        FXC. Each binding keeps its number as its register, and the pixel
+        stage declares the vertex outputs it does not read, because Direct3D
+        links stages by signature register rather than by name. Input layouts
+        follow the compiled input signature.
+  \item Bindings: a root signature per program holds a root CBV for each
+        uniform block and a one-descriptor table for each texture and
+        sampler. Every texture keeps one shader-visible SRV for its life and
+        every sampler state sits in one sampler heap, so draws point tables at
+        existing descriptors and copy none.
+  \item Ordering: uploads, clears and copies are recorded in the one command
+        list between draws with explicit resource-state transitions, which
+        keeps OpenGL's ordering without a separate upload stream.
+  \item Formats and gaps: RGB data reads an opaque alpha and R8 reads
+        $(r,r,r,1)$ through SRV component mappings; depth is D24S8 behind a
+        typeless resource; OpenGL's front-and-back culling skips triangle
+        draws; mipmaps are generated on the CPU.
+\end{itemize}
+\texttt{Illumo.Gpu.BackendParity} compares every scene on Direct3D 12 with
+OpenGL as it does for Vulkan. The one new dependency is SPIRV-Cross (Vulkan
+SDK 1.4.363.0), built without exceptions; Windows supplies
+\texttt{d3d12.dll}, \texttt{dxgi.dll} and \texttt{d3dcompiler\_47.dll}.
 
 \subsection{Primitive-composed UI (D-R20)}
 \begin{itemize}

@@ -452,6 +452,13 @@ testConfigurationNavigationAndActions()
   testTrue(g,
            fixture.read().graphicsApi == "VULKAN",
            "right picks the Vulkan renderer");
+  fixture.press(KeyCode::Right);
+  fixture.menu.update(&fixture.input);
+  testTrue(g,
+           fixture.read().graphicsApi == "DIRECTX12",
+           "right again picks the DirectX 12 renderer");
+  fixture.press(KeyCode::Left);
+  fixture.menu.update(&fixture.input);
   fixture.press(KeyCode::Left);
   fixture.menu.update(&fixture.input);
   testTrue(
