@@ -112,18 +112,25 @@ testCanvasDimensionsFromEnv()
   testSection("CellContext: canvas size from env");
   NullRenderWindow window(100, 100);
   EnvVars env;
-  env.setVar("CanvasX", 10);
+  env.setVar("CanvasX", 40);
   env.setVar("CanvasY", 12);
   Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
   MockBackend mock;
   mock.Initialize();
   Renderer renderer(&window, &env, &camera, &mock, false);
 
+  // The env view is the overview budget's floor; the window's is 25 texels
+  // (100 pixels at 4 per texel). The texture adds the cache's padding and
+  // alignment (96 texels) so no zoom grows it.
   CellContext ctx("GAME_OF_LIFE", &env, &window, &camera, &renderer);
-  testEqInt(
-    g, ctx.getCanvas()->getTextureWidth(), 10, "texture width from env");
-  testEqInt(
-    g, ctx.getCanvas()->getTextureHeight(), 12, "texture height from env");
+  testEqInt(g,
+            ctx.getCanvas()->getTextureWidth(),
+            40 + 96,
+            "texture width from env view");
+  testEqInt(g,
+            ctx.getCanvas()->getTextureHeight(),
+            25 + 96,
+            "texture height from window budget");
   ctx.getCanvas()->syncVisibleRegion();
   testEqInt(
     g, ctx.getCanvas()->getViewWidth(), 9, "active cell width from window");

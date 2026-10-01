@@ -257,6 +257,11 @@ private:
 
   static bool sameAddress(const CellAddress& left, const CellAddress& right);
   static int growTextureDimension(int current, int required);
+  // Overview texels one axis may show: the base view, or the window's pixels
+  // at kOverviewPixelsPerTexel.
+  static int outputBudget(int windowPixels, int baseView);
+  // The texels the cache can need on one axis at any zoom for a budget.
+  static int cacheTexelBound(int budget);
   void initializeGpuResources();
   void resizeBuffers(int width, int height);
   void resetUploadBounds();

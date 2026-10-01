@@ -79,6 +79,18 @@ CanvasView::CanvasView(int width,
   , paletteDirty(true)
   , worldQuadReady(false)
 {
+  if (window != nullptr) {
+    // Allocated for every zoom at this window size (see syncVisibleRegion).
+    const std::array<int, 2> dimensions = window->getWindowDimensions();
+    textureWidth = std::max(
+      textureWidth,
+      cacheTexelBound(outputBudget(std::max(1, dimensions[0]), baseViewWidth)));
+    textureHeight = std::max(textureHeight,
+                             cacheTexelBound(outputBudget(
+                               std::max(1, dimensions[1]), baseViewHeight)));
+    dirtyTileColumns = (textureWidth + kDirtyTileDim - 1) / kDirtyTileDim;
+    dirtyTileRows = (textureHeight + kDirtyTileDim - 1) / kDirtyTileDim;
+  }
   const std::size_t texelCount = static_cast<std::size_t>(textureWidth) *
                                  static_cast<std::size_t>(textureHeight);
   allocateSlotBuffers(texelCount);
@@ -170,6 +182,23 @@ CanvasView::growTextureDimension(int current, int required)
     return required;
   }
   return std::max(required, current + growth);
+}
+
+int
+CanvasView::outputBudget(int windowPixels, int baseView)
+{
+  return std::max(baseView, 1 + (windowPixels - 1) / kOverviewPixelsPerTexel);
+}
+
+int
+CanvasView::cacheTexelBound(int budget)
+{
+  // cellsPerTexel is never below the density that fits the visible cells in
+  // the budget, so they take at most `budget` texels. Padding adds at most
+  // its cells on each side, and chunk alignment (lcm(kChunkDim, density)
+  // cells) under kChunkDim texels on each side.
+  return budget + 2 * kCachePaddingChunks * SparseCellGrid::kChunkDim +
+         2 * SparseCellGrid::kChunkDim;
 }
 
 void
@@ -1609,10 +1638,8 @@ CanvasView::syncVisibleRegion()
   const int nextCellHeight =
     static_cast<int>(std::ceil(worldHeight / static_cast<double>(kCellSize))) +
     2;
-  const int outputBudgetWidth =
-    std::max(baseViewWidth, 1 + (width - 1) / kOverviewPixelsPerTexel);
-  const int outputBudgetHeight =
-    std::max(baseViewHeight, 1 + (height - 1) / kOverviewPixelsPerTexel);
+  const int outputBudgetWidth = outputBudget(width, baseViewWidth);
+  const int outputBudgetHeight = outputBudget(height, baseViewHeight);
   const int requiredCellsPerTexel =
     std::max(1,
              std::max(1 + (nextCellWidth - 1) / outputBudgetWidth,
@@ -1649,7 +1676,13 @@ CanvasView::syncVisibleRegion()
   }
 
   ILLUMO_PROFILE_ZONE("CanvasView.refillCache");
-  resizeBuffers(nextLayout.activeWidth, nextLayout.activeHeight);
+  // Grown straight to what any zoom at this window size needs, so zooming
+  // never replaces the texture: in a guest the replacement reaches the host
+  // frames later, and until then the old texture draws under the new quad and
+  // the cells jump.
+  resizeBuffers(
+    std::max(nextLayout.activeWidth, cacheTexelBound(outputBudgetWidth)),
+    std::max(nextLayout.activeHeight, cacheTexelBound(outputBudgetHeight)));
   cellsPerTexel = nextCellsPerTexel;
   cacheFirstCell = nextLayout.firstCell;
   cacheCellWidth = nextLayout.cellWidth;

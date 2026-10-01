@@ -1742,7 +1742,7 @@ testAdaptiveOverviewAndRevisionGate()
   testEqInt(
     g, view.getViewHeight(), 151, "far view uses bounded overview height");
   testEqInt(
-    g, view.getTextureWidth(), 320, "overview texture width is bounded");
+    g, view.getTextureWidth(), 416, "overview texture width is bounded");
   testTrue(g,
            view.getTextureHeight() >= view.getCachedTexelHeight(),
            "overview texture contains the padded cache");
@@ -1810,11 +1810,11 @@ testAdaptiveOverviewAndRevisionGate()
   testEqInt(g, view.getCellsPerTexel(), 1, "near view restores exact-cell LOD");
   testEqInt(g,
             view.getTextureWidth(),
-            320,
+            416,
             "near view retains allocation without expanding active work");
   testEqInt(g,
             view.getTextureHeight(),
-            192,
+            276,
             "near view retains allocation without expanding active rows");
 }
 
@@ -1860,25 +1860,47 @@ testTextureCapacityAndLifecycle()
                sharedTextureCreates + 1u,
                "view enrolls one initial display texture");
 
+    // Sized for every zoom at 1280 x 720 (an overview budget of 320 x 180
+    // texels plus padding and alignment), so no zoom grows it: a guest's
+    // replacement lands frames late and the old texture would draw under the
+    // new quad.
+    testEqInt(g,
+              view.getTextureWidth(),
+              416,
+              "initial texture width covers every zoom at the window size");
+    testEqInt(g,
+              view.getTextureHeight(),
+              276,
+              "initial texture height covers every zoom at the window size");
     view.rebuildTargetsFromGrid();
     const std::size_t grownTextureCreates = countTextureCreates(mock);
     testEqSize(g,
                grownTextureCreates,
                initialTextureCreates,
-               "capacity growth retains one typed display texture handle");
+               "the first fill retains one typed display texture handle");
+
+    // The wheel's range, out to the far overview and in to single cells,
+    // with the smooth-zoom steps between.
+    const float zooms[] = { 0.95f,  0.90f, 0.5f,  0.25f, 0.1f,  0.13f, 0.2f,
+                            0.33f,  0.66f, 1.0f,  1.5f,  3.0f,  10.0f, 40.0f,
+                            100.0f, 7.0f,  0.75f, 0.1f,  0.45f, 1.0f };
+    bool coversCache = true;
+    for (const float zoom : zooms) {
+      camera.SetZoom(zoom);
+      view.syncVisibleRegion();
+      coversCache = coversCache &&
+                    view.getCachedTexelWidth() <= view.getTextureWidth() &&
+                    view.getCachedTexelHeight() <= view.getTextureHeight();
+    }
+    testTrue(g, coversCache, "every zoom's cache fits the initial texture");
     testEqInt(g,
               view.getTextureWidth(),
-              160,
-              "padded cache grows texture capacity once");
-
-    camera.SetZoom(0.95f);
-    view.syncVisibleRegion();
-    camera.SetZoom(0.90f);
-    view.syncVisibleRegion();
+              416,
+              "zooming keeps the initial texture width");
     testEqSize(g,
                countTextureCreates(mock),
                grownTextureCreates,
-               "nearby smooth-zoom sizes reuse retained texture capacity");
+               "zooming reuses the display texture");
 
     for (std::size_t i = 0; i < mock.getCreateCount(); ++i) {
       const MockBackend::CreateRecord& record = mock.getCreate(i);
@@ -1894,10 +1916,8 @@ testTextureCapacityAndLifecycle()
                  "capacity replacement preserves the typed texture handle");
       }
     }
-    testEqSize(g,
-               replacementCount,
-               1u,
-               "first capacity growth replaces the display texture once");
+    testEqSize(
+      g, replacementCount, 0u, "zooming never replaces the display texture");
   }
 
   std::size_t destroyedTextureCount = 0u;
@@ -2231,8 +2251,12 @@ testCanvasViewUsesWorldCellQuad()
              quad[0] == expectedX && quad[1] == expectedTop - expectedHeight &&
                quad[16] == expectedX + expectedWidth && quad[17] == expectedTop,
              "cell quad follows padded cache cell boundaries");
+    // The texture's first row is the cache's top; the cache's bottom row
+    // ends where the cached rows do in the (larger) texture.
+    const float bottomV = static_cast<float>(view.getCachedTexelHeight()) /
+                          static_cast<float>(view.getTextureHeight());
     testTrue(g,
-             quad[7] == 1.0f && quad[31] == 0.0f,
+             quad[7] == bottomV && bottomV > 0.0f && quad[31] == 0.0f,
              "cell quad keeps world-up rows upright");
   }
 
