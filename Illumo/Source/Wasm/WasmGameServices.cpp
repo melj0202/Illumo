@@ -7,6 +7,7 @@
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <Illumo/Services/Logger.h>
+#include <Illumo/Wasm/AppLauncher.h>
 #include <Illumo/Wasm/WasmGameServices.h>
 #include <Illumo/Wasm/WasmPanelWindows.h>
 #include <IllumoGuest/Audio.h>
@@ -15,6 +16,7 @@
 #include <IllumoGuest/Dialog.h>
 #include <IllumoGuest/Display.h>
 #include <IllumoGuest/FileProtocol.h>
+#include <IllumoGuest/Launcher.h>
 #include <IllumoGuest/Protocol.h>
 #include <IllumoGuest/Windows.h>
 #include <algorithm>
@@ -143,6 +145,11 @@ WasmGameServices::cancel()
   m_displayRequests.clear();
   m_clipboardRequests.clear();
   m_windowRequests.clear();
+  m_launchRequests.clear();
+  // A launched application ends with the guest that launched it.
+  if (m_launcher != nullptr && hasGrant(m_grants, GuestCapability::Launch)) {
+    m_launcher->stop();
+  }
   m_dialogRequests.clear();
   m_consoleRequests.clear();
   m_listenRequests.clear();
@@ -345,6 +352,44 @@ WasmGameServices::completeWindows(GuestServices& results)
     }
     results.records.push_back(std::move(response));
     m_windowRequests.pop_front();
+  }
+}
+void
+WasmGameServices::completeLaunches(GuestServices& results)
+{
+  // Launches are synchronous on the host (a process start), so each
+  // completes now.
+  while (!m_launchRequests.empty()) {
+    ILLUMO_PROFILE_ZONE("WasmGameServices.completeLaunch");
+    const GuestServiceRecord& record = m_launchRequests.front();
+    GuestServiceRecord response{
+      record.request, GuestService::LaunchApp, GuestServiceStatus::Rejected, {}
+    };
+    GuestLaunchRequest request;
+    if (m_launcher != nullptr && m_launcher->available() &&
+        hasGrant(m_grants, GuestCapability::Launch) &&
+        GuestLaunchRequest::read(record.payload, request)) {
+      bool accepted = true;
+      if (request.action == GuestLaunchAction::Start) {
+        std::string reason;
+        accepted = m_launcher->launch(
+          request.application, request.name, request.document, reason);
+        if (!accepted) {
+          Logger::LogWarning("Cannot launch " + request.application + ": " +
+                             reason);
+        }
+      } else if (request.action == GuestLaunchAction::Stop) {
+        m_launcher->stop();
+      }
+      if (accepted) {
+        GuestWireWriter payload;
+        GuestLaunchStatus{ m_launcher->running() }.write(payload);
+        response.status = GuestServiceStatus::Complete;
+        response.payload = payload.take();
+      }
+    }
+    results.records.push_back(std::move(response));
+    m_launchRequests.pop_front();
   }
 }
 void
@@ -836,8 +881,9 @@ WasmGameServices::process(std::span<const std::byte> requests,
   const std::size_t outstanding =
     m_render.pendingRequests() + m_displayRequests.size() +
     m_clipboardRequests.size() + m_windowRequests.size() +
-    m_dialogRequests.size() + m_consoleRequests.size() +
-    m_listenRequests.size() + (m_files ? m_files->pendingRequests() : 0u) +
+    m_launchRequests.size() + m_dialogRequests.size() +
+    m_consoleRequests.size() + m_listenRequests.size() +
+    (m_files ? m_files->pendingRequests() : 0u) +
     (m_job.request != 0 ? 1u : 0u) + laneJobs +
     (m_laneQuery.request != 0 ? 1u : 0u);
   ILLUMO_PROFILE_PLOT("WasmGameServices.Requests", incoming.records.size());
@@ -872,6 +918,12 @@ WasmGameServices::process(std::span<const std::byte> requests,
       GuestWindowRequest request;
       if (!GuestWindowRequest::read(record.payload, request)) {
         m_error = "Invalid window request";
+        return false;
+      }
+    } else if (record.operation == GuestService::LaunchApp) {
+      GuestLaunchRequest request;
+      if (!GuestLaunchRequest::read(record.payload, request)) {
+        m_error = "Invalid launch request";
         return false;
       }
     } else if (record.operation == GuestService::Audio) {
@@ -949,6 +1001,8 @@ WasmGameServices::process(std::span<const std::byte> requests,
       m_clipboardRequests.push_back(record);
     } else if (record.operation == GuestService::Window) {
       m_windowRequests.push_back(record);
+    } else if (record.operation == GuestService::LaunchApp) {
+      m_launchRequests.push_back(record);
     } else if (record.operation == GuestService::Dialog) {
       m_dialogRequests.push_back(record);
     } else if (record.operation == GuestService::Console) {
@@ -958,6 +1012,7 @@ WasmGameServices::process(std::span<const std::byte> requests,
   completeDisplay(results);
   completeClipboard(results);
   completeWindows(results);
+  completeLaunches(results);
   completeDialog(results);
   completeConsole(results);
   // In request order, so a sound registered and played in one update plays.

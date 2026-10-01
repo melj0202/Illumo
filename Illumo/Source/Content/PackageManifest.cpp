@@ -114,6 +114,7 @@ decodeApp(const nlohmann::json& section,
                 { "module",
                   "worker",
                   "launchAccess",
+                  "launchApps",
                   "metering",
                   "memoryMiB",
                   "fuelPerCall",
@@ -142,6 +143,13 @@ decodeApp(const nlohmann::json& section,
       return false;
     }
     app.launchEditable = access == "edit";
+  }
+  if (section.contains("launchApps")) {
+    if (!section["launchApps"].is_boolean()) {
+      error = "app launchApps must be true or false";
+      return false;
+    }
+    app.launchApps = section["launchApps"].get<bool>();
   }
   if (section.contains("metering")) {
     const nlohmann::json& metering = section["metering"];

@@ -34,6 +34,9 @@ struct PackageAppSection
   std::string module;
   std::string worker;
   bool launchEditable = false;
+  // "launchApps": the application may start other installed applications
+  // (Launch capability, an editor's Play) and reads them at /apps/<id>.
+  bool launchApps = false;
   std::uint64_t memoryMiB = 64u;
   // "metering": "fuel" (default) instruments guest code with fuel and bounds
   // each call by fuelPerCall; "epoch" bounds calls by the deadline alone.

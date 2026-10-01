@@ -7,6 +7,7 @@
   "app": {
     "module": "IllEd.wasm",
     "launchAccess": "edit",
+    "launchApps": true,
     "memoryMiB": 512,
     "metering": "epoch",
     "deadlineMilliseconds": 10000

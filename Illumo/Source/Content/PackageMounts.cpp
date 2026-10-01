@@ -126,6 +126,25 @@ PackageMounts::discover(const std::filesystem::path& directory,
 }
 
 bool
+PackageMounts::mountApplications(VirtualFileSystem& vfs,
+                                 const std::vector<LoadedPackage>& applications,
+                                 std::string& error)
+{
+  for (const LoadedPackage& application : applications) {
+    if (application.manifest.kind != PackageKind::App) {
+      continue;
+    }
+    VfsMount mount;
+    mount.point = "/apps/" + application.manifest.id;
+    mount.layers.push_back({ application.backend, application.manifest.id });
+    if (!vfs.mount(std::move(mount), error)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool
 PackageMounts::mountAll(VirtualFileSystem& vfs,
                         const LoadedPackage& application,
                         const std::vector<LoadedPackage>& packages,

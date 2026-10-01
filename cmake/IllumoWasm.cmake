@@ -75,7 +75,8 @@ add_library(IllumoWasmRendering STATIC
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmFileServices.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmProgram.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmPanelWindows.cpp"
-  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/RuntimeShell.cpp")
+  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/RuntimeShell.cpp"
+  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/RuntimeAppLauncher.cpp")
 target_link_libraries(IllumoWasmRendering PUBLIC Illumo::WasmRuntime Illumo::Illumo Illumo::Content)
 # Tracy zones around guest exchanges; the client itself is compiled by Illumo.
 # The runtime shell prints its capture and benchmark results as JSON.
@@ -286,6 +287,20 @@ if(BUILD_TESTING)
     set_tests_properties("Illumo.Wasm.${_case}" PROPERTIES LABELS "Illumo;IllumoWorkspace" TIMEOUT 20
       WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoWasmWindowTests>")
   endforeach()
+  # Application launches: the LaunchApp service, its grant and launcher
+  # checks, the guest's launcher and the runtime's child processes.
+  add_executable(IllumoWasmLaunchTests "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/TestWasmLaunch.cpp")
+  target_link_libraries(IllumoWasmLaunchTests PRIVATE IllumoWasmRendering Illumo::TestSupport)
+  target_compile_definitions(IllumoWasmLaunchTests PRIVATE
+    "ILLUMO_ENGINE_ASSETS=\"${CMAKE_SOURCE_DIR}/Illumo/Assets\"")
+  illumo_configure_runtime_target(IllumoWasmLaunchTests)
+  illumo_stage_msvc_asan(IllumoWasmLaunchTests)
+  foreach(_case LaunchServiceDecoder LaunchDeny GuestLauncher ChildProcess RuntimeAppLauncher)
+    add_test(NAME "Illumo.Wasm.${_case}" COMMAND IllumoWasmLaunchTests --run "Illumo.Wasm.${_case}")
+    set_tests_properties("Illumo.Wasm.${_case}" PROPERTIES LABELS "Illumo;IllumoWorkspace" TIMEOUT 30
+      WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoWasmLaunchTests>")
+  endforeach()
+  add_dependencies(IllumoRunTests IllumoWasmLaunchTests)
   # Performance measurement, not a workspace gate: ctest -L IllumoBenchmark.
   add_test(NAME Illumo.Wasm.Bench.PanelSurface
     COMMAND IllumoWasmWindowTests --run Illumo.Wasm.Bench.PanelSurface)

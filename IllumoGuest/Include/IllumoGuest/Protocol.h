@@ -33,7 +33,10 @@ enum class GuestCapability : std::uint32_t
   Audio = 1u << 11u,
   // Host-owned render objects managed by frame schema v6 world operations
   // (D-E30); offered with Render.
-  HostRender = 1u << 12u
+  HostRender = 1u << 12u,
+  // Starts other installed applications (LaunchApp service, an editor's
+  // Play); offered only when the host has a launcher for this application.
+  Launch = 1u << 13u
 };
 
 enum class GuestCall : std::uint32_t
@@ -69,7 +72,7 @@ struct GuestEnvelope
 {
   static constexpr std::uint32_t Magic = 0x31474c49u; // ILG1
   static constexpr std::uint32_t Version = 1;
-  static constexpr std::uint32_t KnownCapabilities = (1u << 13u) - 1u;
+  static constexpr std::uint32_t KnownCapabilities = (1u << 14u) - 1u;
   static constexpr std::size_t HeaderBytes = 32;
 
   GuestCall call = GuestCall::Init;

@@ -32,7 +32,9 @@ enum class GuestService : std::uint32_t
   Window = 17,
   // Audio capability: register, play or release a sound (fire-and-forget;
   // completions carry no payload and are discarded by the queue).
-  Audio = 18
+  Audio = 18,
+  // Launch capability: start, stop or poll a launched application.
+  LaunchApp = 19
 };
 
 enum class GuestServiceStatus : std::uint32_t
@@ -95,7 +97,7 @@ struct GuestServices
       const std::uint32_t status = reader.u32();
       const std::span<const std::byte> payload = reader.bytes(reader.u32());
       if (!reader.valid() || record.request == 0 || operation < 1 ||
-          operation > static_cast<std::uint32_t>(GuestService::Audio) ||
+          operation > static_cast<std::uint32_t>(GuestService::LaunchApp) ||
           (requests ? status != 0 : status < 1 || status > 2)) {
         return false;
       }

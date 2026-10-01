@@ -71,6 +71,8 @@ rejects the whole manifest, because it requests budgets. Top-level keys are
 - `kind` is `app`, `content` or `mod`; `app` requires the `app` section,
   `mod` requires the `mod` section, `content` has neither.
 - `app` carries `module`, `worker`, `launchAccess` (`read` or `edit`),
+  `launchApps` (boolean: the app may start other installed apps, which the
+  runtime then mounts read-only at `/apps/<id>`; IllEd sets it for Play),
   `metering` (`fuel` or `epoch`), `memoryMiB`, `fuelPerCall`,
   `deadlineMilliseconds`, `workers`, `workerMemoryMiB` and
   `workerDeadlineMilliseconds`, clamped to `PackageCeilings`.

@@ -162,6 +162,23 @@ testPackageDiscovery()
   testTrue(counters,
            !contains(layers, "other"),
            "overlays for another application are not applied");
+  std::vector<LoadedPackage> installed = found;
+  installed.push_back(application);
+  testTrue(counters,
+           PackageMounts::mountApplications(vfs, installed, error),
+           "installed applications mount");
+  entries.clear();
+  vfs.list("/apps", entries, error);
+  std::vector<std::string> apps;
+  for (const VfsEntry& entry : entries) {
+    apps.push_back(entry.name);
+  }
+  testTrue(counters,
+           apps == std::vector<std::string>{ "demo" } &&
+             vfs.read("/apps/demo/x.txt", bytes, error) &&
+             std::string(bytes.begin(), bytes.end()) == "base" &&
+             !vfs.write("/apps/demo/y.txt", { 'y' }, error),
+           "only applications appear under /apps, unmerged and read-only");
   std::filesystem::remove_all(root, code);
   return counters.failures;
 }

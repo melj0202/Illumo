@@ -292,6 +292,23 @@ releases a guest's sounds when it retires. The guest SDK exposes the service
 as `GuestAudio`, published as `IllumoContext::audio`. See
 `docs/audio-subsystem-plan.md`.
 
+Note (2026-10-01): `GuestCapability::Launch` (bit 13) was added, so
+`KnownCapabilities` is now `(1 << 14) - 1` (D-E36). The host offers it only
+to an application whose manifest sets `app.launchApps` (IllEd), and never
+for `--capture` or `--bench-*`. With it, `GuestService::LaunchApp` (19)
+carries `GuestLaunchRequest` version 1: `Start` names an installed
+application id, a plain file name (`[A-Za-z0-9._-]`, at most 64 bytes, not
+starting with `.`) and a non-empty document of at most 8 MiB; `Stop` and
+`Status` carry nothing. Every accepted request completes with a
+`GuestLaunchStatus` (whether the launched application runs); a malformed
+request fails the exchange, and an unknown application or a failed start is
+a rejection. `RuntimeAppLauncher` saves the document in a temporary play
+directory and runs `IllumoRuntime --app <id> --open <file>` with the
+parent's `--mount` and `--project` in a child process (one at a time; on
+Windows in a kill-on-close job object). The guest SDK exposes the service as
+`GuestLauncher` (`GuestProgram::launcher()`). See
+`docs/scene-behaviours-design.md`.
+
 Note (2026-09-27): the Audio service moved to `GuestAudioRequest` version 2
 for looping music (D-E32); version 1 records are malformed. `Create` now
 declares the sound's whole sample count (at most 16 Mi) and carries its first

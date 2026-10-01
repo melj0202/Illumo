@@ -34,6 +34,18 @@ testPackageManifestDecode()
   testTrue(counters, !manifest.app.meterFuel, "epoch metering");
   testTrue(counters, manifest.app.memoryMiB == 512u, "memory request");
   testTrue(counters,
+           !manifest.app.launchApps,
+           "applications launch no others by default");
+  PackageManifest launcher;
+  testTrue(counters,
+           decode(R"({"format":"ilpk","format_version":1,"id":"illed",
+                      "kind":"app","app":{"module":"IllEd.wasm",
+                                          "launchApps":true}})",
+                  launcher,
+                  error) &&
+             launcher.app.launchApps,
+           "launchApps opts an application into launching others");
+  testTrue(counters,
            manifest.targets.size() == 1 && manifest.targets[0] == "*",
            "targets default to every application");
   testTrue(counters,
@@ -120,6 +132,8 @@ testPackageManifestClampsBudgets()
         "app":{"module":"G.wasm","metering":"epoch","fuelPerCall":5}})",
     R"({"format":"ilpk","format_version":1,"id":"g","kind":"app",
         "app":{"module":"G.wasm","launchAccess":"write"}})",
+    R"({"format":"ilpk","format_version":1,"id":"g","kind":"app",
+        "app":{"module":"G.wasm","launchApps":"yes"}})",
     R"({"format":"ilpk","format_version":1,"id":"g","kind":"app",
         "app":{"module":"../G.wasm"}})",
     R"({"format":"ilpk","format_version":1,"id":"g","kind":"app",

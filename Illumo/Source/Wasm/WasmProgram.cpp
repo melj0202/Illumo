@@ -36,7 +36,8 @@ describeCapabilities(std::uint32_t granted)
     { GuestCapability::ProjectFiles, "project files" },
     { GuestCapability::Windows, "panel windows" },
     { GuestCapability::Audio, "audio" },
-    { GuestCapability::HostRender, "host render world" }
+    { GuestCapability::HostRender, "host render world" },
+    { GuestCapability::Launch, "launch apps" }
   };
   std::string text;
   for (const std::pair<GuestCapability, const char*>& name : names) {
@@ -201,6 +202,9 @@ WasmProgram::start(IllumoContext& host)
           (m_audio != nullptr && m_audio->available()
              ? static_cast<std::uint32_t>(GuestCapability::Audio)
              : 0u) |
+          (m_launcher && m_launcher->available()
+             ? static_cast<std::uint32_t>(GuestCapability::Launch)
+             : 0u) |
           static_cast<std::uint32_t>(GuestCapability::Messages),
         m_startup,
         response)) {
@@ -265,6 +269,10 @@ WasmProgram::start(IllumoContext& host)
   if ((m_guest.capabilities() &
        static_cast<std::uint32_t>(GuestCapability::Audio)) != 0) {
     m_services->setAudio(m_audio);
+  }
+  if ((m_guest.capabilities() &
+       static_cast<std::uint32_t>(GuestCapability::Launch)) != 0) {
+    m_services->setLauncher(m_launcher.get());
   }
   GuestWireWriter emptyServices;
   GuestServices{}.write(emptyServices);

@@ -54,6 +54,13 @@ public:
                        std::vector<std::string>& warnings,
                        std::string& error);
 
+  // Mounts each application package read-only at /apps/<id>, for a launched
+  // application allowed to start others (an editor reading their behaviour
+  // schemas). Packages that are not applications are skipped.
+  static bool mountApplications(VirtualFileSystem& vfs,
+                                const std::vector<LoadedPackage>& applications,
+                                std::string& error);
+
   // Packs every file below a mounted directory into an .ilpk at destination
   // (atomically). The directory must hold a valid illumo.json; the walk is
   // iterative and stops past maximumBytes of content or 100000 entries.

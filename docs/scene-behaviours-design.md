@@ -120,9 +120,10 @@ owned by `Illumo::Content`.
 
 ### 4.4 IllEd
 
-- Discovers schemas from `/packages/*/behaviours.json` and
-  `/project/behaviours.json` through `IllEdPlatform::listDirectory`/`read`
-  (both already work for mounted packages).
+- Discovers schemas from `/apps/*/behaviours.json` (installed applications,
+  mounted read-only for an app whose manifest sets `launchApps`, §4.5),
+  `/packages/*/behaviours.json` and `/project/behaviours.json` through
+  `IllEdPlatform::listDirectory`/`read`.
 - The inspector shows a known behaviour component as a section of typed
   fields (the existing Number, Toggle, Choice, Text kinds plus the asset
   choice from wave 2); edits stay one history command each through
@@ -140,19 +141,27 @@ owned by `Illumo::Content`.
   (a choice among discovered games). Extensions are already preserved.
 - **Host:** a new capability `Launch` (bit 13) and guest service
   `LaunchApp` (id 19), generic and product-agnostic: "start installed app
-  `<id>` with this document". The host writes the bytes to
-  `<storage>/play/<id>.ilsc`, then starts a second `IllumoRuntime` process
+  `<id>` with this document". Only an application whose manifest sets
+  `"app": { "launchApps": true }` gets it (IllEd); the runtime then also
+  mounts every installed application read-only at `/apps/<id>`, which is
+  how the editor reads their `behaviours.json`. (Every offered capability is
+  granted, so the manifest flag, not the guest's request, is the gate.) The
+  host (`RuntimeAppLauncher`) writes the bytes to a private temporary play
+  directory, then starts a second `IllumoRuntime` process
   (`--app <id> --open <file>`, plus the parent's `--mount` and `--project`
   options so asset references resolve the same way). It keeps the child
-  handle: one child at a time, `Stop` terminates it, and the guest polls its
-  state. Process spawning generalizes the existing
-  `RelaunchCurrentProcess` (`Illumo/Platform/ProcessRelaunch.h`).
-  Not offered in capture or benchmark runs (like Windows and Audio). Decoder
-  and deny tests ship with it, per the repository rules.
-- **Game:** a reusable `PlayScene` (`ProgramScene` in Content) loads the
-  launch document into `content()` (collect, fetch, instantiate, as
-  IllMeshViewer does), owns a `SceneBehaviours`, and uses the scene's primary
-  camera. A game supports Play by registering its behaviours and this scene.
+  (`ChildProcess`, `Illumo/Platform/ChildProcess.h`; on Windows a
+  kill-on-close job object, so the child never outlives the parent): one
+  child at a time, `Stop` terminates it, and the guest polls its state
+  (`GuestLauncher`, `IllumoGuest/Launcher.h`). Not offered in capture or
+  benchmark runs (like Windows and Audio). Decoder and deny tests ship with
+  it, per the repository rules.
+- **Game:** `GuestPlayProgram` and its `GuestPlayScene`
+  (`IllumoGuest/PlayProgram.h`) load the launch document, or the app's
+  default scene, into `content()` (collect, fetch, instantiate, as
+  IllMeshViewer does), own a `SceneBehaviours`, and use the scene's primary
+  camera. A game supports Play by deriving from `GuestPlayProgram` and
+  registering its behaviours.
 - **IllEd:** Play/Stop in the toolbar and View menu, F5, a status-bar state,
   and a toast when the scene names no game or the host refuses.
 
@@ -185,10 +194,11 @@ real games. CSim is unchanged.
 - Behaviours run in the game's own store, so a faulting behaviour stops the
   game window only, never the editor.
 - Child processes: one at a time, terminated on Stop and when the parent
-  exits; the play file lives under the parent's private storage.
-- Risks: `--open` did not load a launch scene in IllEd capture runs during
-  the wave 2 screenshots (cause unknown); the play path depends on `--open`,
-  so milestone B4 starts by reproducing that.
+  exits; the play file lives in a temporary directory removed with the
+  launcher.
+- Risk found and fixed in B2: `--open` did nothing for package launches
+  (`WasmProgram` granted the launch document only without a virtual file
+  tree), which is why it did not load in the wave 2 screenshot runs.
 
 ## 7. Milestones
 
@@ -214,4 +224,9 @@ The owner authorized implementation as written on 2026-10-01 and chose:
 
 ## 9. Validation
 
-(Filled in per milestone once authorized.)
+- B1 (1e3df684): `Illumo.Content.BehaviourSchemaParse`, `BehaviourValues`
+  and `SceneBehavioursLifecycle`; Release workspace suite green.
+- B2 (aa31e199): `Playground.Wasm.DefaultScene` (seven nodes, four
+  behaviours, the moon orbits the beacon at its radius) and
+  `Playground.Wasm.LaunchedScene` (a launched scene's bob moves its node; an
+  unknown component is ignored); 722 of 722 workspace tests pass.

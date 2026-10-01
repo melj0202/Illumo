@@ -32,6 +32,7 @@ if(WIN32)
     Source/Platform/Windows/WinTimer.cpp
     Source/Platform/Windows/WinProcessMemoryStats.cpp
     Source/Platform/Windows/WinProcessRelaunch.cpp
+    Source/Platform/Windows/WinChildProcess.cpp
     Source/Platform/Windows/WinSystemInfo.cpp
     Source/Platform/Windows/WinPathText.cpp
     Source/Platform/Windows/WinPixelWindowPresent.cpp
@@ -51,6 +52,7 @@ elseif(UNIX)
     Source/Platform/Linux/LinuxTimer.cpp
     Source/Platform/Linux/LinuxPixelWindowPresent.cpp
     Source/Platform/Linux/LinuxProcessRelaunch.cpp
+    Source/Platform/Linux/LinuxChildProcess.cpp
     Source/Platform/UnsupportedProcessMemoryStats.cpp
     Source/Platform/UnsupportedSystemInfo.cpp
     Source/Platform/UnsupportedSessionState.cpp)

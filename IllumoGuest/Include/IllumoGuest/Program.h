@@ -18,6 +18,7 @@
 #include <IllumoGuest/Environment.h>
 #include <IllumoGuest/Files.h>
 #include <IllumoGuest/FontProvider.h>
+#include <IllumoGuest/Launcher.h>
 #include <IllumoGuest/PanelSurfaces.h>
 #include <IllumoGuest/RecordingBackend.h>
 #include <IllumoGuest/RenderWorld.h>
@@ -116,6 +117,9 @@ protected:
   // AssetManager's byte source: pinned preloads, fetch sets and /local bytes.
   GuestVfsAssets& assetCache() { return m_assetCache; }
   GuestEnvironment& settings() { return m_settings; }
+  // Other installed applications (Launch capability); unavailable unless
+  // granted.
+  GuestLauncher& launcher() { return m_launcher; }
   const IllumoContext& context() const { return m_context; }
   // The product may publish extra services through the context.
   IllumoContext& programContext() { return m_context; }
@@ -171,6 +175,7 @@ private:
   // Sound effects (Audio capability); published as IllumoContext::audio only
   // when granted.
   GuestAudio m_audio;
+  GuestLauncher m_launcher;
   // Host-owned world objects (HostRender capability), one world per scene;
   // IllumoContext::renderWorld follows the active scene's.
   std::unique_ptr<GuestSceneWorlds> m_worlds;

@@ -6,6 +6,7 @@
 #include <Illumo/Gui/GuiEngineBrand.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>
+#include <Illumo/Wasm/RuntimeAppLauncher.h>
 #include <Illumo/Wasm/RuntimeShell.h>
 #include <Illumo/Wasm/WasmProgram.h>
 #include <IllumoGuest/Dialog.h>
@@ -290,6 +291,11 @@ prepareShell(Illumo& illumo)
   std::vector<std::byte> game;
   std::vector<std::byte> worker;
   bool workerRequested = !workerPath.empty();
+  // An application with launchApps: the installed applications it may start
+  // and the package options each launch repeats.
+  bool launchApps = false;
+  std::vector<std::string> launchable;
+  std::vector<std::string> packageArguments;
   if (gamePath.empty()) {
     // Package launch: <exe>/apps/<name> (a directory or <name>.ilpk), the
     // game by default, unless --package names another package.
@@ -360,6 +366,12 @@ prepareShell(Illumo& illumo)
       }
       takenIds.push_back(mounted.manifest.id);
       packages.push_back(std::move(mounted));
+      std::error_code absolute;
+      const std::u8string mountPath =
+        std::filesystem::absolute(optionPath(mountOption), absolute).u8string();
+      packageArguments.push_back("--mount");
+      packageArguments.push_back(std::string(
+        reinterpret_cast<const char*>(mountPath.data()), mountPath.size()));
     }
     std::filesystem::path project;
     if (!readRoot(environment->getVar("GuestProject").value, project)) {
@@ -389,6 +401,33 @@ prepareShell(Illumo& illumo)
     if (!project.empty()) {
       Logger::LogInfo("Project directory mounted writable at /project: " +
                       project.string());
+      const std::u8string projectPath = project.u8string();
+      packageArguments.push_back("--project");
+      packageArguments.push_back(std::string(
+        reinterpret_cast<const char*>(projectPath.data()), projectPath.size()));
+    }
+    if (manifest.app.launchApps) {
+      // Every installed application, read-only at /apps/<id>, so the
+      // launcher (an editor) can read their behaviour schemas.
+      launchApps = true;
+      std::vector<std::string> seen;
+      std::vector<std::string> appWarnings;
+      const std::vector<LoadedPackage> installed = PackageMounts::discover(
+        runtimeDirectory() / "apps", ceilings, seen, appWarnings);
+      if (!PackageMounts::mountApplications(*vfs, installed, error)) {
+        Logger::LogError("Cannot mount the installed applications: " + error);
+        return nullptr;
+      }
+      for (const LoadedPackage& installedApp : installed) {
+        if (installedApp.manifest.kind == PackageKind::App) {
+          launchable.push_back(installedApp.manifest.id);
+        }
+      }
+      for (const std::string& warning : appWarnings) {
+        Logger::LogWarning(warning);
+      }
+      Logger::LogInfo(std::to_string(launchable.size()) +
+                      " installed applications mounted at /apps");
     }
     game = readPackageModule(*vfs, manifest.app.module);
     if (!workerRequested && !manifest.app.worker.empty()) {
@@ -584,6 +623,17 @@ prepareShell(Illumo& illumo)
     guest->setAudio(audio.get());
   } else {
     Logger::LogTrace("Audio disabled for capture and benchmark runs");
+  }
+  // An application allowed to launch others does so in child processes;
+  // captures and benchmarks stay one process.
+  if (launchApps && capture.empty() && bench.frames == 0) {
+    const std::filesystem::path play =
+      std::filesystem::temp_directory_path() /
+      ("illumo-play-" + application + "-" +
+       std::to_string(
+         std::chrono::steady_clock::now().time_since_epoch().count()));
+    guest->setAppLauncher(std::make_unique<RuntimeAppLauncher>(
+      std::move(launchable), play, std::move(packageArguments)));
   }
   // An application may ask to relaunch (settings read at startup); a capture
   // or benchmark run closes instead so its caller sees one process.

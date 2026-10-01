@@ -3,6 +3,7 @@
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Services/FileTreeSource.h>
+#include <Illumo/Wasm/AppLauncher.h>
 #include <Illumo/Wasm/WasmFrameRenderer.h>
 #include <Illumo/Wasm/WasmGameServices.h>
 #include <Illumo/Wasm/WasmGuest.h>
@@ -59,6 +60,13 @@ public:
   // this program. Null, the default, withholds the capability (tests,
   // capture, benchmarks). Call before start.
   void setAudio(IAudio* audio) { m_audio = audio; }
+  // Starts other installed applications for the guest (Launch capability),
+  // owned. Null, the default, withholds the capability; so does a launcher
+  // that is not available. Call before start.
+  void setAppLauncher(std::unique_ptr<IAppLauncher> launcher)
+  {
+    m_launcher = std::move(launcher);
+  }
   // Whether a guest's restart request (GuestUpdateFlags::RequestRestart,
   // Display grant required) relaunches the application after it closes.
   // Off by default (tests, capture, benchmarks): the request then only
@@ -97,6 +105,8 @@ private:
   WasmGuest m_guest;
   std::unique_ptr<WasmGuest> m_mod;
   std::unique_ptr<WasmFrameRenderer> m_frames;
+  // Before the services, which borrow it until they are destroyed.
+  std::unique_ptr<IAppLauncher> m_launcher;
   std::unique_ptr<WasmGameServices> m_services;
   ISurfaceWindowFactory* m_surfaceWindows = &PlatformSurfaceWindows();
   std::unique_ptr<WasmPanelWindows> m_windows;

@@ -298,6 +298,8 @@ Ruleset truth:
 | World meshes, overlay primitives, animation | `Illumo/Source/Rendering/Primitives/*` (`MeshVisual`, `GameVisual`) |
 | GUI subsystem, dialogs, and atlas helpers | `Illumo/Include/Illumo/Gui/*`, `Illumo/Source/Gui/*` (`GuiKit`, `GuiDialog`, `GridAtlas`, `GuiToolStyle`, `GuiPanelDock`, `GuiPanelPointer`, `PanelSurfaces.h`) |
 | Detached panel windows (host) | `Illumo/Source/Wasm/WasmPanelWindows.*`, `Illumo/Include/Illumo/Platform/SurfaceWindow.h`, `IllumoGuest/Include/IllumoGuest/{Windows,PanelSurfaces}.h` |
+| Launching other apps (Play in a window) | `Illumo/Include/Illumo/Wasm/{AppLauncher,RuntimeAppLauncher}.h`, `Illumo/Source/Wasm/RuntimeAppLauncher.cpp`, `Illumo/Include/Illumo/Platform/ChildProcess.h`, platform `*ChildProcess.cpp`, `IllumoGuest/Include/IllumoGuest/Launcher.h` |
+| Scene behaviours and playing a scene | `Illumo/Include/Illumo/Content/{BehaviourSchema,SceneBehaviours}.h`, `IllumoGuest/Include/IllumoGuest/PlayProgram.h`, `Playground/*` |
 | Debug renderer atlas and shader | `Illumo/Assets/RendererDemo/*` |
 | Production backend factories and selection | `Illumo/Source/Rendering/OpenGL/CreateOpenGLBackend.*`, `Illumo/Source/Rendering/Vulkan/CreateVulkanBackend.*`, `Illumo/Source/Rendering/D3D12/CreateD3D12Backend.*`, `Illumo/Source/Rendering/BackendConfig.h` (composed in `Engine/Illumo.cpp`) |
 | Real graphics execution | `Illumo/Source/Rendering/OpenGL/*`, `Illumo/Source/Rendering/Vulkan/*`, `Illumo/Source/Rendering/D3D12/*`, shared explicit-API pieces in `Illumo/Source/Rendering/Gpu/*` (dependencies in `Illumo/cmake/IllumoVulkanDeps.cmake` and `IllumoD3D12Deps.cmake`) |
@@ -311,7 +313,7 @@ Ruleset truth:
 | IllEd package entry and platform seam | `IllEd/Source/Wasm/EditorApplication.cpp`, `IllEd/Source/IllEdPlatform.h`, `IllEd/illumo.json` |
 | IllMeshViewer package entry and platform seam | `IllMeshViewer/Source/Wasm/ViewerApplication.cpp`, `IllMeshViewer/Source/MeshViewerPlatform.h`, `IllMeshViewer/illumo.json` |
 | Runtime command line and capture mode | `Illumo/Source/Wasm/RuntimeApplication.cpp` |
-| Tests | `Illumo/Tests/*`, `IllumoGame/Tests/*`, `IllEd/Tests/*`, `IllMeshViewer/Tests/*` |
+| Tests | `Illumo/Tests/*`, `IllumoGame/Tests/*`, `IllEd/Tests/*`, `IllMeshViewer/Tests/*`, `Playground/Tests/*` |
 | Canonical architecture | `docs/architecture-consensus.md` |
 | Formal decisions | `docs/latex/sections/09-design-decision-log.tex` |
 

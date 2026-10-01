@@ -10,6 +10,7 @@
 
 struct GuestAudioRequest;
 
+class IAppLauncher;
 class IRenderWindow;
 class WasmPanelWindows;
 class IEnvVars;
@@ -72,6 +73,10 @@ public:
   // every audio request. Replacing it releases the guest's sounds first.
   // The output must outlive these services or be withdrawn with null.
   void setAudio(IAudio* audio);
+  // Application launches for the LaunchApp service (Launch capability),
+  // borrowed; null rejects every launch request. cancel() stops the launched
+  // application.
+  void setLauncher(IAppLauncher* launcher) { m_launcher = launcher; }
   // Most samples one guest may keep registered or arriving (128 MiB of float
   // samples: two maximal clips).
   static constexpr std::size_t kMaximumGuestSamples = 32u * 1024u * 1024u;
@@ -94,6 +99,7 @@ private:
   bool completeDialog(GuestServices& results);
   bool completeConsole(GuestServices& results);
   void completeWindows(GuestServices& results);
+  void completeLaunches(GuestServices& results);
   // Audio requests run at once; each completes Complete or Rejected.
   void completeAudio(std::uint64_t request,
                      GuestAudioRequest& audio,
@@ -121,6 +127,8 @@ private:
   std::deque<GuestServiceRecord> m_consoleRequests;
   std::deque<GuestServiceRecord> m_windowRequests;
   WasmPanelWindows* m_windows = nullptr;
+  std::deque<GuestServiceRecord> m_launchRequests;
+  IAppLauncher* m_launcher = nullptr;
   IAudio* m_audio = nullptr;
   // Guest sound id to the output's sound, plus that sound's sample count.
   struct AudioSound
