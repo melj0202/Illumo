@@ -191,9 +191,12 @@ pointer positions into rays and deltas into transforms.
   reference; at most 4 MiB. Untagged or foreign text is refused.
   `EditorDocument::paste` inserts after the primary selection as one command,
   gives every node a fresh id, reuses identical assets and renames
-  conflicting asset ids (`tex_2`). Ids inside namespaced data are not
-  remapped, and asset paths are not rewritten between packages. Duplicate
-  (Ctrl+D) copies each subtree next to its original.
+  conflicting asset ids (`tex_2`). Inside a known behaviour, `node` fields
+  that name a pasted node and `asset` fields that name a renamed asset
+  follow them; other namespaced data is not remapped, and asset paths are
+  not rewritten between packages. Duplicate (Ctrl+D) copies each subtree next
+  to its original, its behaviours' `node` fields following the copy when they
+  name a node inside it.
 - **Hierarchy** (`EditorSceneGraphView`): only rows inside the row window are
   drawn or hit; the wheel scrolls it (with a thumb), a drag near its edges
   auto-scrolls, and a new primary selection unfolds its ancestors and scrolls
@@ -229,7 +232,18 @@ Fields are rebuilt from the document every frame.
   region. Each core component has a Remove button, and an Add component
   section adds a Shape, Mesh, Sprite, Light or Camera the node does not have
   yet (Mesh and Sprite only when a compatible asset exists, starting on the
-  first); namespaced components are read-only.
+  first).
+- **Behaviours** (D-E35): `EditorBehaviours` reads every `behaviours.json`
+  under `/apps/<id>` (installed apps), `/packages/<id>` and `/project` when
+  the editor starts. A namespaced component whose type one describes shows a
+  section of typed fields: numbers and integers (clamped to the field's
+  range), toggles, text, colors (four bytes), vectors (X, Y, Z), choices,
+  asset references (asset-table entries, optionally of some types) and node
+  references (any node of the scene), each with "(none)" for an empty
+  reference, plus Remove. Add behaviour lists every known behaviour the node
+  does not hold and inserts its defaults. Edits re-encode the data
+  canonically and keep members the description does not name. Components of
+  unknown types stay read-only JSON.
 - With nothing selected: the scene's world mode and metadata (title, author,
   a description of up to 4096 bytes), the environment (skybox as a choice
   among cubemap assets or none, its tint while one is set, ambient color, and
@@ -259,7 +273,7 @@ Fields are rebuilt from the document every frame.
   Mesh or Sprite component to a node once the scene holds such an asset.
 - **Asset browser** (`EditorAssetBrowser`, over `GuiFileTree`): docked below
   the hierarchy (38% of the left column), it lists the virtual file tree
-  (`/app`, `/engine`, `/packages/<id>`, `/project`) through
+  (`/app`, `/apps/<id>`, `/engine`, `/packages/<id>`, `/project`) through
   `IllEdPlatform::listDirectory`. Directories expand in place; the panel
   scrolls; a double-clicked scene opens (with the usual unsaved-changes
   confirmation). `EditorAssets::kindFor` treats `.obj` as a mesh, PNG, JPEG,
@@ -343,7 +357,9 @@ package. Completions may arrive synchronously or on a later update.
 every command, sibling order after delete, drag merging, byte cap, dirty
 cursor), `IllEd.Document.*`, `IllEd.Module.*` (including `CameraDoesNotDirty`,
 `NewNodeParentsToRoot`, `ShortcutsMatchMenus`, `KeyboardUndoRedo`),
-`IllEd.Inspector.*`, `IllEd.Gizmo.*` (axis projection, ring angles, scale,
+`IllEd.Inspector.*`, `IllEd.Behaviours.*` (typed fields, add and remove,
+reference remap on duplicate and paste, discovery), `IllEd.Gizmo.*` (axis
+projection, ring angles, scale,
 local space, real pointer drags, snapping under a rotated parent, frame
 selection), `IllEd.Selection.BoxSelect2D`/`BoxSelect3D`, `IllEd.Clipboard.*`
 (id remap round trip, foreign or oversize text, paste position),

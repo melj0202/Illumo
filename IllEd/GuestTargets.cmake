@@ -7,6 +7,7 @@ illumo_add_guest(IllEd
   "${_illed}/Wasm/EditorApplication.cpp"
   "${_illed}/EditorAssetBrowser.cpp"
   "${_illed}/EditorAssets.cpp"
+  "${_illed}/EditorBehaviours.cpp"
   "${_illed}/EditorClipboard.cpp"
   "${_illed}/EditorConfirmDialog.cpp"
   "${_illed}/EditorDocument.cpp"

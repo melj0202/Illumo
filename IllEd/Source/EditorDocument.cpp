@@ -860,13 +860,17 @@ EditorDocument::duplicate(const std::vector<std::string>& roots)
     const std::string after = m_scene->nextSiblingId(root);
     std::string error;
     bool first = true;
+    std::vector<std::string> copied;
     for (const SceneNode& copy : copies) {
       EditorNodeState absent;
       absent.id = copy.id;
       before.push_back(absent);
       m_scene->insertNode(copy, first ? after : std::string(), error);
+      copied.push_back(copy.id);
       first = false;
     }
+    // References inside the subtree follow the copy; others stay.
+    remapBehaviours(copied, mapped, {});
     created.push_back(copies.front().id);
   }
   if (created.empty()) {
@@ -888,6 +892,62 @@ remapAssetReference(std::string& reference,
     mapped.find(reference);
   if (found != mapped.end()) {
     reference = found->second;
+  }
+}
+
+void
+EditorDocument::remapBehaviours(
+  const std::vector<std::string>& copies,
+  const std::unordered_map<std::string, std::string>& nodeIds,
+  const std::unordered_map<std::string, std::string>& assetIds)
+{
+  if (m_behaviours == nullptr || m_behaviours->empty()) {
+    return;
+  }
+  for (const std::string& id : copies) {
+    const SceneNode* node = m_scene->findNode(id);
+    if (node == nullptr) {
+      continue;
+    }
+    std::vector<SceneComponent> components = node->components;
+    bool changed = false;
+    for (SceneComponent& component : components) {
+      SceneOpaqueComponent* opaque =
+        std::get_if<SceneOpaqueComponent>(&component.value);
+      const BehaviourType* type =
+        opaque != nullptr ? m_behaviours->find(opaque->type) : nullptr;
+      if (type == nullptr) {
+        continue;
+      }
+      BehaviourValues values =
+        BehaviourSchema::decode(*type, opaque->data, nullptr);
+      bool touched = false;
+      for (const BehaviourField& field : type->fields) {
+        if (field.kind != BehaviourFieldKind::Node &&
+            field.kind != BehaviourFieldKind::Asset) {
+          continue;
+        }
+        const BehaviourValue* value = values.find(field.name);
+        const std::unordered_map<std::string, std::string>& mapped =
+          field.kind == BehaviourFieldKind::Node ? nodeIds : assetIds;
+        const std::unordered_map<std::string, std::string>::const_iterator
+          found = value != nullptr ? mapped.find(value->text) : mapped.end();
+        if (found != mapped.end()) {
+          BehaviourValue renamed = *value;
+          renamed.text = found->second;
+          values.set(field.name, renamed);
+          touched = true;
+        }
+      }
+      if (touched) {
+        opaque->data = BehaviourSchema::encode(*type, values, opaque->data);
+        changed = true;
+      }
+    }
+    std::string error;
+    if (changed) {
+      m_scene->setComponents(id, components, error);
+    }
   }
 }
 
@@ -992,6 +1052,8 @@ EditorDocument::paste(const SceneDocument& fragment,
   for (const EditorNodeState& state : before) {
     ids.push_back(state.id);
   }
+  // Every id is known now, so references to later nodes resolve too.
+  remapBehaviours(ids, nodeIds, assetIds);
   command.after = captureAll(ids);
   if (assetsChanged) {
     command.hasSettings = true;

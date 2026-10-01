@@ -73,6 +73,7 @@ EditorScene::start(IllumoContext& startContext)
     std::make_unique<EditorAssetBrowser>(ic->window, ic->renderer);
   m_tools = std::make_unique<EditorToolsPanel>(ic->window, ic->renderer);
   m_inspector = std::make_unique<EditorInspector>(ic->window, ic->renderer);
+  m_inspector->setBehaviours(&m_behaviours);
   m_confirm = std::make_unique<EditorConfirmDialog>(ic->window, ic->renderer);
 
   syncFontSize();
@@ -98,6 +99,9 @@ EditorScene::start(IllumoContext& startContext)
   m_document.setAssetManager(ic->assetManager);
   m_document.setRenderer(ic->renderer);
   m_document.setRenderWorld(world());
+  m_document.setBehaviourSchema(&m_behaviours.schema());
+  // Behaviour descriptions from installed apps, packages and the project.
+  m_behaviours.discover();
   // New documents belong to the mounted project, when there is one.
   m_document.rebase(documentRoot({}));
   m_grid = std::make_unique<MeshVisual>();

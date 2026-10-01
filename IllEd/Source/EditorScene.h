@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorAssetBrowser.h"
+#include "EditorBehaviours.h"
 #include "EditorConfirmDialog.h"
 #include "EditorDocument.h"
 #include "EditorGizmo.h"
@@ -62,6 +63,8 @@ public:
 private:
   // The services this scene started with.
   IllumoContext* ic{ nullptr };
+  // Before the document, which borrows its schema.
+  EditorBehaviours m_behaviours;
   EditorDocument m_document;
   EditorSelection m_selection;
   std::unique_ptr<EditorToolbar> m_toolbar;

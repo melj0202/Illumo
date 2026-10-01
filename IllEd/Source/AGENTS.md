@@ -47,7 +47,9 @@ oracle suite.
 - Copy/paste goes through `EditorClipboard`: an `.ilsc` format 2 fragment
   tagged `illed.fragment`, at most 4 MiB, roots stored at their world pose.
   `EditorDocument::paste` remaps every id and merges assets (reuse identical,
-  rename conflicting) as one command. Never paste untagged text.
+  rename conflicting) as one command. Never paste untagged text. Known
+  behaviours' `node` and `asset` fields follow the copy too (paste and
+  duplicate; a reference outside the copied set stays).
 - The hierarchy panel draws and hits only rows inside its row window; fold,
   eye, drop-before/into/after, Shift ranges, the filter field and the
   context menu live in `EditorSceneGraphView`, which hands menu choices to
@@ -59,6 +61,14 @@ oracle suite.
   `SceneInstance` refuse it (the field stays invalid). Asset-table edits go
   through `EditorDocument::setAssets` as settings commands; asset fields are
   keyed `asset.<property>:<asset id>`.
+- Scene behaviours (D-E35): `EditorBehaviours` reads every
+  `behaviours.json` under `/apps/<id>` (installed apps; IllEd's manifest sets
+  `launchApps`, so the runtime mounts them), `/packages/<id>` and `/project`
+  when the scene starts. A known behaviour component shows typed fields keyed
+  `behaviour:<type>:<field>[:<axis>]` and decodes/encodes through
+  `BehaviourSchema` (canonical data, unknown members kept); Add behaviour
+  inserts every default. Unknown types stay read-only JSON. The apps that
+  ship a `behaviours.json` are the games a scene can play with.
 - The Tools panel only issues `EditorCommand`s (settings are steppers over
   fixed ladders); it never takes typing. Grid and snap settings are editor
   view state and never dirty the document.

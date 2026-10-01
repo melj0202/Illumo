@@ -18,6 +18,8 @@ registerEditorGizmoTests(IllumoTestRegistry& registry);
 void
 registerEditorInspectorTests(IllumoTestRegistry& registry);
 void
+registerEditorBehaviourTests(IllumoTestRegistry& registry);
+void
 registerEditorDocumentTests(IllumoTestRegistry& registry);
 void
 registerIllEdConfigTests(IllumoTestRegistry& registry);
@@ -43,6 +45,7 @@ createRegistry()
   registerEditorAssetsTests(registry);
   registerEditorGizmoTests(registry);
   registerEditorInspectorTests(registry);
+  registerEditorBehaviourTests(registry);
   registerEditorDocumentTests(registry);
   registerIllEdConfigTests(registry);
   registerEditorToolbarTests(registry);

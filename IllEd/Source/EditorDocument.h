@@ -2,6 +2,7 @@
 
 #include "EditorHistory.h"
 #include "EditorSelection.h"
+#include <Illumo/Content/BehaviourSchema.h>
 #include <Illumo/Content/SceneDocument.h>
 #include <Illumo/Content/SceneInstance.h>
 #include <Illumo/Scene/SceneGraph.h>
@@ -9,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class AssetManager;
@@ -198,6 +200,13 @@ public:
   bool setAssets(const std::vector<SceneAsset>& assets,
                  const std::string& label,
                  const std::string& mergeKey = {});
+  // Known behaviours, borrowed: their Node fields that name a copied node
+  // follow the copy on duplicate and paste, and their Asset fields follow a
+  // renamed pasted asset. Null leaves behaviour data as it is.
+  void setBehaviourSchema(const BehaviourSchema* schema)
+  {
+    m_behaviours = schema;
+  }
   // Copies each subtree next to its original; returns the new root ids.
   std::vector<std::string> duplicate(const std::vector<std::string>& ids);
   // Adds a mesh (.obj) or texture file from the virtual file tree as an asset
@@ -239,12 +248,19 @@ private:
   // The scene every edit goes to: m_owned or the borrowed one.
   SceneInstance* m_scene = nullptr;
   uint64_t m_sceneGeneration = 0;
+  const BehaviourSchema* m_behaviours = nullptr;
   EditorHistory m_history;
   std::string m_path;
   std::string m_label;
   uint64_t m_savedUid = 0;
 
   std::unique_ptr<SceneInstance> makeScene() const;
+  // Rewrites the copied nodes' behaviour references (see
+  // setBehaviourSchema) through the old-to-new id maps.
+  void remapBehaviours(
+    const std::vector<std::string>& copies,
+    const std::unordered_map<std::string, std::string>& nodeIds,
+    const std::unordered_map<std::string, std::string>& assetIds);
   std::vector<EditorNodeState> captureAll(
     const std::vector<std::string>& ids) const;
   // Records the change between before and the current state of the same ids,

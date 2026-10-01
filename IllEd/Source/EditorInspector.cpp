@@ -369,6 +369,143 @@ resolveEnvironment(SceneEnvironment& environment, const std::string& key)
 }
 
 // ---------------------------------------------------------------------------
+// Behaviour fields: "behaviour:<type>:<field>", plus ":<axis>" for a vector
+// or color part. Types and field names never hold a colon.
+
+struct BehaviourKey
+{
+  std::string type;
+  std::string field;
+  char axis = '\0';
+};
+
+static bool
+splitBehaviourKey(const std::string& key, BehaviourKey* parts)
+{
+  const std::string prefix = "behaviour:";
+  if (!key.starts_with(prefix)) {
+    return false;
+  }
+  const size_t typeEnd = key.find(':', prefix.size());
+  if (typeEnd == std::string::npos) {
+    return false;
+  }
+  const size_t fieldEnd = key.find(':', typeEnd + 1);
+  parts->type = key.substr(prefix.size(), typeEnd - prefix.size());
+  parts->field = key.substr(
+    typeEnd + 1,
+    fieldEnd == std::string::npos ? std::string::npos : fieldEnd - typeEnd - 1);
+  parts->axis = fieldEnd == std::string::npos || fieldEnd + 1 >= key.size()
+                  ? '\0'
+                  : key[fieldEnd + 1];
+  return !parts->type.empty() && !parts->field.empty();
+}
+
+static const SceneOpaqueComponent*
+behaviourOf(const SceneNode& node, const std::string& type)
+{
+  for (const SceneComponent& component : node.components) {
+    const SceneOpaqueComponent* opaque =
+      std::get_if<SceneOpaqueComponent>(&component.value);
+    if (opaque != nullptr && opaque->type == type) {
+      return opaque;
+    }
+  }
+  return nullptr;
+}
+
+static SceneOpaqueComponent*
+behaviourOf(SceneNode& node, const std::string& type)
+{
+  for (SceneComponent& component : node.components) {
+    SceneOpaqueComponent* opaque =
+      std::get_if<SceneOpaqueComponent>(&component.value);
+    if (opaque != nullptr && opaque->type == type) {
+      return opaque;
+    }
+  }
+  return nullptr;
+}
+
+// The number a Number, Integer, vector part or color byte field shows.
+static bool
+behaviourNumber(const BehaviourValue& value, char axis, double* number)
+{
+  switch (value.kind) {
+    case BehaviourFieldKind::Number:
+    case BehaviourFieldKind::Integer:
+      *number = value.number;
+      return true;
+    case BehaviourFieldKind::Vector3:
+      if (axis != 'x' && axis != 'y' && axis != 'z') {
+        return false;
+      }
+      *number = value.vector[axisIndex(axis)];
+      return true;
+    case BehaviourFieldKind::Color: {
+      ColorRgba color = value.color;
+      *number = *colorByte(color, axis);
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+// Writes a number into a field's value, within the field's limits.
+static bool
+setBehaviourNumber(BehaviourValue& value,
+                   const BehaviourField& field,
+                   char axis,
+                   double number)
+{
+  if (!std::isfinite(number)) {
+    return false;
+  }
+  switch (value.kind) {
+    case BehaviourFieldKind::Integer:
+      number = std::round(number);
+      [[fallthrough]];
+    case BehaviourFieldKind::Number:
+      if (field.hasMinimum) {
+        number = std::max(number, field.minimum);
+      }
+      if (field.hasMaximum) {
+        number = std::min(number, field.maximum);
+      }
+      value.number = number;
+      return true;
+    case BehaviourFieldKind::Vector3:
+      if (axis != 'x' && axis != 'y' && axis != 'z') {
+        return false;
+      }
+      value.vector[axisIndex(axis)] =
+        static_cast<float>(std::clamp(number, -1.0e9, 1.0e9));
+      return true;
+    case BehaviourFieldKind::Color:
+      *colorByte(value.color, axis) =
+        static_cast<unsigned char>(std::lround(std::clamp(number, 0.0, 255.0)));
+      return true;
+    default:
+      return false;
+  }
+}
+
+// How a field part shows, for mixed-selection comparison.
+static std::string
+behaviourText(const BehaviourValue& value, char axis)
+{
+  double number = 0.0;
+  if (behaviourNumber(value, axis, &number)) {
+    return formatNumber(number);
+  }
+  if (value.kind == BehaviourFieldKind::Bool) {
+    return value.flag ? "On" : "Off";
+  }
+  return value.text;
+}
+
+// ---------------------------------------------------------------------------
 
 EditorInspector::EditorInspector(IRenderWindow* window, Renderer* renderer)
   : m_window(window)
@@ -455,12 +592,15 @@ void
 EditorInspector::refreshFields(const EditorDocument& document,
                                const EditorSelection& selection)
 {
-  // The fields derive only from the document's scene and the selection.
-  // While those are unchanged the built fields (their strings and
-  // callbacks) are kept instead of rebuilt every frame.
+  // The fields derive only from the document's scene, the selection and the
+  // known behaviours. While those are unchanged the built fields (their
+  // strings and callbacks) are kept instead of rebuilt every frame.
+  const uint64_t behaviours =
+    m_behaviours != nullptr ? m_behaviours->revision() : 0u;
   if (m_fieldsBuilt && m_fieldsDocument == &document &&
       m_fieldsGeneration == document.sceneGeneration() &&
       m_fieldsRevision == document.revision() &&
+      m_fieldsBehaviours == behaviours &&
       m_fieldsPrimary == selection.primary() &&
       m_fieldsSelection == selection.ids()) {
     return;
@@ -470,6 +610,7 @@ EditorInspector::refreshFields(const EditorDocument& document,
   m_fieldsDocument = &document;
   m_fieldsGeneration = document.sceneGeneration();
   m_fieldsRevision = document.revision();
+  m_fieldsBehaviours = behaviours;
   m_fieldsPrimary = selection.primary();
   m_fieldsSelection = selection.ids();
 }
@@ -516,6 +657,151 @@ readOnly(const std::string& key, const char* label, const std::string& value)
   field.kind = InspectorFieldKind::ReadOnly;
   field.value = value;
   return field;
+}
+
+// A known behaviour component: one typed field per described field, mixed
+// where other selected nodes holding the behaviour disagree, then Remove.
+// Edits reach every selected node that holds the behaviour.
+static void
+buildBehaviourFields(const BehaviourType& type,
+                     const SceneOpaqueComponent& component,
+                     const std::vector<const SceneNode*>& nodes,
+                     const SceneDocument& scene,
+                     const InspectorSection& section,
+                     const InspectorRowAdder& row)
+{
+  section(type.title);
+  const BehaviourValues values =
+    BehaviourSchema::decode(type, component.data, nullptr);
+  std::vector<BehaviourValues> others;
+  for (const SceneNode* node : nodes) {
+    const SceneOpaqueComponent* other = behaviourOf(*node, type.type);
+    if (other != nullptr && other != &component) {
+      others.push_back(BehaviourSchema::decode(type, other->data, nullptr));
+    }
+  }
+  for (const BehaviourField& described : type.fields) {
+    const BehaviourValue* value = values.find(described.name);
+    if (value == nullptr) {
+      continue;
+    }
+    const std::string base = "behaviour:" + type.type + ":" + described.name;
+    const std::function<InspectorField(char, const char*)> make =
+      [&](char axis, const char* label) {
+        InspectorField field;
+        field.key = axis == '\0' ? base : base + ":" + std::string(1, axis);
+        field.label = label;
+        field.value = behaviourText(*value, axis);
+        for (const BehaviourValues& other : others) {
+          const BehaviourValue* theirs = other.find(described.name);
+          field.mixed = field.mixed || theirs == nullptr ||
+                        behaviourText(*theirs, axis) != field.value;
+        }
+        return field;
+      };
+    std::vector<InspectorField> fields;
+    switch (described.kind) {
+      case BehaviourFieldKind::Number:
+      case BehaviourFieldKind::Integer: {
+        InspectorField field = make('\0', "Value");
+        field.kind = InspectorFieldKind::Number;
+        field.integer = described.kind == BehaviourFieldKind::Integer;
+        field.step =
+          field.integer ? 0.1f
+          : described.hasMinimum && described.hasMaximum
+            ? static_cast<float>(std::clamp(
+                (described.maximum - described.minimum) / 400.0, 0.001, 10.0))
+            : 0.05f;
+        fields.push_back(field);
+        break;
+      }
+      case BehaviourFieldKind::Vector3:
+        for (const char* axis : { "x", "y", "z" }) {
+          InspectorField field = make(axis[0],
+                                      axis[0] == 'x'   ? "X"
+                                      : axis[0] == 'y' ? "Y"
+                                                       : "Z");
+          field.kind = InspectorFieldKind::Number;
+          fields.push_back(field);
+        }
+        break;
+      case BehaviourFieldKind::Color:
+        for (const char* channel : { "r", "g", "b", "a" }) {
+          InspectorField field = make(channel[0],
+                                      channel[0] == 'r'   ? "R"
+                                      : channel[0] == 'g' ? "G"
+                                      : channel[0] == 'b' ? "B"
+                                                          : "A");
+          field.kind = InspectorFieldKind::Number;
+          field.integer = true;
+          field.step = 1.0f;
+          fields.push_back(field);
+        }
+        break;
+      case BehaviourFieldKind::Bool: {
+        InspectorField field = make('\0', "Value");
+        field.kind = InspectorFieldKind::Toggle;
+        field.toggle = value->flag;
+        fields.push_back(field);
+        break;
+      }
+      case BehaviourFieldKind::Text: {
+        InspectorField field = make('\0', "Text");
+        field.kind = InspectorFieldKind::Text;
+        field.maxBytes = 1024;
+        fields.push_back(field);
+        break;
+      }
+      case BehaviourFieldKind::Choice:
+      case BehaviourFieldKind::Asset:
+      case BehaviourFieldKind::Node: {
+        // Asset and Node references start with "(none)"; a reference to a
+        // missing entry stays visible as its own choice.
+        InspectorField field = make('\0', "Value");
+        field.kind = InspectorFieldKind::Choice;
+        if (described.kind == BehaviourFieldKind::Choice) {
+          field.choices = described.options;
+        } else {
+          field.choices.push_back(kNoAsset);
+          if (described.kind == BehaviourFieldKind::Asset) {
+            for (const SceneAsset& asset : scene.assets) {
+              if (described.assetTypes.empty() ||
+                  std::find(described.assetTypes.begin(),
+                            described.assetTypes.end(),
+                            asset.type) != described.assetTypes.end()) {
+                field.choices.push_back(asset.id);
+              }
+            }
+          } else {
+            for (const SceneNode& node : scene.nodes) {
+              field.choices.push_back(node.id);
+            }
+          }
+        }
+        const std::string current =
+          value->text.empty() && described.kind != BehaviourFieldKind::Choice
+            ? std::string(kNoAsset)
+            : value->text;
+        std::vector<std::string>::const_iterator found =
+          std::find(field.choices.begin(), field.choices.end(), current);
+        if (found == field.choices.end()) {
+          field.choices.push_back(current);
+          found = field.choices.end() - 1;
+        }
+        field.choice = static_cast<int>(found - field.choices.begin());
+        field.value = current;
+        fields.push_back(field);
+        break;
+      }
+    }
+    row(described.title, fields);
+  }
+  InspectorField remove;
+  remove.key = "behaviour.remove:" + type.type;
+  remove.label = "Remove";
+  remove.kind = InspectorFieldKind::Button;
+  remove.value = "Remove";
+  row("", { remove });
 }
 
 // The scene view's asset table: one section per entry with its import and
@@ -960,13 +1246,20 @@ EditorInspector::buildFields(const EditorDocument& document,
       row("", { button("component.remove.camera", "Remove") });
     } else if (const SceneOpaqueComponent* opaque =
                  std::get_if<SceneOpaqueComponent>(&component.value)) {
-      section(opaque->type);
-      InspectorField data;
-      data.key = "opaque." + opaque->type;
-      data.label = "Data";
-      data.kind = InspectorFieldKind::ReadOnly;
-      data.value = opaque->data;
-      row("Data", { data });
+      const BehaviourType* type = m_behaviours != nullptr
+                                    ? m_behaviours->schema().find(opaque->type)
+                                    : nullptr;
+      if (type == nullptr) {
+        section(opaque->type);
+        InspectorField data;
+        data.key = "opaque." + opaque->type;
+        data.label = "Data";
+        data.kind = InspectorFieldKind::ReadOnly;
+        data.value = opaque->data;
+        row("Data", { data });
+        continue;
+      }
+      buildBehaviourFields(*type, *opaque, nodes, scene, section, row);
     }
   }
   section("Add component");
@@ -1002,10 +1295,80 @@ EditorInspector::buildFields(const EditorDocument& document,
           adds.begin() + static_cast<std::ptrdiff_t>(start),
           adds.begin() + static_cast<std::ptrdiff_t>(end)));
   }
+  // Every known behaviour the node does not hold yet, with its defaults.
+  std::vector<InspectorField> behaviours;
+  if (m_behaviours != nullptr) {
+    for (const BehaviourType& type : m_behaviours->schema().types()) {
+      if (behaviourOf(*primary, type.type) == nullptr) {
+        behaviours.push_back(
+          button("behaviour.add:" + type.type, type.title.c_str()));
+      }
+    }
+  }
+  if (!behaviours.empty()) {
+    section("Add behaviour");
+  }
+  for (size_t start = 0; start < behaviours.size(); start += 3) {
+    const size_t end = std::min(behaviours.size(), start + 3);
+    row("",
+        std::vector<InspectorField>(
+          behaviours.begin() + static_cast<std::ptrdiff_t>(start),
+          behaviours.begin() + static_cast<std::ptrdiff_t>(end)));
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Applying edits.
+
+bool
+EditorInspector::applyBehaviour(
+  const std::string& key,
+  const std::function<bool(BehaviourValue&, const BehaviourField&, char)>&
+    change,
+  const std::string& mergeKey,
+  EditorDocument& document,
+  const EditorSelection& selection)
+{
+  BehaviourKey parts;
+  if (m_behaviours == nullptr || !splitBehaviourKey(key, &parts)) {
+    return false;
+  }
+  const BehaviourType* type = m_behaviours->schema().find(parts.type);
+  const BehaviourField* field =
+    type != nullptr ? type->field(parts.field) : nullptr;
+  if (field == nullptr) {
+    return false;
+  }
+  return document.editNodes(
+    selection.ids(),
+    "Set " + type->title + " " + field->title,
+    mergeKey,
+    [type, field, &parts, &change](SceneNode& node) {
+      SceneOpaqueComponent* component = behaviourOf(node, type->type);
+      if (component == nullptr) {
+        return false;
+      }
+      BehaviourValues values =
+        BehaviourSchema::decode(*type, component->data, nullptr);
+      const BehaviourValue* current = values.find(field->name);
+      if (current == nullptr) {
+        return false;
+      }
+      BehaviourValue next = *current;
+      if (!change(next, *field, parts.axis) ||
+          behaviourValuesEqual(next, *current)) {
+        return false;
+      }
+      values.set(field->name, next);
+      const std::string data =
+        BehaviourSchema::encode(*type, values, component->data);
+      if (data == component->data) {
+        return false;
+      }
+      component->data = data;
+      return true;
+    });
+}
 
 bool
 EditorInspector::applyNumber(const std::string& key,
@@ -1015,6 +1378,20 @@ EditorInspector::applyNumber(const std::string& key,
                              EditorDocument& document,
                              const EditorSelection& selection)
 {
+  if (key.starts_with("behaviour:")) {
+    return applyBehaviour(
+      key,
+      [value, relative](
+        BehaviourValue& target, const BehaviourField& field, char axis) {
+        double current = 0.0;
+        return behaviourNumber(target, axis, &current) &&
+               setBehaviourNumber(
+                 target, field, axis, relative ? current + value : value);
+      },
+      mergeKey,
+      document,
+      selection);
+  }
   if (key.starts_with("env.")) {
     SceneEnvironment environment = document.scene().document().environment;
     float* slot = resolveEnvironment(environment, key);
@@ -1090,6 +1467,22 @@ EditorInspector::applyText(const std::string& key,
         return true;
       });
   }
+  const InspectorField* shown = field(key);
+  if (key.starts_with("behaviour:") && shown != nullptr &&
+      shown->kind == InspectorFieldKind::Text) {
+    return applyBehaviour(
+      key,
+      [&text](BehaviourValue& target, const BehaviourField&, char) {
+        if (target.kind != BehaviourFieldKind::Text) {
+          return false;
+        }
+        target.text = text;
+        return true;
+      },
+      {},
+      document,
+      selection);
+  }
   double value = 0.0;
   if (!parseNumber(text, &value)) {
     return false;
@@ -1125,7 +1518,22 @@ EditorInspector::activate(const InspectorField& target,
     return beginEdit(target);
   }
   if (target.kind == InspectorFieldKind::Toggle) {
-    const bool next = !target.toggle;
+    // A mixed toggle turns every node on first.
+    const bool next = target.mixed || !target.toggle;
+    if (key.starts_with("behaviour:")) {
+      return applyBehaviour(
+        key,
+        [next](BehaviourValue& value, const BehaviourField&, char) {
+          if (value.kind != BehaviourFieldKind::Bool) {
+            return false;
+          }
+          value.flag = next;
+          return true;
+        },
+        {},
+        document,
+        selection);
+    }
     if (assetField) {
       return editAsset(document,
                        assetId,
@@ -1196,6 +1604,26 @@ EditorInspector::activate(const InspectorField& target,
                                              : SceneWorldMode::World2D);
     }
     const std::string picked = target.choices[static_cast<size_t>(next)];
+    if (key.starts_with("behaviour:")) {
+      return applyBehaviour(
+        key,
+        [&picked](BehaviourValue& value, const BehaviourField& field, char) {
+          if (field.kind == BehaviourFieldKind::Choice) {
+            value.text = picked;
+            return true;
+          }
+          if (field.kind != BehaviourFieldKind::Asset &&
+              field.kind != BehaviourFieldKind::Node) {
+            return false;
+          }
+          // The first choice is "(none)".
+          value.text = picked == kNoAsset ? std::string() : picked;
+          return true;
+        },
+        {},
+        document,
+        selection);
+    }
     if (key == "env.skybox") {
       // The first choice is "(none)".
       SceneEnvironment environment = document.scene().document().environment;
@@ -1279,6 +1707,36 @@ EditorInspector::activate(const InspectorField& target,
       });
   }
   if (target.kind == InspectorFieldKind::Button) {
+    if (key.starts_with("behaviour.remove:")) {
+      const std::string type = key.substr(17);
+      return document.editNodes(
+        selection.ids(), "Remove " + type, {}, [&type](SceneNode& node) {
+          return std::erase_if(
+                   node.components, [&type](const SceneComponent& component) {
+                     const SceneOpaqueComponent* opaque =
+                       std::get_if<SceneOpaqueComponent>(&component.value);
+                     return opaque != nullptr && opaque->type == type;
+                   }) != 0;
+        });
+    }
+    if (key.starts_with("behaviour.add:")) {
+      const BehaviourType* type =
+        m_behaviours != nullptr ? m_behaviours->schema().find(key.substr(14))
+                                : nullptr;
+      if (type == nullptr) {
+        return false;
+      }
+      return document.editNodes(
+        selection.ids(), "Add " + type->title, {}, [type](SceneNode& node) {
+          if (behaviourOf(node, type->type) != nullptr) {
+            return false;
+          }
+          SceneComponent component;
+          component.value = BehaviourSchema::defaultComponent(*type);
+          node.components.push_back(component);
+          return true;
+        });
+    }
     if (assetField && property == "remove") {
       std::vector<SceneAsset> assets = document.scene().document().assets;
       std::erase_if(assets, [&assetId](const SceneAsset& asset) {

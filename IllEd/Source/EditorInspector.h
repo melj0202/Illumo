@@ -1,11 +1,13 @@
 #pragma once
 
+#include "EditorBehaviours.h"
 #include "EditorDocument.h"
 #include "EditorSelection.h"
 #include <Illumo/Gui/GuiPanelPointer.h>
 #include <Illumo/Gui/GuiTextEdit.h>
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -25,7 +27,8 @@ enum class InspectorFieldKind
 
 // One editable value. Keys name what it edits ("position.x",
 // "primitive.color.r", "env.sun.intensity", "component.add"...). Asset table
-// entries use "asset.<property>:<asset id>".
+// entries use "asset.<property>:<asset id>"; behaviour fields use
+// "behaviour:<type>:<field>", with ":<axis>" for vector and color parts.
 struct InspectorField
 {
   std::string key;
@@ -76,6 +79,12 @@ public:
   EditorInspector& operator=(const EditorInspector&) = delete;
 
   void setFontSize(float sizePt) { m_fontSize = sizePt; }
+  // Known behaviours show as typed fields and in Add behaviour; without them
+  // (or for an unknown type) a behaviour component shows its JSON.
+  void setBehaviours(const EditorBehaviours* behaviours)
+  {
+    m_behaviours = behaviours;
+  }
   // The content rectangle and surface for this frame; hiding it ends an edit.
   void setPlacement(const GuiPanelPlacement& placement);
   const GuiPanelPlacement& placement() const { return m_placement; }
@@ -115,6 +124,7 @@ public:
 private:
   IRenderWindow* m_window;
   Renderer* m_renderer;
+  const EditorBehaviours* m_behaviours = nullptr;
   GameVisual m_visual;
   GuiPanelPointer m_pointer;
   GuiPanelPlacement m_placement;
@@ -147,12 +157,13 @@ private:
   const EditorDocument* m_fieldsDocument = nullptr;
   uint64_t m_fieldsGeneration = 0;
   uint64_t m_fieldsRevision = 0;
+  uint64_t m_fieldsBehaviours = 0;
   std::string m_fieldsPrimary;
   std::vector<std::string> m_fieldsSelection;
   bool m_fieldsBuilt = false;
 
   // Rebuilds the fields only when their inputs changed: the document's
-  // scene (generation and revision) or the selection.
+  // scene (generation and revision), the selection or the known behaviours.
   void refreshFields(const EditorDocument& document,
                      const EditorSelection& selection);
   void buildFields(const EditorDocument& document,
@@ -172,6 +183,14 @@ private:
                    const std::string& mergeKey,
                    EditorDocument& document,
                    const EditorSelection& selection);
+  // A behaviour field edit on every selected node holding the behaviour.
+  bool applyBehaviour(
+    const std::string& key,
+    const std::function<
+      bool(BehaviourValue&, const BehaviourField&, char axis)>& change,
+    const std::string& mergeKey,
+    EditorDocument& document,
+    const EditorSelection& selection);
   bool applyText(const std::string& key,
                  const std::string& text,
                  EditorDocument& document,
