@@ -210,7 +210,7 @@ EditorToolsPanel::layout()
                          { area.x + area.w * 0.5f, y, area.w * 0.5f, row } });
   y += row + 4.0f;
   m_controls.push_back({ ControlKind::Toggle,
-                         "Pivot center",
+                         "Mid pivot",
                          EditorCommand::TogglePivot,
                          { area.x, y, area.w * 0.5f, row } });
   m_controls.push_back({ ControlKind::Toggle,

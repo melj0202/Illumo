@@ -152,7 +152,7 @@ pointer positions into rays and deltas into transforms.
 - Translate (axes, planes, center), rotate (three rings; only the Z ring in
   2D) and scale (axes and a uniform center), drawn at constant screen size.
 - World space, or the primary node's local axes (X toggles).
-- The pivot is the primary node's origin, or (P, or Pivot center in the Tools
+- The pivot is the primary node's origin, or (P, or Mid pivot in the Tools
   panel) the centre of the selection's top-level subtree bounds. Rotation
   turns about the pivot; scaling keeps each node's own axes and spreads
   positions from the pivot. Grabbing a node's body still moves the selection
