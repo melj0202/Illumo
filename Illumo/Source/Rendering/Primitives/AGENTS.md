@@ -31,6 +31,12 @@ retained widget toolkit or a second renderer.
 - Batch compatible geometry into bounded reusable storage and emit one upload
   and draw per batch where the existing contract allows it. Preserve order and
   clipping; do not trade correctness for fewer commands.
+- `GameVisual` batches (D-R34): a run of one style, texture and kind joins the
+  latest earlier batch with that key when no batch drawn in between overlaps
+  it, so the image is unchanged while widget lists collapse to a few draws.
+  Overlap tests must stay conservative: touching or NaN bounds overlap, and a
+  batch's extent (exact boxes of its recent runs plus one box around older
+  ones) must contain every vertex. Visuals with one run skip batching work.
 - Any vertex, index, uniform, or text bytes referenced by appended commands
   must outlive queue submission. Reallocation after pointer capture is a
   lifetime defect.

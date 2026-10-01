@@ -8,12 +8,13 @@ frame path is acquire/enroll + tokens + submit via
 \symbolref{Renderer}/\symbolref{IBackend}.
 Drawables emit tokens through \texttt{AppendCommands}; GL draw submission is
 confined to private \pathref{Illumo/Source/Rendering/OpenGL/} (plus window
-bootstrap). Headless \pathref{Illumo/TestSupport/Include/Illumo/Testing/MockBackend.h}
+bootstrap), and Vulkan's to \pathref{Illumo/Source/Rendering/Vulkan/} (D-R33),
+chosen per launch. Headless \pathref{Illumo/TestSupport/Include/Illumo/Testing/MockBackend.h}
 powers \texttt{IllumoTests}. CanvasView
 presentation is \textbf{a padded camera cache + bounded CPU RGB fade + one RGB
 display texture/quad} with tiled multi-rect uploads (see canonical note in
 \pathref{docs/architecture-consensus.md}).
-No second real GPU API.
+OpenGL and Vulkan execute the same tokens with the same results.
 \end{statusbox}
 
 \subsection{What actually draws frames today}
@@ -175,8 +176,11 @@ while preserving defaults.
   \item \symbolref{GameVisual} (D-R15) hosts composed
         shape/sprite/text values. Parent and local \texttt{Transform2D},
         normalized pivots, atlas regions/flips, and integer draw order build one
-        stable cross-type stream. Only adjacent compatible items batch, so
-        transparent painter order is never changed by a global texture sort.
+        stable cross-type stream. A run of one style, texture and kind joins
+        the latest earlier batch with that key when nothing drawn in between
+        overlaps it (D-R34), so a list of widgets (background, icon, label
+        each) draws as a few batches while every pixel keeps its painter-order
+        sequence of writes; there is no global texture sort.
         Pixel-space rebuilds conservatively reject quads outside the logical
         viewport. An optional top-left logical-pixel clip rejects fully
         excluded quads before upload and uses nested, intersected scissor

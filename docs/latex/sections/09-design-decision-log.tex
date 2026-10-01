@@ -3178,6 +3178,30 @@ uncapped, Vulkan matches or beats OpenGL's frame rate.\\
 \textbf{Extends:} D-R8, D-R11, D-UI13
 \end{decisionbox}
 
+\subsection*{D-R34 --- GameVisual merges batches across non-overlapping draws}
+\begin{decisionbox}[title={D-R34 \quad 2026-10-01}]
+\textbf{Decision:} Consecutive \symbolref{GameVisual} geometry of one style,
+texture and kind forms a run. A run joins the latest earlier batch with its
+key when no batch drawn in between overlaps it, and the vertices are rewritten
+so each batch stays one range. Overlap tests are conservative: touching or
+non-finite bounds overlap, and a batch keeps the exact bounds of its 16 latest
+runs plus one box around older ones. The look-back is 64 batches, and a visual
+with a single run skips the work.\\
+\textbf{Why:} Moving a draw earlier past draws it does not overlap leaves
+every pixel's sequence of writes unchanged, while the 2D UI alternated shape
+and sprite or text draws for every widget, costing a pipeline bind each on
+Vulkan (about 290\,ns on the reference NVIDIA driver) and a program switch on
+OpenGL.\\
+\textbf{Consequences:} IllEd went from 88 draws and 70 program switches per
+frame to 29 and 24; Vulkan recording fell from 0.069 to 0.032\,ms (the mesh
+viewer from 0.051 to 0.034\,ms) and OpenGL IllEd rose from about 3,000 to
+4,000--4,400\,FPS uncapped. A rebuild of 300 widgets drops from 351 draws to
+3 and costs less overall. Draws of different visuals still alternate; one
+pipeline for shapes and sprites would remove most remaining switches but
+would change the guest frame wire and world-space motion velocity.\\
+\textbf{Extends:} D-R15
+\end{decisionbox}
+
 \subsection*{D-UI8 --- Liquid, bouncy menu motion}
 \begin{decisionbox}[title={D-UI8 \quad 2026-09-23}]
 \textbf{Decision:} The glass menus move like liquid. A travelling selection

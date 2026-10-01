@@ -275,6 +275,16 @@ private:
     Sprite
   };
 
+  // The bounds of geometry in visual space; draws that keep their relative
+  // order wherever these overlap give the same pixels in any other order.
+  struct Bounds2
+  {
+    float minX = 0.0f;
+    float minY = 0.0f;
+    float maxX = 0.0f;
+    float maxY = 0.0f;
+  };
+
   struct DrawBatch
   {
     BatchKind kind = BatchKind::Shape;
@@ -282,8 +292,33 @@ private:
     TextureHandle textureHandle{};
     unsigned int firstQuad = 0;
     unsigned int quadCount = 0;
+    // While batches form: their pieces (a list through Piece::next) and
+    // their extent: the union of all bounds, the exact bounds of the latest
+    // pieces, and one box around every older one. New pieces mostly meet
+    // recent neighbours, so the exact boxes decide.
+    static constexpr size_t kRecentPieces = 16;
+    Bounds2 bounds;
+    Bounds2 olderBounds;
+    bool hasOlder = false;
+    std::array<Bounds2, kRecentPieces> recent{};
+    unsigned int recentCount = 0;
+    unsigned int recentNext = 0;
+    unsigned int firstPiece = 0;
+    unsigned int lastPiece = 0;
   };
 
+  // A run of consecutive geometry with one style, texture and kind, in
+  // painter order, before it joins a batch.
+  struct Piece
+  {
+    BatchKind kind = BatchKind::Shape;
+    RenderStyleHandle styleHandle{};
+    TextureHandle textureHandle{};
+    unsigned int firstQuad = 0;
+    unsigned int quadCount = 0;
+    Bounds2 bounds;
+    unsigned int next = 0;
+  };
   struct Point2
   {
     float x = 0.0f;
@@ -337,6 +372,11 @@ private:
   std::vector<SpriteVertex> spriteVerts;
   std::vector<unsigned char> textTessellateScratch;
   std::vector<DrawBatch> drawBatches;
+  // Retained scratch for batching: the pieces of the last rebuild and the
+  // vertices rewritten in batch order.
+  std::vector<Piece> pieces;
+  std::vector<ShapeVertex> shapeScratch;
+  std::vector<SpriteVertex> spriteScratch;
   unsigned int shapeQuadCount = 0;
   unsigned int spriteQuadCount = 0;
   unsigned int quadCapacity = 0;
@@ -398,9 +438,14 @@ private:
   size_t appendShape(const ShapePrimitive& shape);
   bool pushFilledEllipse(const ShapePrimitive& shape, const Rect2& hostBounds);
   bool pushFilledTriangle(const ShapePrimitive& shape, const Rect2& hostBounds);
-  void appendBatch(BatchKind kind,
+  void appendPiece(BatchKind kind,
                    RenderStyleHandle styleHandle,
                    TextureHandle textureHandle,
                    unsigned int firstQuad,
                    unsigned int quadCount);
+  void formBatches();
+  static Bounds2 vertexBounds(const ShapeVertex* vertices, size_t count);
+  static bool overlapsBatch(const DrawBatch& batch, const Bounds2& bounds);
+  static void addToBatch(DrawBatch& batch, const Bounds2& bounds);
+  static Bounds2 vertexBounds(const SpriteVertex* vertices, size_t count);
 };

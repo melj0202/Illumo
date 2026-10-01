@@ -1,20 +1,23 @@
 // GameVisual primitive host: shapes + sprites via MockBackend (no OpenGL).
 
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <Illumo/Rendering/Primitives/SoftwareCanvas.h>
 #include <Illumo/Rendering/Primitives/SpriteAnimation.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -299,8 +302,8 @@ testGameVisualSpritesBatchByTexture()
   visual.prepare(&renderer);
 
   ColorRgba white{ 255, 255, 255, 255 };
-  // Interleave textures. Painter order is preserved, so no global texture
-  // sort may combine these non-adjacent sprites.
+  // Interleave textures. None of these sprites overlap, so runs of the same
+  // texture combine across the others without changing a pixel.
   visual.addSprite(textureB, 0.0f, 0.0f, 16.0f, 16.0f, white);
   visual.addSprite(textureA, 20.0f, 0.0f, 16.0f, 16.0f, white);
   visual.addSprite(textureA, 40.0f, 0.0f, 16.0f, 16.0f, white);
@@ -323,16 +326,48 @@ testGameVisualSpritesBatchByTexture()
              mock.countNonEmptyOfType(CommandType::UpdateBuffer),
              1u,
              "one sprite buffer upload");
-  // B, A+A, B, A remains four batches: adjacent A sprites combine, while a
-  // global texture sort would incorrectly combine non-adjacent runs.
+  // B, A+A, B, A becomes B+B and A+A+A: no sprite overlaps one it would
+  // move past.
   testEqSize(g,
              mock.countNonEmptyOfType(CommandType::SetTexture),
-             4u,
-             "four adjacent texture runs bind independently");
+             2u,
+             "non-overlapping runs of a texture share one binding");
+  testEqSize(g,
+             mock.countNonEmptyOfType(CommandType::DrawIndexed),
+             2u,
+             "non-overlapping runs of a texture share one draw");
+
+  // Overlapping sprites keep painter order: B, A, B, each over the last.
+  GameVisual stacked;
+  stacked.setWindow(&window);
+  stacked.prepare(&renderer);
+  stacked.addSprite(textureB, 0.0f, 0.0f, 16.0f, 16.0f, white);
+  stacked.addSprite(textureA, 8.0f, 0.0f, 16.0f, 16.0f, white);
+  stacked.addSprite(textureB, 16.0f, 0.0f, 16.0f, 16.0f, white);
+  // Touching edges count as overlapping.
+  stacked.addSprite(textureA, 32.0f, 0.0f, 16.0f, 16.0f, white);
+  DrawList stackedScene(&window, &camera);
+  stackedScene.AddDrawable(&stacked, RenderLayerId::World);
+  mock.resetCounters();
+  renderer.BeginFrame();
+  renderer.RenderScene(&stackedScene, &camera);
+  renderer.EndFrame();
+  std::vector<TextureHandle> bound;
+  for (size_t index = 0; index < mock.getLastNonEmptySubmittedCount();
+       ++index) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(index);
+    if (command.commandType == CommandType::SetTexture) {
+      bound.push_back(command.bindTexture.handle);
+    }
+  }
+  testTrue(g,
+           bound.size() == 4u && bound[0] == textureB && bound[1] == textureA &&
+             bound[2] == textureB && bound[3] == textureA,
+           "overlapping runs keep painter order: B, A, B, A");
   testEqSize(g,
              mock.countNonEmptyOfType(CommandType::DrawIndexed),
              4u,
-             "four painter-correct sprite draw batches");
+             "a touching sprite does not join a batch it would pass");
 }
 
 static void
@@ -1207,6 +1242,61 @@ runGameVisualCase(void (*testFunction)())
   return g.failures;
 }
 
+// A visual edited every frame: 300 widgets in a grid, each a background, a
+// label and an icon, so painter order alternates shapes, text and sprites.
+// Prints the median rebuild-and-emit time and the draws it produced.
+static void
+testGameVisualRebuildBench()
+{
+  testSection("GameVisual: rebuild cost of an interleaved panel");
+  NullRenderWindow window(1600, 900);
+  EnvVars env;
+  env.setVar("WinX", 1600);
+  env.setVar("WinY", 900);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  unsigned char pixel[4] = { 255, 255, 255, 255 };
+  const TextureHandle icon = renderer.enrollTexture(pixel, 1, 1, 4);
+  GameVisual visual;
+  visual.setWindow(&window);
+  visual.prepare(&renderer);
+  constexpr int kWidgets = 300;
+  for (int widget = 0; widget < kWidgets; ++widget) {
+    const float x = static_cast<float>((widget % 15) * 104);
+    const float y = static_cast<float>((widget / 15) * 40);
+    visual.addFilledRect(x, y, 100.0f, 36.0f, ColorRgba{ 40, 44, 60, 255 });
+    visual.addSprite(icon, x + 4.0f, y + 8.0f, 20.0f, 20.0f);
+    visual.addText("Widget", x + 28.0f, y + 10.0f, 14.0f, ColorRgba{});
+  }
+  DrawList scene(&window, &camera);
+  scene.AddDrawable(&visual, RenderLayerId::UI);
+  std::array<double, 31> samples{};
+  for (size_t frame = 0; frame < samples.size(); ++frame) {
+    // One edit marks the whole visual for a rebuild.
+    visual.getShape(0)->color.r = static_cast<unsigned char>(frame);
+    visual.setItem(0, *visual.getShape(0));
+    const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+    renderer.BeginFrame();
+    renderer.RenderScene(&scene, &camera);
+    renderer.EndFrame();
+    samples[frame] = std::chrono::duration<double, std::micro>(
+                       std::chrono::steady_clock::now() - start)
+                       .count();
+  }
+  std::sort(samples.begin(), samples.end());
+  const size_t draws = mock.countNonEmptyOfType(CommandType::DrawIndexed);
+  std::printf("GameVisualRebuildBench widgets=%d median_us=%.1f draws=%zu\n",
+              kWidgets,
+              samples[samples.size() / 2],
+              draws);
+  testTrue(g,
+           draws >= 1u && draws <= static_cast<size_t>(kWidgets) * 3u,
+           "an interleaved panel never needs more draws than pieces");
+  renderer.destroyTexture(icon);
+}
 void
 registerGameVisualTests(IllumoTestRegistry& registry)
 {
@@ -1229,6 +1319,8 @@ registerGameVisualTests(IllumoTestRegistry& registry)
   registry.add("Illumo.GameVisual.NewShapes", []() {
     return runGameVisualCase(testGameVisualNewShapesEmitTokens);
   });
+  registry.add("Illumo.GameVisual.RebuildBench",
+               []() { return runGameVisualCase(testGameVisualRebuildBench); });
   registry.add("Illumo.GameVisual.SpriteBatches", []() {
     return runGameVisualCase(testGameVisualSpritesBatchByTexture);
   });

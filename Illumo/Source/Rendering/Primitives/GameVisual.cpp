@@ -9,9 +9,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <limits>
 
 static void
 includeBounds(bool& any,
@@ -1303,8 +1305,54 @@ GameVisual::pushTextRun(const TextPrimitive& text,
   return true;
 }
 
+// The bounds of vertices, or unbounded when any coordinate is NaN, so such a
+// piece overlaps everything and never moves.
+template<typename Vertex, typename Bounds>
+static void
+measureVertices(const Vertex* vertices, size_t count, Bounds* bounds)
+{
+  float minX = vertices[0].x;
+  float minY = vertices[0].y;
+  float maxX = minX;
+  float maxY = minY;
+  bool finite = true;
+  for (size_t index = 0; index < count; ++index) {
+    const float x = vertices[index].x;
+    const float y = vertices[index].y;
+    minX = x < minX ? x : minX;
+    minY = y < minY ? y : minY;
+    maxX = x > maxX ? x : maxX;
+    maxY = y > maxY ? y : maxY;
+    finite = finite && x == x && y == y;
+  }
+  if (finite) {
+    *bounds = { minX, minY, maxX, maxY };
+  } else {
+    *bounds = { std::numeric_limits<float>::lowest(),
+                std::numeric_limits<float>::lowest(),
+                std::numeric_limits<float>::max(),
+                std::numeric_limits<float>::max() };
+  }
+}
+
+GameVisual::Bounds2
+GameVisual::vertexBounds(const ShapeVertex* vertices, size_t count)
+{
+  Bounds2 bounds;
+  measureVertices(vertices, count, &bounds);
+  return bounds;
+}
+
+GameVisual::Bounds2
+GameVisual::vertexBounds(const SpriteVertex* vertices, size_t count)
+{
+  Bounds2 bounds;
+  measureVertices(vertices, count, &bounds);
+  return bounds;
+}
+
 void
-GameVisual::appendBatch(BatchKind kind,
+GameVisual::appendPiece(BatchKind kind,
                         RenderStyleHandle styleHandle,
                         TextureHandle textureHandle,
                         unsigned int firstQuad,
@@ -1313,8 +1361,10 @@ GameVisual::appendBatch(BatchKind kind,
   if (quadCount == 0) {
     return;
   }
-  if (!drawBatches.empty()) {
-    DrawBatch& last = drawBatches.back();
+  // Consecutive pieces of one key extend a run, as adjacent batches always
+  // merged; runs are what batches form from.
+  if (!pieces.empty()) {
+    Piece& last = pieces.back();
     if (last.kind == kind && last.styleHandle == styleHandle &&
         last.textureHandle == textureHandle &&
         last.firstQuad + last.quadCount == firstQuad) {
@@ -1322,15 +1372,233 @@ GameVisual::appendBatch(BatchKind kind,
       return;
     }
   }
-  DrawBatch batch;
-  batch.kind = kind;
-  batch.styleHandle = styleHandle;
-  batch.textureHandle = textureHandle;
-  batch.firstQuad = firstQuad;
-  batch.quadCount = quadCount;
-  drawBatches.push_back(batch);
+  Piece piece;
+  piece.kind = kind;
+  piece.styleHandle = styleHandle;
+  piece.textureHandle = textureHandle;
+  piece.firstQuad = firstQuad;
+  piece.quadCount = quadCount;
+  pieces.push_back(piece);
+}
+static bool
+boundsApart(float aMinX,
+            float aMinY,
+            float aMaxX,
+            float aMaxY,
+            float bMinX,
+            float bMinY,
+            float bMaxX,
+            float bMaxY)
+{
+  return aMaxX < bMinX || bMaxX < aMinX || aMaxY < bMinY || bMaxY < aMinY;
 }
 
+bool
+GameVisual::overlapsBatch(const DrawBatch& batch, const Bounds2& bounds)
+{
+  const Bounds2& all = batch.bounds;
+  if (boundsApart(all.minX,
+                  all.minY,
+                  all.maxX,
+                  all.maxY,
+                  bounds.minX,
+                  bounds.minY,
+                  bounds.maxX,
+                  bounds.maxY)) {
+    return false;
+  }
+  const Bounds2& older = batch.olderBounds;
+  if (batch.hasOlder && !boundsApart(older.minX,
+                                     older.minY,
+                                     older.maxX,
+                                     older.maxY,
+                                     bounds.minX,
+                                     bounds.minY,
+                                     bounds.maxX,
+                                     bounds.maxY)) {
+    return true;
+  }
+  for (unsigned int index = 0; index < batch.recentCount; ++index) {
+    const Bounds2& recent = batch.recent[index];
+    if (!boundsApart(recent.minX,
+                     recent.minY,
+                     recent.maxX,
+                     recent.maxY,
+                     bounds.minX,
+                     bounds.minY,
+                     bounds.maxX,
+                     bounds.maxY)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void
+unite(float* minX,
+      float* minY,
+      float* maxX,
+      float* maxY,
+      float otherMinX,
+      float otherMinY,
+      float otherMaxX,
+      float otherMaxY)
+{
+  *minX = std::min(*minX, otherMinX);
+  *minY = std::min(*minY, otherMinY);
+  *maxX = std::max(*maxX, otherMaxX);
+  *maxY = std::max(*maxY, otherMaxY);
+}
+
+void
+GameVisual::addToBatch(DrawBatch& batch, const Bounds2& bounds)
+{
+  unite(&batch.bounds.minX,
+        &batch.bounds.minY,
+        &batch.bounds.maxX,
+        &batch.bounds.maxY,
+        bounds.minX,
+        bounds.minY,
+        bounds.maxX,
+        bounds.maxY);
+  if (batch.recentCount < DrawBatch::kRecentPieces) {
+    batch.recent[batch.recentCount++] = bounds;
+    return;
+  }
+  // The oldest exact box folds into the box around older pieces.
+  const Bounds2& evicted = batch.recent[batch.recentNext];
+  if (!batch.hasOlder) {
+    batch.olderBounds = evicted;
+    batch.hasOlder = true;
+  } else {
+    unite(&batch.olderBounds.minX,
+          &batch.olderBounds.minY,
+          &batch.olderBounds.maxX,
+          &batch.olderBounds.maxY,
+          evicted.minX,
+          evicted.minY,
+          evicted.maxX,
+          evicted.maxY);
+  }
+  batch.recent[batch.recentNext] = bounds;
+  batch.recentNext = (batch.recentNext + 1) % DrawBatch::kRecentPieces;
+}
+// Each piece joins the latest batch with its style, texture and kind unless
+// a batch drawn after that one overlaps it; otherwise it starts a batch.
+// Moving a draw earlier past draws it does not overlap leaves every pixel's
+// sequence of writes, and so the image, unchanged. Touching bounds count as
+// overlapping; a batch's extent is conservative (see DrawBatch). The look-back
+// is bounded so rebuilds stay linear.
+void
+GameVisual::formBatches()
+{
+  ILLUMO_PROFILE_ZONE("GameVisual.formBatches");
+  static constexpr size_t kLookBack = 64;
+  drawBatches.clear();
+  if (pieces.size() == 1) {
+    // One run is one batch; no bounds are needed.
+    DrawBatch batch;
+    batch.kind = pieces[0].kind;
+    batch.styleHandle = pieces[0].styleHandle;
+    batch.textureHandle = pieces[0].textureHandle;
+    batch.firstQuad = pieces[0].firstQuad;
+    batch.quadCount = pieces[0].quadCount;
+    drawBatches.push_back(batch);
+    return;
+  }
+  for (Piece& piece : pieces) {
+    const size_t first = static_cast<size_t>(piece.firstQuad) * 4;
+    const size_t count = static_cast<size_t>(piece.quadCount) * 4;
+    piece.bounds = piece.kind == BatchKind::Shape
+                     ? vertexBounds(shapeVerts.data() + first, count)
+                     : vertexBounds(spriteVerts.data() + first, count);
+  }
+  bool reordered = false;
+  for (unsigned int index = 0; index < pieces.size(); ++index) {
+    const Piece& piece = pieces[index];
+    // The latest batch it could join, by key alone; then it may join only if
+    // nothing drawn after that batch overlaps it. Pieces with no partner in
+    // the window skip the overlap tests entirely.
+    size_t target = drawBatches.size();
+    const size_t stop =
+      drawBatches.size() > kLookBack ? drawBatches.size() - kLookBack : 0;
+    for (size_t candidate = drawBatches.size(); candidate > stop; --candidate) {
+      const DrawBatch& batch = drawBatches[candidate - 1];
+      if (batch.kind == piece.kind && batch.styleHandle == piece.styleHandle &&
+          batch.textureHandle == piece.textureHandle) {
+        target = candidate - 1;
+        break;
+      }
+    }
+    for (size_t later = target + 1; later < drawBatches.size(); ++later) {
+      if (overlapsBatch(drawBatches[later], piece.bounds)) {
+        target = drawBatches.size();
+        break;
+      }
+    }
+    if (target == drawBatches.size()) {
+      DrawBatch batch;
+      batch.kind = piece.kind;
+      batch.styleHandle = piece.styleHandle;
+      batch.textureHandle = piece.textureHandle;
+      batch.firstQuad = piece.firstQuad;
+      batch.quadCount = piece.quadCount;
+      batch.bounds = piece.bounds;
+      batch.recent[0] = piece.bounds;
+      batch.recentCount = 1;
+      batch.firstPiece = index;
+      batch.lastPiece = index;
+      drawBatches.push_back(batch);
+      continue;
+    }
+    DrawBatch& batch = drawBatches[target];
+    reordered = reordered || target + 1 != drawBatches.size();
+    pieces[batch.lastPiece].next = index;
+    batch.lastPiece = index;
+    batch.quadCount += piece.quadCount;
+    addToBatch(batch, piece.bounds);
+  }
+  if (!reordered) {
+    // Every batch's pieces are already contiguous, in batch order.
+    return;
+  }
+  ILLUMO_PROFILE_ZONE("GameVisual.rewriteBatches");
+  // Rewrite the vertices batch by batch so each batch is one range.
+  shapeScratch.resize(shapeVerts.size());
+  spriteScratch.resize(spriteVerts.size());
+  unsigned int shapeCursor = 0;
+  unsigned int spriteCursor = 0;
+  for (DrawBatch& batch : drawBatches) {
+    unsigned int& cursor =
+      batch.kind == BatchKind::Shape ? shapeCursor : spriteCursor;
+    batch.firstQuad = cursor;
+    unsigned int index = batch.firstPiece;
+    while (true) {
+      const Piece& piece = pieces[index];
+      const size_t from = static_cast<size_t>(piece.firstQuad) * 4;
+      const size_t count = static_cast<size_t>(piece.quadCount) * 4;
+      const size_t to = static_cast<size_t>(cursor) * 4;
+      if (batch.kind == BatchKind::Shape) {
+        std::copy(shapeVerts.begin() + static_cast<std::ptrdiff_t>(from),
+                  shapeVerts.begin() +
+                    static_cast<std::ptrdiff_t>(from + count),
+                  shapeScratch.begin() + static_cast<std::ptrdiff_t>(to));
+      } else {
+        std::copy(spriteVerts.begin() + static_cast<std::ptrdiff_t>(from),
+                  spriteVerts.begin() +
+                    static_cast<std::ptrdiff_t>(from + count),
+                  spriteScratch.begin() + static_cast<std::ptrdiff_t>(to));
+      }
+      cursor += piece.quadCount;
+      if (index == batch.lastPiece) {
+        break;
+      }
+      index = piece.next;
+    }
+  }
+  shapeVerts.swap(shapeScratch);
+  spriteVerts.swap(spriteScratch);
+}
 void
 GameVisual::rebuildGeometry(const Rect2* cullRect)
 {
@@ -1341,6 +1609,7 @@ GameVisual::rebuildGeometry(const Rect2* cullRect)
   shapeQuadCount = 0;
   spriteQuadCount = 0;
   drawBatches.clear();
+  pieces.clear();
   geometryCullEnabled = cullRect != nullptr;
   if (cullRect != nullptr) {
     geometryCullRect = *cullRect;
@@ -1374,7 +1643,7 @@ GameVisual::rebuildGeometry(const Rect2* cullRect)
       if (!pushSpriteQuad(sprite, hostBounds)) {
         break;
       }
-      appendBatch(BatchKind::Sprite,
+      appendPiece(BatchKind::Sprite,
                   styleHandle,
                   sprite.textureHandle,
                   first,
@@ -1413,7 +1682,7 @@ GameVisual::rebuildGeometry(const Rect2* cullRect)
       if (!pushTextRun(text, *font, heavy, blend, 1.0f, hostBounds)) {
         break;
       }
-      appendBatch(BatchKind::Sprite,
+      appendPiece(BatchKind::Sprite,
                   styleHandle,
                   fontTex,
                   first,
@@ -1424,7 +1693,7 @@ GameVisual::rebuildGeometry(const Rect2* cullRect)
               text, *heavy, font.get(), 1.0f - blend, blend, hostBounds)) {
           break;
         }
-        appendBatch(BatchKind::Sprite,
+        appendPiece(BatchKind::Sprite,
                     styleHandle,
                     heavyTex,
                     heavyFirst,
@@ -1505,13 +1774,14 @@ GameVisual::rebuildGeometry(const Rect2* cullRect)
         break;
       }
     }
-    appendBatch(BatchKind::Shape,
+    appendPiece(BatchKind::Shape,
                 styleHandle,
                 TextureHandle{},
                 first,
                 shapeQuadCount - first);
   }
 
+  formBatches();
   shapeUploadPending = shapeQuadCount > 0;
   spriteUploadPending = spriteQuadCount > 0;
   geometryDirty = false;
