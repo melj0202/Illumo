@@ -247,6 +247,7 @@ EditorScene::handlePanelCommand(EditorCommand command)
 {
   if (command == EditorCommand::ResetLayout) {
     m_dock.reset();
+    m_dock.setColumnWidth(GuiDockSide::Right, kRightColumnWidth);
     layoutDock();
     toast("Panel layout reset", GuiToolPalette::accent);
     return true;
