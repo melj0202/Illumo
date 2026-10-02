@@ -120,8 +120,13 @@ testPackageDiscovery()
   VirtualFileSystem vfs;
   warnings.clear();
   testTrue(counters,
-           PackageMounts::mountAll(
-             vfs, application, found, {}, root / "project", warnings, error),
+           PackageMounts::mountAll(vfs,
+                                   application,
+                                   found,
+                                   std::filesystem::path(),
+                                   root / "project",
+                                   warnings,
+                                   error),
            "everything mounts");
   testTrue(counters,
            contains(warnings, "cycle-a") && contains(warnings, "cycle-b"),

@@ -30,7 +30,16 @@ public:
   virtual bool hasFileSystem() const { return false; }
 };
 
-// Process-wide filesystem source used when no other source is supplied.
-// Unavailable (nullptr) in serial WASM guests.
+// Process-wide source used when no other source is supplied: the native file
+// system unless SetDefaultAssetSource installed another. Shader files, fonts
+// and the host AssetManager read engine files through it. Unavailable
+// (nullptr) in serial WASM guests.
 IAssetSource*
 DefaultAssetSource();
+
+// Replaces the source DefaultAssetSource() returns, such as an engine package
+// for a distribution; nullptr restores the native file system. Call it before
+// the engine starts: readers on other threads see it without locking, and it
+// must outlive every reader. Native hosts only.
+void
+SetDefaultAssetSource(IAssetSource* source);

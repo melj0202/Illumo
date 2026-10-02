@@ -5034,6 +5034,12 @@ def create_parser(
     ).add_argument(
         "--target", help="build a focused CMake target instead of the default"
     )
+    subparsers.add_parser(
+        "dist",
+        parents=[common],
+        help="build and assemble a distribution: the runtime with engine.ilpk "
+        "and apps/<name>.ilpk in <build>/dist/<config>",
+    )
 
     test_parser = subparsers.add_parser(
         "test",
@@ -5601,6 +5607,22 @@ def run_build(arguments: argparse.Namespace) -> None:
     cmake = configure(arguments, runner)
     runner.run(build_command(arguments, cmake))
     print_build_summary(arguments, "Build succeeded", started)
+
+
+def run_distribution(arguments: argparse.Namespace) -> None:
+    """Build the selected configuration and assemble its distribution (D-E38).
+
+    The IllumoDistribution target leaves dist/<config>/ in the build tree:
+    the runtime with engine.ilpk and apps/<name>.ilpk, no loose assets.
+    """
+    started = time.monotonic()
+    runner = CommandRunner(arguments.dry_run)
+    cmake = configure(arguments, runner)
+    runner.run(build_command(arguments, cmake))
+    runner.run(build_command(arguments, cmake, "IllumoDistribution"))
+    build_directory = resolve_build_directory(arguments.build_dir)
+    print_build_summary(arguments, "Distribution assembled", started)
+    print(f"Distribution: {build_directory / 'dist' / arguments.config}")
 
 
 def run_ctest_case(
@@ -6194,6 +6216,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         "doctor": run_doctor,
         "configure": run_configure,
         "build": run_build,
+        "dist": run_distribution,
         "test": run_tests,
         "run": run_application,
         "play": run_application,

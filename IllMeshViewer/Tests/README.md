@@ -6,7 +6,7 @@ Automated headless test runners for IllMeshViewer, which ships only as the
 - `IllMeshViewerTests` runs the native `IllMeshViewerCore` oracle cases.
 - `IllMeshViewerWasmPackageTests` runs `IllMeshViewer.Wasm.Package`, which
   drives the real package through the generic host (launch mesh as one
-  retained host mesh, package-preloaded skybox cubemap). Windows x64 only.
+  retained host mesh, skybox cubemap preloaded from `/engine`). Windows x64 only.
 
 Run focused tests:
 ```powershell

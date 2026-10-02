@@ -3,19 +3,16 @@
 # and IllumoRuntime exist.
 set(_viewer "${CMAKE_CURRENT_LIST_DIR}")
 
-# The mesh viewer; its skybox cross is preloaded.
+# The mesh viewer; it preloads the engine's skybox cross from /engine.
 illumo_stage_app(IllMeshViewerPackage meshviewer
   MODULE IllMeshViewer.wasm
   MANIFEST "${_viewer}/illumo.json"
   FILES
-    "${_viewer}/envvars.json"
-  ASSETS
-    "${CMAKE_SOURCE_DIR}/Illumo/Assets/Skybox/skybox-daylight.png"
-    "Assets/Skybox/skybox-daylight.png")
+    "${_viewer}/envvars.json")
 
 if(BUILD_TESTING)
   # The package: launch mesh as a retained host mesh (frame schema v3) and the
-  # package-preloaded skybox as a host cubemap.
+  # skybox preloaded from /engine as a host cubemap.
   add_executable(IllMeshViewerWasmPackageTests
     "${_viewer}/Tests/Wasm/TestViewerPackage.cpp")
   target_link_libraries(IllMeshViewerWasmPackageTests PRIVATE
@@ -23,7 +20,7 @@ if(BUILD_TESTING)
   target_compile_definitions(IllMeshViewerWasmPackageTests PRIVATE
     "ILLUMO_VIEWER_GUEST=\"${_guest_build}/IllMeshViewer.wasm\""
     "ILLUMO_VIEWER_DEFAULTS=\"${_viewer}/envvars.json\""
-    "ILLUMO_VIEWER_SKYBOX=\"${CMAKE_SOURCE_DIR}/Illumo/Assets/Skybox/skybox-daylight.png\"")
+    "ILLUMO_ENGINE_ASSETS=\"${CMAKE_SOURCE_DIR}/Illumo/Assets\"")
   illumo_configure_runtime_target(IllMeshViewerWasmPackageTests)
   illumo_stage_msvc_asan(IllMeshViewerWasmPackageTests)
   add_dependencies(IllMeshViewerWasmPackageTests IllumoGuestBuild)

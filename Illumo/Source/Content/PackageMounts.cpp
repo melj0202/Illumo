@@ -153,20 +153,34 @@ PackageMounts::mountAll(VirtualFileSystem& vfs,
                         std::vector<std::string>& warnings,
                         std::string& error)
 {
-  ILLUMO_PROFILE_ZONE("PackageMounts.mountAll");
+  std::shared_ptr<IVfsBackend> engine;
   if (!engineAssets.empty()) {
     std::string engineError;
-    std::shared_ptr<DirectoryVfsBackend> engine =
-      DirectoryVfsBackend::open(engineAssets, false, engineError);
-    if (engine) {
-      VfsMount mount;
-      mount.point = "/engine";
-      mount.layers.push_back({ engine, std::string() });
-      if (!vfs.mount(std::move(mount), error)) {
-        return false;
-      }
-    } else {
+    engine = DirectoryVfsBackend::open(engineAssets, false, engineError);
+    if (!engine) {
       warnings.push_back("No engine assets to mount: " + engineError);
+    }
+  }
+  return mountAll(
+    vfs, application, packages, std::move(engine), project, warnings, error);
+}
+
+bool
+PackageMounts::mountAll(VirtualFileSystem& vfs,
+                        const LoadedPackage& application,
+                        const std::vector<LoadedPackage>& packages,
+                        std::shared_ptr<IVfsBackend> engine,
+                        const std::filesystem::path& project,
+                        std::vector<std::string>& warnings,
+                        std::string& error)
+{
+  ILLUMO_PROFILE_ZONE("PackageMounts.mountAll");
+  if (engine) {
+    VfsMount mount;
+    mount.point = "/engine";
+    mount.layers.push_back({ std::move(engine), std::string() });
+    if (!vfs.mount(std::move(mount), error)) {
+      return false;
     }
   }
 

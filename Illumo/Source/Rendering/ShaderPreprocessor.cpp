@@ -1,4 +1,5 @@
 #include <Illumo/Foundation/Profile.h>
+#include <Illumo/Rendering/AssetSource.h>
 #include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
@@ -511,19 +512,22 @@ ShaderPreprocessor::Process(const std::string& source,
 
 PreprocessResult
 ShaderPreprocessor::ProcessFile(const std::string& filePath,
-                                const PreprocessOptions& options)
+                                const PreprocessOptions& options,
+                                const IAssetSource* fileSource)
 {
   ILLUMO_PROFILE_ZONE("ShaderPreprocessor.ProcessFile");
-  std::string source = readFileToString(filePath);
-  if (source.empty()) {
-    std::error_code ec;
-    if (std::filesystem::file_size(filePath, ec) > 0 || ec) {
-      PreprocessResult result;
-      result.success = false;
-      result.errorMessage = "Failed to open shader file: " + filePath;
-      return result;
-    }
+  // Through the default source unless told otherwise, so a distribution's
+  // engine package serves the engine's shaders.
+  const IAssetSource* files =
+    fileSource != nullptr ? fileSource : DefaultAssetSource();
+  std::vector<unsigned char> bytes;
+  if (files == nullptr || !files->read(files->canonical(filePath), bytes)) {
+    PreprocessResult result;
+    result.success = false;
+    result.errorMessage = "Failed to open shader file: " + filePath;
+    return result;
   }
+  const std::string source(bytes.begin(), bytes.end());
 
   PreprocessOptions fileOptions = options;
   if (fileOptions.sourcePath.empty()) {

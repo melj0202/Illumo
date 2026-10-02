@@ -43,3 +43,12 @@ as `Scenes/render3d-test.ilsc` or `Assets/IllEd/editor-ui-atlas.jpg`. The
 runtime `Assets/` directory is mounted read-only at `/engine`.
 `IllumoPack` packs a staged directory into an `.ilpk`; `Illumo.Pack.StagedApp`
 packs and verifies the staged IllEd. See `content.md`.
+
+A distribution (`IllumoDistribution`, `python build.py dist`, D-E38) ships
+none of those folders loose: `cmake/IllumoDistribution.cmake` packs
+`Illumo/Assets` and `Illumo/Shader` under `Illumo/EnginePackage/illumo.json`
+into `engine.ilpk` and every staged application into `apps/<name>.ilpk`.
+Host code reads engine files through `DefaultAssetSource()`, which the runtime
+points at the package before the engine starts (`EnginePackageSource`), so
+shaders, fonts and the splash load from it under their usual `Assets/` and
+`Shader/` names. `Illumo.Dist.Assemble` assembles one under `Testing/dist`.

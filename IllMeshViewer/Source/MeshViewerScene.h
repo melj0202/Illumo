@@ -23,6 +23,11 @@ struct IllumoContext;
 class MeshViewerScene : public ProgramScene
 {
 public:
+  // The engine's skybox cross the WASM package preloads (D-E38: one copy, in
+  // the engine's files).
+  static constexpr const char* kDefaultSkybox =
+    "/engine/Skybox/skybox-daylight.png";
+
   explicit MeshViewerScene(std::string initialMeshPath = "");
   ~MeshViewerScene() override;
 

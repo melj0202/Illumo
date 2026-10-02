@@ -297,6 +297,14 @@ A successful workspace build stages, in one configuration folder:
   host and package test runners
 - Runtime files: `Shader/`, `Assets/`, `envvars.json`, `THIRD_PARTY_NOTICES.md`
 
+Those loose folders are for development. `python build.py dist` (the
+`IllumoDistribution` target) assembles a distribution in
+`<build>/dist/<config>/` instead: `IllumoRuntime.exe`, `IllumoWasmCompiler.exe`,
+`wasmtime.dll`, `envvars.json`, the notices and `licenses/`, the engine's
+shaders, fonts and images packed as `engine.ilpk`, and every application packed
+as `apps/<name>.ilpk` (D-E38). A loose `Assets/` beside the runtime wins over
+`engine.ilpk`, as a loose `apps/<name>/` wins over `apps/<name>.ilpk`.
+
 Windows (VS generator): `build-workspace/Release/` for `build.py`, or
 `build/Release/` for `-B build`. Linux (Ninja): `build-linux/<CONFIG>/`.
 
@@ -334,7 +342,7 @@ Installed packages live in `apps\<name>\` (or `apps\<name>.ilpk`), each with an
 |---|---|---|---|
 | `game` (default) | `IllumoGame.wasm` | | `storage\csim\` |
 | `illed` | `IllEd.wasm` | `launchAccess: "edit"`, `launchApps: true` (Play); preloads `Assets/IllEd/editor-ui-atlas.jpg` | `storage\illed\` |
-| `meshviewer` | `IllMeshViewer.wasm` | `launchAccess: "read"`; preloads `Assets/Skybox/skybox-daylight.png` | `storage\meshviewer\` |
+| `meshviewer` | `IllMeshViewer.wasm` | `launchAccess: "read"`; preloads the engine's `/engine/Skybox/skybox-daylight.png` | `storage\meshviewer\` |
 | `playground` | `Playground.wasm` | `launchAccess: "read"`; ships `behaviours.json` and `Scenes/demo.ilsc` | `storage\playground\` |
 
 ```text
@@ -695,6 +703,7 @@ python build.py wasm-tools
 python build.py build --config Debug
 python build.py build --config Debug --target IllumoRuntime --parallel
 python build.py build --no-wasm
+python build.py dist
 python build.py play
 python build.py play --app illed -- --open scene.ilsc
 python build.py play --app meshviewer --no-build -- --open model.obj --capture frame.png

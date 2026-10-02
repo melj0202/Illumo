@@ -118,7 +118,7 @@ a half-built table. Mount points are normalized, never `/`, and never nest;
 
 | Mount | Source | Writable |
 |---|---|---|
-| `/engine` | runtime `Assets/` directory | no |
+| `/engine` | runtime `Assets/` directory, or `engine.ilpk` in a distribution (D-E38) | no |
 | `/app` | the launched package, under its targeted overlays | no |
 | `/packages/<id>` | each package in `packages/` beside the runtime, plus each `--mount` | no |
 | `/project` | `--project <dir>` | yes |
@@ -151,6 +151,30 @@ every package whose dependencies resolve (an overlaying package is mounted
 there too) and the writable `/project`. `packMounted` packs a mounted
 directory that holds a valid `illumo.json` into an `.ilpk`; it is the one
 pack implementation, used by the host's Pack file action.
+
+`EnginePackage::open` returns `engine.ilpk` beside the runtime as a backend
+when there is no loose `Assets/` directory there (a development build wins),
+after checking its manifest is the `illumo-engine` content package; a present
+but invalid archive is an error and the launch fails. Its root holds what
+development stages as `Assets/` plus `Shader/`. `EnginePackageSource` is the
+`IAssetSource` the runtime installs with `SetDefaultAssetSource` before the
+engine starts: `Assets/<x>` names the member `<x>` and `Shader/<x>` the member
+`Shader/<x>` (relative to the runtime directory, or absolute below it), with
+canonical names `engine:<member>`; every other name falls through to the
+native file source. The same backend is mounted at `/engine` through the
+`mountAll` overload that takes a backend.
+
+The backend is an `EngineArchiveBackend`: the archive is read into memory
+(`MemoryPackageSource`), so the file is never held open and a rebuilt
+`engine.ilpk` can replace it while the runtime runs. `refresh()` re-reads it
+when its size or write time changes; a replacement that does not open as the
+`illumo-engine` content package is ignored, reported once, and the current
+content kept. The source refreshes on every `stamp` and `read`, and a
+member's stamp is its CRC-32, so `AssetManager`'s 500 ms polling (debug-tool
+builds) reloads only members whose content changed, and F5 or `asset_reload`
+read the current package in every build. Reads through `/engine` do not
+check the file themselves; guests see a rebuilt package once the host has
+taken it.
 
 `VfsAssetSource` is an `IAssetSource` over the tree for native tools and
 tests: canonical names are normalized absolute virtual paths, relative names

@@ -1093,7 +1093,7 @@ AssetManager::executeJob(const LoadJob& job, const IAssetSource* source)
   vsOptions.defines = job.defines;
   vsOptions.sourcePath = job.pathA;
   PreprocessResult vsResult =
-    ShaderPreprocessor::ProcessFile(job.pathA, vsOptions);
+    ShaderPreprocessor::ProcessFile(job.pathA, vsOptions, source);
   if (!vsResult.success) {
     result.error = "Vertex shader preprocessor failed for " + job.pathA + ": " +
                    vsResult.errorMessage;
@@ -1104,7 +1104,7 @@ AssetManager::executeJob(const LoadJob& job, const IAssetSource* source)
   fsOptions.defines = job.defines;
   fsOptions.sourcePath = job.pathB;
   PreprocessResult fsResult =
-    ShaderPreprocessor::ProcessFile(job.pathB, fsOptions);
+    ShaderPreprocessor::ProcessFile(job.pathB, fsOptions, source);
   if (!fsResult.success) {
     result.error = "Fragment shader preprocessor failed for " + job.pathB +
                    ": " + fsResult.errorMessage;

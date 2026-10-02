@@ -139,7 +139,7 @@ its packed archive behave the same.
 
 | Mount | Source | Writable |
 |---|---|---|
-| `/engine` | runtime `Assets/` directory | no |
+| `/engine` | runtime `Assets/` directory, or `engine.ilpk` in a distribution (D-E38, `docs/engine-package-plan.md`) | no |
 | `/app` | the launched package (directory or `.ilpk`) merged with overlays | no |
 | `/packages/<id>` | every package in `runtimeDirectory()/packages/` plus each `--mount` | no |
 | `/project` | `--project <dir>` (loose package directory) | yes |
@@ -296,6 +296,8 @@ byte-identical.
   writable loose package at `/project`. A missing path fails startup.
 - Staging (`illumo_stage_app`) emits `illumo.json` instead of `app.json`, keeps
   loose directories for development, and adds an optional `.ilpk` target.
+  (As built, the `.ilpk` output is the separate `IllumoDistribution` target,
+  which also packs the engine; D-E38.)
 
 ### 9.2 File protocol v2
 

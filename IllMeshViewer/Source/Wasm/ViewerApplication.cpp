@@ -148,7 +148,8 @@ protected:
   }
   std::vector<std::string> packageAssets() const override
   {
-    return { "Assets/Skybox/skybox-daylight.png" };
+    // The engine's skybox, so the package carries no copy of its own.
+    return { MeshViewerScene::kDefaultSkybox };
   }
   void pumpProduct() override { m_platform.pump(); }
   // One scene: the viewer, whose content is the opened scene document.

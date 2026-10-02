@@ -4,6 +4,8 @@
 #include <unordered_map>
 #include <vector>
 
+class IAssetSource;
+
 struct PreprocessOptions
 {
   std::string sourcePath;
@@ -26,8 +28,12 @@ public:
   static PreprocessResult Process(const std::string& source,
                                   const PreprocessOptions& options = {});
 
+  // Reads the file through `files` (DefaultAssetSource() when null), so an
+  // AssetManager's own source, or a distribution's engine package, serves
+  // it. File includes still resolve on the native file system.
   static PreprocessResult ProcessFile(const std::string& filePath,
-                                      const PreprocessOptions& options = {});
+                                      const PreprocessOptions& options = {},
+                                      const IAssetSource* files = nullptr);
 
   static void RegisterVirtualInclude(const std::string& name,
                                      const std::string& source);

@@ -146,6 +146,28 @@ historyContains(const CommandLine& console, const std::string& text)
   return false;
 }
 
+// The tree the runtime gives the viewer: its package at /app and the engine's
+// files at /engine, which the default skybox is preloaded from.
+static std::shared_ptr<VirtualFileSystem>
+viewerTree(const std::filesystem::path& package)
+{
+  std::shared_ptr<VirtualFileSystem> tree =
+    std::make_shared<VirtualFileSystem>();
+  std::string error;
+  VfsMount app;
+  app.point = "/app";
+  app.layers.push_back(
+    { DirectoryVfsBackend::open(package, false, error), "meshviewer" });
+  VfsMount engine;
+  engine.point = "/engine";
+  engine.layers.push_back(
+    { DirectoryVfsBackend::open(ILLUMO_ENGINE_ASSETS, false, error),
+      std::string() });
+  tree->mount(app, error);
+  tree->mount(engine, error);
+  return tree;
+}
+
 static bool
 viewerPackage()
 {
@@ -156,16 +178,17 @@ viewerPackage()
      std::to_string(
        std::chrono::steady_clock::now().time_since_epoch().count()));
   const std::filesystem::path mesh = root / "models" / "torus.obj";
-  WasmFileRoots files{ root / "package", root / "storage", mesh, false };
-  std::filesystem::create_directories(files.package / "Assets" / "Skybox");
-  std::filesystem::create_directories(files.storage);
+  const std::filesystem::path package = root / "package";
+  std::filesystem::create_directories(package);
+  std::filesystem::create_directories(root / "storage");
   std::filesystem::create_directories(mesh.parent_path());
-  std::filesystem::copy_file(ILLUMO_VIEWER_DEFAULTS,
-                             files.package / "envvars.json");
-  std::filesystem::copy_file(ILLUMO_VIEWER_SKYBOX,
-                             files.package / "Assets" / "Skybox" /
-                               "skybox-daylight.png");
+  std::filesystem::copy_file(ILLUMO_VIEWER_DEFAULTS, package / "envvars.json");
   std::ofstream(mesh, std::ios::binary) << torusObj();
+  // As the runtime launches it: the package carries no skybox of its own.
+  WasmFileRoots files;
+  files.storage = root / "storage";
+  files.launch = mesh;
+  files.packages = viewerTree(package);
   GuestLaunch launch;
   launch.label = "torus.obj";
   launch.size = std::filesystem::file_size(mesh);
@@ -270,14 +293,11 @@ scenePackage()
        std::chrono::steady_clock::now().time_since_epoch().count()));
   const std::filesystem::path package = root / "package";
   const std::filesystem::path demo = root / "demo";
-  std::filesystem::create_directories(package / "Assets" / "Skybox");
+  std::filesystem::create_directories(package);
   std::filesystem::create_directories(root / "storage");
   std::filesystem::create_directories(demo / "meshes");
   std::filesystem::create_directories(demo / "scenes");
   std::filesystem::copy_file(ILLUMO_VIEWER_DEFAULTS, package / "envvars.json");
-  std::filesystem::copy_file(ILLUMO_VIEWER_SKYBOX,
-                             package / "Assets" / "Skybox" /
-                               "skybox-daylight.png");
   std::ofstream(demo / "illumo.json")
     << R"({"format":"ilpk","format_version":1,"id":"demo","kind":"content"})";
   std::ofstream(demo / "meshes" / "torus.obj", std::ios::binary) << torusObj();
@@ -294,18 +314,12 @@ scenePackage()
   ]
 })";
 
-  std::shared_ptr<VirtualFileSystem> tree =
-    std::make_shared<VirtualFileSystem>();
+  std::shared_ptr<VirtualFileSystem> tree = viewerTree(package);
   std::string error;
-  VfsMount app;
-  app.point = "/app";
-  app.layers.push_back(
-    { DirectoryVfsBackend::open(package, false, error), "meshviewer" });
   VfsMount content;
   content.point = "/packages/demo";
   content.layers.push_back(
     { DirectoryVfsBackend::open(demo, false, error), "demo" });
-  tree->mount(app, error);
   tree->mount(content, error);
   WasmFileRoots files;
   files.storage = root / "storage";

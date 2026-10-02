@@ -70,6 +70,8 @@ registerPackageArchiveTests(IllumoTestRegistry& registry);
 void
 registerPackageMountsTests(IllumoTestRegistry& registry);
 void
+registerEnginePackageTests(IllumoTestRegistry& registry);
+void
 registerVirtualFileSystemTests(IllumoTestRegistry& registry);
 void
 registerIlscCodecTests(IllumoTestRegistry& registry);
@@ -101,6 +103,7 @@ createRegistry()
   registerPackageManifestTests(registry);
   registerPackageArchiveTests(registry);
   registerPackageMountsTests(registry);
+  registerEnginePackageTests(registry);
   registerVirtualFileSystemTests(registry);
   registerIlscCodecTests(registry);
   registerSceneInstanceTests(registry);

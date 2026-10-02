@@ -1593,7 +1593,7 @@ IllumoRuntime.exe              generic host: loop, window, GL, Wasmtime sandbox
   apps/illed/illumo.json       IllEd.wasm; launchAccess "edit"
   apps/illed/Assets/IllEd/editor-ui-atlas.jpg      package-preloaded asset
   apps/meshviewer/illumo.json  IllMeshViewer.wasm; launchAccess "read"
-  apps/meshviewer/Assets/Skybox/skybox-daylight.png  package-preloaded asset
+  (the mesh viewer preloads /engine/Skybox/skybox-daylight.png)
   packages/                    extra packages (directories or .ilpk), mounted at
                                /packages/<id>
   storage/csim/                game settings, saves, user rule overlays
@@ -1706,9 +1706,14 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   viewer parses loose meshes with `MeshLoader::loadFromMemory` and opens
   scenes from any mount (`viewer_open`). `IllEdCore` and
   `IllMeshViewerCore` remain only as native test oracles.
-- **Packages and files** (D-E20 to D-E24): the host mounts `/engine`, `/app`
-  (plus overlays), `/packages/<id>` (from `packages/` and `--mount`) and a
-  writable `/project` (`--project`) on one `VirtualFileSystem`. File protocol
+- **Packages and files** (D-E20 to D-E24, D-E38): the host mounts `/engine`,
+  `/app` (plus overlays), `/packages/<id>` (from `packages/` and `--mount`)
+  and a writable `/project` (`--project`) on one `VirtualFileSystem`. A
+  distribution (`python build.py dist`) ships the engine's files as
+  `engine.ilpk` and each application as `apps/<name>.ilpk`; the runtime
+  installs the engine package as `DefaultAssetSource()` before the engine
+  starts, so host shaders, fonts and images read from it, and mounts it at
+  `/engine`. Loose development folders win over archives. File protocol
   v2 adds the `Mounted` area, `List`, `Stat`, `Import` and `Pack`, 1 MiB
   mounted blocks and 16 guest tasks; `ProjectFiles` (bit 9) gates writes,
   Import and Pack and is offered only with a project. The host `vfs` command
@@ -2200,7 +2205,7 @@ disabled.
 | **D-E18** | Optional `Illumo::Content` layer owns virtual paths, manifests, `.ilpk`, the virtual file tree, `.ilsc` and `SceneInstance`; core never includes it, it never depends on Wasm or a product; guests link `IllumoGuestContent`. Supersedes D-E10. |
 | **D-E19** | `.ilsc` format 2 is the one scene format (clean break from v1): settings with one environment, an asset table with package-relative or absolute virtual references, strict core components, verbatim namespaced data, canonical output; `SceneInstance` is the live incremental loader. |
 | **D-E20** | `.ilpk` is a bounded ZIP subset (stored/deflate, CRC-32, name and size checks); the host writer deflates through vendored `stb_image_write`. |
-| **D-E21** | One host `VirtualFileSystem`: `/engine`, `/app` with overlays, `/packages/<id>`, writable `/project`; immutable mount tables, case-exact lookups, no whiteouts, host paths never disclosed. |
+| **D-E21** | One host `VirtualFileSystem`: `/engine` (`Assets/` or `engine.ilpk`, D-E38), `/app` with overlays, `/packages/<id>`, writable `/project`; immutable mount tables, case-exact lookups, no whiteouts, host paths never disclosed. |
 | **D-E22** | `illumo.json` (kinds `app`, `content`, `mod`) replaces `app.json`; `--app`/`--package` accept a directory or `.ilpk`. Refines D-E14. |
 | **D-E23** | File protocol v2: `Mounted` area, `List`, `Stat`, `Import`, `Pack`, 1 MiB mounted blocks, 16 guest tasks; `ProjectFiles` capability (bit 9) only with `--project`. |
 | **D-E24** | `GuestVfsAssets` replaces `GuestPackageAssets`: pinned preloads, held fetch sets, `/local` entries, LRU budget; `GuestSceneFetches` adds OBJ material libraries. |
@@ -2215,6 +2220,7 @@ disabled.
 | **D-E35** | Scene behaviours (2026-10-01, `docs/scene-behaviours-design.md`): a node gets game code by holding a namespaced component whose type a game registered in its own WASM program. A game package ships `behaviours.json` (format `illumo-behaviours` 1: typed fields with defaults and limits) beside `illumo.json`; `BehaviourSchema` decodes and canonically encodes component data, and `SceneBehaviours` runs one `SceneBehaviour` per component over a `SceneInstance` (via `ISceneContentObserver`) from a `BehaviourRegistry`. `GuestPlayProgram` plays a launched or default scene; IllEd shows known behaviours as typed inspector fields and remaps their node and asset references on paste and duplicate. |
 | **D-E36** | Launching installed apps (2026-10-01): `Launch` capability (bit 13) and `GuestService::LaunchApp` (19) start one installed app in its own process with a handed-over document (`Start`/`Stop`/`Status`). Offered only to an app whose manifest sets `app.launchApps` (IllEd) and never for `--capture`/`--bench-*`; the runtime then mounts every installed app read-only at `/apps/<id>`. `RuntimeAppLauncher` runs `IllumoRuntime --app <id> --open <file>` with the parent's `--mount`/`--project` as one `ChildProcess` (a kill-on-close job object on Windows). IllEd's Play (Ctrl+P) launches the scene's game from the `illumo.play` extension (`ScenePlay`) or its behaviours. |
 | **D-E37** | IllEd editing wave 3 (2026-10-01, `docs/illed-editing-wave3-plan.md`): editor-only scene data rides in an IllEd-owned extension instead of the strict `editor` block (locks in `illed.view`, through `SceneExtensionList`), so the format stays at 2.0; view-only state that must not save (isolation) goes through `SceneInstance::setViewHidden`, which changes the graph and never the document or its revision; picking takes a skip set. Viewport context menu, hover, Alt-drag copies, Drop to Floor, nudges, grouping, typed arithmetic, field menus, folding and a color picker are IllEd-local. |
+| **D-E38** | A distribution (`python build.py dist`) ships the engine's `Assets/` and `Shader/` as `engine.ilpk` and each application as `apps/<name>.ilpk`; the runtime installs `EnginePackageSource` as `DefaultAssetSource()` before the engine starts and mounts the archive at `/engine`. Loose development folders win. |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
 | **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and topology persistence (current sparse save v4; D-GC4). |

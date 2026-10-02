@@ -5,8 +5,10 @@ IllMeshViewer ships only as the `IllMeshViewer.wasm` package; the native
 `IllMeshViewerTests` runner exercises `IllMeshViewerCore` as a test oracle,
 and `Wasm/TestViewerPackage.cpp` (`IllMeshViewerWasmPackageTests`, CTest
 `IllMeshViewer.Wasm.Package`) drives the real package through the generic
-host: launch mesh as one retained host mesh and the package-preloaded
-skybox cubemap.
+host: launch mesh as one retained host mesh and the skybox cubemap preloaded
+from `/engine`. The package carries no skybox (D-E38), so these tests mount
+the engine's `Illumo/Assets` at `/engine` beside the package at `/app`, as the
+runtime does.
 
 ## Invariants
 

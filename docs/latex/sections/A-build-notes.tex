@@ -237,8 +237,8 @@ flat data files, and package-relative \texttt{ASSETS} pairs such as
 \pathref{Assets/IllEd/editor-ui-atlas.jpg} or IllumoGame's
 \pathref{Scenes/render3d-test.ilsc}. \pathref{build.py} reports an
 application as staged when \pathref{apps/<name>/} holds its module and
-\pathref{illumo.json}. Staging does not emit an \texttt{.ilpk}; pack a staged
-or project directory explicitly:
+\pathref{illumo.json}. Staging does not emit an \texttt{.ilpk} (a
+distribution does; see below); pack a staged or project directory explicitly:
 \begin{lstlisting}[language={}]
 IllumoPack <package-dir> <out.ilpk>
 IllumoPack --verify <file.ilpk>
@@ -259,6 +259,16 @@ which packs the staged \pathref{apps/illed} with \texttt{IllumoPack} into
 \texttt{Illumo.Runtime.MountMissingDir}, \texttt{.ProjectMissingDir}, and
 \texttt{.PackageMissing} check that a missing \texttt{--mount},
 \texttt{--project}, or \texttt{--package} refuses to start.
+
+For shipping, \texttt{python build.py dist} builds and runs the
+\texttt{IllumoDistribution} target (\pathref{cmake/IllumoDistribution.cmake}),
+which assembles \pathref{dist/<config>/} in the build tree: the runtime,
+\texttt{IllumoWasmCompiler}, \texttt{wasmtime.dll}, \texttt{envvars.json}, the
+notices and \pathref{licenses/}, \texttt{engine.ilpk} (\pathref{Illumo/Assets}
+and \pathref{Illumo/Shader} under \pathref{Illumo/EnginePackage/illumo.json})
+and \pathref{apps/<name>.ilpk} for every staged application, each verified
+(D-E38). \texttt{Illumo.Dist.Assemble} assembles one under
+\pathref{Testing/dist}.
 
 The \texttt{IllumoArchiveFixture} target zips
 \pathref{Illumo/Tests/Content/Fixtures/archive} with

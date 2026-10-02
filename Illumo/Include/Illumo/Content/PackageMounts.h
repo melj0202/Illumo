@@ -53,6 +53,15 @@ public:
                        const std::filesystem::path& project,
                        std::vector<std::string>& warnings,
                        std::string& error);
+  // The same with /engine supplied as a backend (an engine package, D-E38);
+  // a null engine skips that mount.
+  static bool mountAll(VirtualFileSystem& vfs,
+                       const LoadedPackage& application,
+                       const std::vector<LoadedPackage>& packages,
+                       std::shared_ptr<IVfsBackend> engine,
+                       const std::filesystem::path& project,
+                       std::vector<std::string>& warnings,
+                       std::string& error);
 
   // Mounts each application package read-only at /apps/<id>, for a launched
   // application allowed to start others (an editor reading their behaviour

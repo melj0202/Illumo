@@ -1,5 +1,6 @@
 #include <Illumo/Rendering/AssetSource.h>
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -58,9 +59,22 @@ private:
   }
 };
 
+// Constant-initialized, so it is safe to read during static initialization.
+static std::atomic<IAssetSource*> s_installedSource{ nullptr };
+
 IAssetSource*
 DefaultAssetSource()
 {
+  IAssetSource* installed = s_installedSource.load(std::memory_order_acquire);
+  if (installed != nullptr) {
+    return installed;
+  }
   static FileAssetSource source;
   return &source;
+}
+
+void
+SetDefaultAssetSource(IAssetSource* source)
+{
+  s_installedSource.store(source, std::memory_order_release);
 }

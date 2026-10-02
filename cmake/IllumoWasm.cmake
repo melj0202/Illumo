@@ -187,6 +187,42 @@ function(illumo_stage_app target name)
   add_dependencies(IllumoRuntime ${target})
 endfunction()
 
+# A distribution of this configuration in dist/<config>/ (D-E38): the runtime
+# with engine.ilpk and every staged application packed as apps/<name>.ilpk,
+# no loose Assets/ or Shader/. Not part of ALL; `python build.py dist` runs it.
+add_custom_target(IllumoDistribution
+  COMMAND ${CMAKE_COMMAND}
+    "-DRUNTIME_DIR=$<TARGET_FILE_DIR:IllumoRuntime>"
+    "-DOUT_DIR=${CMAKE_BINARY_DIR}/dist/$<CONFIG>"
+    "-DPACK=$<TARGET_FILE:IllumoPack>"
+    "-DENGINE_ASSETS=${CMAKE_SOURCE_DIR}/Illumo/Assets"
+    "-DENGINE_SHADERS=${CMAKE_SOURCE_DIR}/Illumo/Shader"
+    "-DENGINE_MANIFEST=${CMAKE_SOURCE_DIR}/Illumo/EnginePackage/illumo.json"
+    "-DVERSION_CMAKE=${ILLUMO_VERSION_CMAKE}"
+    "-DSCRATCH=${CMAKE_BINARY_DIR}/dist-staging/$<CONFIG>"
+    -P "${CMAKE_SOURCE_DIR}/cmake/IllumoDistribution.cmake"
+  VERBATIM
+  COMMENT "Assembling the distribution")
+set_target_properties(IllumoDistribution PROPERTIES FOLDER "staging")
+add_dependencies(IllumoDistribution IllumoRuntime IllumoPack IllumoVersionInfo)
+if(BUILD_TESTING)
+  # The staged runtime assembles into a distribution whose every archive
+  # verifies; the runtime's use of engine.ilpk is Illumo.Content.EnginePackage*.
+  add_test(NAME Illumo.Dist.Assemble
+    COMMAND ${CMAKE_COMMAND}
+      "-DRUNTIME_DIR=$<TARGET_FILE_DIR:IllumoRuntime>"
+      "-DOUT_DIR=${CMAKE_BINARY_DIR}/Testing/dist"
+      "-DPACK=$<TARGET_FILE:IllumoPack>"
+      "-DENGINE_ASSETS=${CMAKE_SOURCE_DIR}/Illumo/Assets"
+      "-DENGINE_SHADERS=${CMAKE_SOURCE_DIR}/Illumo/Shader"
+      "-DENGINE_MANIFEST=${CMAKE_SOURCE_DIR}/Illumo/EnginePackage/illumo.json"
+      "-DVERSION_CMAKE=${ILLUMO_VERSION_CMAKE}"
+      "-DSCRATCH=${CMAKE_BINARY_DIR}/Testing/dist-staging"
+      -P "${CMAKE_SOURCE_DIR}/cmake/IllumoDistribution.cmake")
+  set_tests_properties(Illumo.Dist.Assemble PROPERTIES
+    LABELS "Illumo;IllumoWorkspace" TIMEOUT 120)
+endif()
+
 if(BUILD_TESTING)
   # Runtime command line: help and option rejection finish before any window
   # opens, so they are headless. tools/verify_capture.py covers real captures.

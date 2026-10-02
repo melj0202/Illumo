@@ -1,4 +1,5 @@
 #include <Illumo/Foundation/Profile.h>
+#include <Illumo/Rendering/AssetSource.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/ITexture.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -13,7 +14,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <mutex>
+#include <vector>
 
 const float Font::kDefaultPixelSize = 32.0f;
 
@@ -72,6 +75,18 @@ resolveFontPath(const std::string& requestedPath)
   }
 
   return requestedPath;
+}
+
+// A font file's bytes from the default source; false when absent, unreadable
+// or larger than FreeType's size type.
+bool
+readFontBytes(const std::string& path, std::vector<unsigned char>& bytes)
+{
+  IAssetSource* files = DefaultAssetSource();
+  return files != nullptr && !path.empty() &&
+         files->read(files->canonical(path), bytes) && !bytes.empty() &&
+         bytes.size() <=
+           static_cast<std::size_t>(std::numeric_limits<FT_Long>::max());
 }
 
 } // namespace
@@ -150,15 +165,13 @@ Font::getDefaultFont()
     "Assets/Fonts/Handjet/static/Handjet-Regular.ttf",
   };
 
+  // Each candidate is tried rather than probed, since an engine package
+  // serves them without loose files.
   for (const std::string& candidate : candidatePaths) {
-    std::string resolved = resolveFontPath(candidate);
-    std::error_code ec;
-    if (std::filesystem::exists(resolved, ec)) {
-      std::shared_ptr<Font> font = std::make_shared<Font>();
-      if (font->loadFile(resolved, kDefaultPixelSize)) {
-        s_defaultFont = font;
-        return s_defaultFont;
-      }
+    std::shared_ptr<Font> font = std::make_shared<Font>();
+    if (font->loadFile(resolveFontPath(candidate), kDefaultPixelSize)) {
+      s_defaultFont = font;
+      return s_defaultFont;
     }
   }
 
@@ -231,17 +244,33 @@ Font::loadFile(const std::string& path,
     return false;
   }
 
+  // Faces are read through the default source, so a distribution's engine
+  // package serves the engine's fonts. The bytes outlive both faces.
+  std::vector<unsigned char> faceBytes;
+  if (!readFontBytes(path, faceBytes)) {
+    return false;
+  }
   FT_Face face = nullptr;
-  FT_Error err = FT_New_Face(library, path.c_str(), 0, &face);
+  FT_Error err = FT_New_Memory_Face(library,
+                                    faceBytes.data(),
+                                    static_cast<FT_Long>(faceBytes.size()),
+                                    0,
+                                    &face);
   if (err != 0 || face == nullptr) {
     return false;
   }
   setFaceWeight(library, face, options.weight);
 
   // A missing fallback only costs the glyphs the primary face lacks.
+  std::vector<unsigned char> fallbackBytes;
   FT_Face fallback = nullptr;
   if (!options.fallbackPath.empty() &&
-      FT_New_Face(library, options.fallbackPath.c_str(), 0, &fallback) != 0) {
+      (!readFontBytes(options.fallbackPath, fallbackBytes) ||
+       FT_New_Memory_Face(library,
+                          fallbackBytes.data(),
+                          static_cast<FT_Long>(fallbackBytes.size()),
+                          0,
+                          &fallback) != 0)) {
     fallback = nullptr;
   }
 

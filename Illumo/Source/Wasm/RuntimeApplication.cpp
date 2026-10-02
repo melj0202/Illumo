@@ -1,4 +1,5 @@
 #include <Illumo/Audio/AudioDevice.h>
+#include <Illumo/Content/EnginePackage.h>
 #include <Illumo/Content/PackageMounts.h>
 #include <Illumo/Engine/Application.h>
 #include <Illumo/Engine/Illumo.h>
@@ -34,6 +35,15 @@ static constexpr const char* kDefaultApplication = "game";
 // own directory, where the engine's shaders and assets are staged, so
 // relative command-line paths are resolved against this one instead.
 static std::filesystem::path s_invocationDirectory;
+
+// A distribution's engine package (engine.ilpk, D-E38), opened before the
+// engine starts and kept for the process: host shaders, fonts and textures
+// read through its source, and guests see it at /engine. Both stay null in a
+// development build, whose loose Assets/ and Shader/ win.
+static std::shared_ptr<EngineArchiveBackend> s_enginePackage;
+static std::unique_ptr<EnginePackageSource> s_engineSource;
+// Why a present engine.ilpk could not be used; the launch then fails.
+static std::string s_enginePackageError;
 
 static std::filesystem::path
 optionPath(const std::string& value)
@@ -250,6 +260,22 @@ prepareRuntime(IEnvVars* environment)
                          "shaders and assets resolve from the current one");
     }
   }
+  if (!s_engineSource && s_enginePackageError.empty()) {
+    s_enginePackage = EnginePackage::open(
+      runtimeDirectory(), manifestCeilings(), s_enginePackageError);
+    if (s_enginePackage) {
+      // The file source taken before this one replaces it serves every name
+      // the package does not hold.
+      s_engineSource = std::make_unique<EnginePackageSource>(
+        s_enginePackage, runtimeDirectory(), DefaultAssetSource());
+      SetDefaultAssetSource(s_engineSource.get());
+      Logger::LogInfo(std::string("Engine files from ") +
+                      EnginePackage::kFileName);
+    } else if (!s_enginePackageError.empty()) {
+      Logger::LogError("Cannot use " + std::string(EnginePackage::kFileName) +
+                       ": " + s_enginePackageError);
+    }
+  }
   clearLaunchOptions(environment);
 }
 
@@ -259,6 +285,10 @@ static std::unique_ptr<RuntimeShell>
 prepareShell(Illumo& illumo)
 {
   ILLUMO_PROFILE_ZONE("Runtime.prepareShell");
+  if (!s_enginePackageError.empty()) {
+    // Logged when it was opened; a broken distribution must not half-run.
+    return nullptr;
+  }
   IEnvVars* environment = &illumo.environment();
   std::filesystem::path gamePath =
     optionPath(environment->getVar("GuestModule").value);
@@ -380,10 +410,21 @@ prepareShell(Illumo& illumo)
     }
     std::shared_ptr<VirtualFileSystem> vfs =
       std::make_shared<VirtualFileSystem>();
+    // /engine: the engine package when the runtime was shipped with one,
+    // otherwise the loose Assets/ directory a development build stages.
+    std::shared_ptr<IVfsBackend> engine = s_enginePackage;
+    if (!engine) {
+      std::string engineError;
+      engine = DirectoryVfsBackend::open(
+        runtimeDirectory() / "Assets", false, engineError);
+      if (!engine) {
+        warnings.push_back("No engine assets to mount: " + engineError);
+      }
+    }
     if (!PackageMounts::mountAll(*vfs,
                                  package,
                                  packages,
-                                 runtimeDirectory() / "Assets",
+                                 std::move(engine),
                                  project,
                                  warnings,
                                  error)) {

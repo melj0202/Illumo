@@ -162,7 +162,9 @@ search always ends.
         \texttt{--game}.
 \end{itemize}
 \texttt{PackageMounts::mountAll} assembles the tree: \texttt{/engine} from the
-runtime \pathref{Assets/}, \texttt{/app} from the launched package under the
+runtime \pathref{Assets/} (or, in a distribution, \texttt{engine.ilpk}, which
+the runtime also installs as the host's default asset source; D-E38),
+\texttt{/app} from the launched package under the
 overlays of every package that targets it (stacked by priority, dependency
 order, then id), \texttt{/packages/<id>} for every package whose dependencies
 resolve, and the optional \texttt{/project}. The mount table is an immutable

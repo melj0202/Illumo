@@ -13,7 +13,7 @@ manifest `IllMeshViewer/illumo.json`, `launchAccess: "read"`, private storage
 `storage/meshviewer/`) run by `IllumoRuntime --app meshviewer [--open
 model.obj]`, like IllumoGame and IllEd. There is no native
 `IllMeshViewer.exe`. `Wasm/ViewerApplication.cpp` is the guest entry
-(a `GuestProgram` whose one scene is `MeshViewerScene`); it preloads `Assets/Skybox/skybox-daylight.png`
+(a `GuestProgram` whose one scene is `MeshViewerScene`); it preloads the engine's `/engine/Skybox/skybox-daylight.png` (`MeshViewerScene::kDefaultSkybox`; the package carries no copy, D-E38)
 from the package (`packageAssets()`) and hands the `--open` launch file to
 the platform seam. `IllMeshViewerCore` stays a native library for the
 `IllMeshViewerTests` oracle suite.
@@ -71,7 +71,7 @@ the platform seam. `IllMeshViewerCore` stays a native library for the
 - Main-thread affine.
 - `IllMeshViewer.Wasm.Package` (`IllMeshViewer/Tests/Wasm/TestViewerPackage.cpp`)
   drives the real package through the generic host: launch mesh as one
-  retained host mesh, and the package-preloaded skybox cubemap.
+  retained host mesh, and the skybox cubemap preloaded from `/engine`.
   `IllMeshViewer.Wasm.ScenePackage` mounts a content package and opens its
   scene through `viewer_open`; the scene's mesh is fetched and retained.
 - Follow `docs/contributing.md`: avoid `auto`, avoid namespaces, keep ownership

@@ -99,10 +99,13 @@ MeshViewerScene::start(IllumoContext& startContext)
   m_wireframeVisual->prepare(ic->renderer);
 
   if (ic->assetManager != nullptr) {
-    // The WASM package preloads this name; native runs may start from the
-    // repository root instead of the staged runtime directory.
+    // The WASM package preloads the engine's skybox under this name; the
+    // native test oracle reads it from the runtime directory, or from the
+    // repository root when it starts there.
+#if defined(ILLUMO_SERIAL_GUEST)
+    std::string skyboxPath = kDefaultSkybox;
+#else
     std::string skyboxPath = "Assets/Skybox/skybox-daylight.png";
-#if !defined(ILLUMO_SERIAL_GUEST)
     std::error_code existsError;
     if (!std::filesystem::exists(skyboxPath, existsError)) {
       skyboxPath = "Illumo/Assets/Skybox/skybox-daylight.png";

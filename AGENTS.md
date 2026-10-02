@@ -341,6 +341,9 @@ outputs (`IllumoGame.exe`, `IllEd.exe`, `IllMeshViewer.exe`,
 --app game|illed|meshviewer [-- runtime args]` builds the runtime and runs
 one app (`--no-build` skips building). `python build.py test` builds every
 executable CTest runs; `tools/test_build.py` covers the orchestrator.
+`python build.py dist` assembles a distribution in `<build>/dist/<config>/`
+with the engine as `engine.ilpk` and each app as `apps/<name>.ilpk` (D-E38);
+development builds stay loose.
 Builds are versioned `vYY.MM_B` (D-F2): every build stamps `BuildInfo` and
 the staged `illumo.json` manifests from `VERSION.txt` and Git, so never edit
 the version by hand or add `version` to a source manifest. `python build.py

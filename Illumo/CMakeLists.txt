@@ -282,6 +282,7 @@ add_library(IllumoContent STATIC
   Source/Content/BehaviourSchema.cpp
   Source/Content/ScenePlay.cpp
   Source/Content/SceneExtensionList.cpp
+  Source/Content/EnginePackage.cpp
   Source/Content/IlscCodec.cpp
   Source/Content/PackageArchive.cpp
   Source/Content/PackageManifest.cpp
@@ -359,6 +360,7 @@ if(BUILD_TESTING)
     Tests/TestFrameCapture.cpp
     Tests/Content/TestIlscCodec.cpp
     Tests/Content/TestPackageArchive.cpp
+    Tests/Content/TestEnginePackage.cpp
     Tests/Content/TestPackageMounts.cpp
     Tests/Content/TestPackageManifest.cpp
     Tests/Content/TestSceneBehaviours.cpp
