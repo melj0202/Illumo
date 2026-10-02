@@ -65,6 +65,9 @@ static const std::array<EditorPanelInfo, 4> kPanels = { {
     EditorCommand::PopOutInspectorPanel },
 } };
 
+// IllEd's default right column (Tools over Inspector), in layout units.
+static constexpr float kRightColumnWidth = 290.0f;
+
 // Settings values are single lines; the dock's layout text uses newlines.
 static std::string
 encodeLayout(const std::string& text)
@@ -109,6 +112,9 @@ EditorScene::setupDock()
     spec.detachedHeight = info.detachedHeight;
     m_dock.addPanel(spec);
   }
+  // The inspector's rows need more room than the dock's default column; a
+  // saved layout still decides.
+  m_dock.setColumnWidth(GuiDockSide::Right, kRightColumnWidth);
   m_dockVisual = makeChromeVisual(ic->window, ic->renderer);
   for (std::unique_ptr<GameVisual>& chrome : m_detachedChrome) {
     chrome = makeChromeVisual(ic->window, ic->renderer);

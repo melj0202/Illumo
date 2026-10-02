@@ -56,6 +56,67 @@ EditorScene::applyWorldCamera()
   ic->camera->setProjectionType(ProjectionType::Perspective);
 }
 
+// The grid window the current view needs: its centre (snapped to major
+// lines) and half extent in world units, covering the viewport with margin.
+static void
+gridWindowFor(bool is3D,
+              float spacing,
+              float cameraX,
+              float cameraY,
+              float zoom,
+              float viewWidth,
+              float viewHeight,
+              float* centerX,
+              float* centerY,
+              float* half)
+{
+  if (is3D) {
+    const float distance =
+      std::max(2.0f, 12.0f / std::max(0.15f, zoom / 32.0f));
+    *half = std::max(20.0f * spacing, distance * 3.0f);
+  } else {
+    const float scale = std::max(0.01f, zoom);
+    *half = std::max(viewWidth, viewHeight) * 0.5f / scale * 1.3f;
+  }
+  const float major = spacing * 5.0f;
+  *centerX = std::round(cameraX / major) * major;
+  *centerY = std::round(cameraY / major) * major;
+}
+
+void
+EditorScene::followGrid()
+{
+  if (ic == nullptr || ic->camera == nullptr || !m_gridBuilt) {
+    return;
+  }
+  const float spacing = std::max(0.001f, m_document.editorState().gridSpacing);
+  float width = 0.0f;
+  float height = 0.0f;
+  viewportPixels(&width, &height, nullptr, nullptr);
+  const glm::dvec2 position = ic->camera->GetPositionPrecise();
+  float centerX = 0.0f;
+  float centerY = 0.0f;
+  float half = 0.0f;
+  gridWindowFor(m_document.worldMode() == SceneWorldMode::World3D,
+                spacing,
+                static_cast<float>(position.x),
+                static_cast<float>(position.y),
+                ic->camera->GetZoom(),
+                width,
+                height,
+                &centerX,
+                &centerY,
+                &half);
+  // Rebuild when the view outgrows the grid, shrinks well inside it, or
+  // drifts toward its edge.
+  const float drift = std::max(std::fabs(centerX - m_gridCenterX),
+                               std::fabs(centerY - m_gridCenterY));
+  if (half > m_gridHalf || half < m_gridHalf * 0.4f ||
+      drift > m_gridHalf * 0.25f || spacing != m_gridSpacing) {
+    rebuildGrid();
+  }
+}
+
 void
 EditorScene::rebuildGrid()
 {
@@ -64,53 +125,98 @@ EditorScene::rebuildGrid()
   }
   m_grid->clearPrimitives();
   const float spacing = std::max(0.001f, m_document.editorState().gridSpacing);
-  if (m_document.worldMode() == SceneWorldMode::World3D) {
-    const int halfCount = 20;
-    const float extent = static_cast<float>(halfCount) * spacing;
-    const ColorRgba minorColor{ 38, 50, 66, 255 };
-    const ColorRgba majorColor{ 58, 76, 100, 255 };
-    for (int i = -halfCount; i <= halfCount; ++i) {
-      if (i == 0) {
-        continue;
+  const bool is3D = m_document.worldMode() == SceneWorldMode::World3D;
+  float width = 1280.0f;
+  float height = 720.0f;
+  viewportPixels(&width, &height, nullptr, nullptr);
+  const glm::dvec2 position =
+    ic->camera != nullptr ? ic->camera->GetPositionPrecise() : glm::dvec2(0.0);
+  const float zoom = ic->camera != nullptr ? ic->camera->GetZoom() : 32.0f;
+  gridWindowFor(is3D,
+                spacing,
+                static_cast<float>(position.x),
+                static_cast<float>(position.y),
+                zoom,
+                width,
+                height,
+                &m_gridCenterX,
+                &m_gridCenterY,
+                &m_gridHalf);
+  m_gridSpacing = spacing;
+  // Far out, minor lines would crowd: step in fives so at most about 160
+  // lines cross each way, every fifth of them major.
+  float step = spacing;
+  while (m_gridHalf / step > 80.0f) {
+    step *= 5.0f;
+  }
+  const int count = static_cast<int>(std::ceil(m_gridHalf / step));
+  const float firstX = m_gridCenterX - static_cast<float>(count) * step;
+  const float firstY = m_gridCenterY - static_cast<float>(count) * step;
+  const float extent = static_cast<float>(count) * step;
+  const ColorRgba minorColor =
+    is3D ? ColorRgba{ 38, 50, 66, 255 } : ColorRgba{ 32, 44, 58, 255 };
+  const ColorRgba majorColor =
+    is3D ? ColorRgba{ 58, 76, 100, 255 } : ColorRgba{ 48, 66, 88, 255 };
+  for (int i = 0; i <= count * 2; ++i) {
+    const float x = firstX + static_cast<float>(i) * step;
+    const float y = firstY + static_cast<float>(i) * step;
+    const bool majorX =
+      std::fmod(std::fabs(std::round(x / step)), 5.0f) == 0.0f;
+    const bool majorY =
+      std::fmod(std::fabs(std::round(y / step)), 5.0f) == 0.0f;
+    // The world axes are drawn in colour below.
+    if (std::fabs(x) > step * 0.01f) {
+      if (is3D) {
+        m_grid->addLine(glm::vec3(x, 0.0f, m_gridCenterY - extent),
+                        glm::vec3(x, 0.0f, m_gridCenterY + extent),
+                        majorX ? majorColor : minorColor);
+      } else {
+        m_grid->addLine(glm::vec3(x, m_gridCenterY - extent, 0.0f),
+                        glm::vec3(x, m_gridCenterY + extent, 0.0f),
+                        majorX ? majorColor : minorColor);
       }
-      const float pos = static_cast<float>(i) * spacing;
-      const ColorRgba color = (i % 5 == 0) ? majorColor : minorColor;
-      m_grid->addLine(
-        glm::vec3(-extent, 0.0f, pos), glm::vec3(extent, 0.0f, pos), color);
-      m_grid->addLine(
-        glm::vec3(pos, 0.0f, -extent), glm::vec3(pos, 0.0f, extent), color);
     }
-    m_grid->addLine(glm::vec3(-extent, 0.0f, 0.0f),
-                    glm::vec3(extent, 0.0f, 0.0f),
-                    ColorRgba{ 220, 65, 65, 255 });
-    m_grid->addLine(glm::vec3(0.0f, 0.0f, -extent),
-                    glm::vec3(0.0f, 0.0f, extent),
-                    ColorRgba{ 65, 120, 230, 255 });
+    if (std::fabs(y) > step * 0.01f) {
+      if (is3D) {
+        m_grid->addLine(glm::vec3(m_gridCenterX - extent, 0.0f, y),
+                        glm::vec3(m_gridCenterX + extent, 0.0f, y),
+                        majorY ? majorColor : minorColor);
+      } else {
+        m_grid->addLine(glm::vec3(m_gridCenterX - extent, y, 0.0f),
+                        glm::vec3(m_gridCenterX + extent, y, 0.0f),
+                        majorY ? majorColor : minorColor);
+      }
+    }
+  }
+  const float left = m_gridCenterX - extent;
+  const float right = m_gridCenterX + extent;
+  const float bottom = m_gridCenterY - extent;
+  const float top = m_gridCenterY + extent;
+  if (is3D) {
+    if (bottom <= 0.0f && top >= 0.0f) {
+      m_grid->addLine(glm::vec3(left, 0.0f, 0.0f),
+                      glm::vec3(right, 0.0f, 0.0f),
+                      ColorRgba{ 220, 65, 65, 255 });
+    }
+    if (left <= 0.0f && right >= 0.0f) {
+      m_grid->addLine(glm::vec3(0.0f, 0.0f, bottom),
+                      glm::vec3(0.0f, 0.0f, top),
+                      ColorRgba{ 65, 120, 230, 255 });
+    }
     m_grid->addLine(glm::vec3(0.0f, 0.0f, 0.0f),
                     glm::vec3(0.0f, 2.5f, 0.0f),
                     ColorRgba{ 65, 210, 95, 255 });
   } else {
-    const int halfCount = 30;
-    const float extent = static_cast<float>(halfCount) * spacing;
-    const ColorRgba minorColor{ 32, 44, 58, 255 };
-    const ColorRgba majorColor{ 48, 66, 88, 255 };
-    for (int i = -halfCount; i <= halfCount; ++i) {
-      if (i == 0) {
-        continue;
-      }
-      const float pos = static_cast<float>(i) * spacing;
-      const ColorRgba color = (i % 5 == 0) ? majorColor : minorColor;
-      m_grid->addLine(
-        glm::vec3(-extent, pos, 0.0f), glm::vec3(extent, pos, 0.0f), color);
-      m_grid->addLine(
-        glm::vec3(pos, -extent, 0.0f), glm::vec3(pos, extent, 0.0f), color);
+    if (bottom <= 0.0f && top >= 0.0f) {
+      m_grid->addLine(glm::vec3(left, 0.0f, 0.0f),
+                      glm::vec3(right, 0.0f, 0.0f),
+                      ColorRgba{ 190, 60, 60, 255 });
     }
-    m_grid->addLine(glm::vec3(-extent, 0.0f, 0.0f),
-                    glm::vec3(extent, 0.0f, 0.0f),
-                    ColorRgba{ 190, 60, 60, 255 });
-    m_grid->addLine(glm::vec3(0.0f, -extent, 0.0f),
-                    glm::vec3(0.0f, extent, 0.0f),
-                    ColorRgba{ 60, 180, 85, 255 });
+    if (left <= 0.0f && right >= 0.0f) {
+      m_grid->addLine(glm::vec3(0.0f, bottom, 0.0f),
+                      glm::vec3(0.0f, top, 0.0f),
+                      ColorRgba{ 60, 180, 85, 255 });
+    }
     const float cross = 0.35f;
     m_grid->addLine(glm::vec3(-cross, 0.0f, 0.01f),
                     glm::vec3(cross, 0.0f, 0.01f),
@@ -120,7 +226,6 @@ EditorScene::rebuildGrid()
                     ColorRgba{ 255, 220, 100, 255 });
   }
 }
-
 void
 EditorScene::updateCamera(double dt)
 {
@@ -466,7 +571,7 @@ EditorScene::rebuildSelectionOverlay()
                    m_document.worldMatrix(m_hoverId),
                    local,
                    1.04f,
-                   ColorRgba{ 225, 228, 235, 150 });
+                   ColorRgba{ 196, 208, 226, 90 });
   }
   const std::string& primary = m_selection.primary();
   if (primary.empty() || m_document.findNode(primary) == nullptr) {

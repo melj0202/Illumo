@@ -73,6 +73,12 @@ public:
     return module.createAtContextPoint(command);
   }
   static bool isolated(const EditorScene& module) { return module.m_isolated; }
+  // The grid's centre and half extent in world units.
+  static Vector3 gridWindow(const EditorScene& module)
+  {
+    return Vector3(
+      module.m_gridCenterX, module.m_gridCenterY, module.m_gridHalf);
+  }
 
   static EditorToolbar* toolbar(EditorScene& module)
   {

@@ -778,6 +778,7 @@ EditorInspector::refreshFields(const EditorDocument& document,
     return;
   }
   buildFields(document, selection);
+  moveRemoveButtonsToHeaders();
   applyFolding();
   m_fieldsBuilt = true;
   m_fieldsDocument = &document;
@@ -1021,7 +1022,7 @@ buildBehaviourFields(const BehaviourType& type,
           std::vector<InspectorField>(fields.begin() + 1, fields.end()), false);
         break;
       case BehaviourFieldKind::Bool: {
-        InspectorField field = make('\0', "Value");
+        InspectorField field = make('\0', "");
         field.kind = InspectorFieldKind::Toggle;
         field.toggle = value->flag;
         fields.push_back(field);
@@ -2004,117 +2005,10 @@ EditorInspector::activate(const InspectorField& target,
     if (count == 0) {
       return false;
     }
-    const int next = (target.choice + (reverse ? count - 1 : 1)) % count;
-    if (key == "scene.mode") {
-      return document.setWorldMode(next == 1 ? SceneWorldMode::World3D
-                                             : SceneWorldMode::World2D);
-    }
-    if (key == "scene.play") {
-      return document.setPlayApplication(
-        next == 0 ? std::string() : target.choices[static_cast<size_t>(next)]);
-    }
-    const std::string picked = target.choices[static_cast<size_t>(next)];
-    if (key.starts_with("behaviour:")) {
-      return applyBehaviour(
-        key,
-        [&picked](BehaviourValue& value, const BehaviourField& field, char) {
-          if (field.kind == BehaviourFieldKind::Choice) {
-            value.text = picked;
-            return true;
-          }
-          if (field.kind != BehaviourFieldKind::Asset &&
-              field.kind != BehaviourFieldKind::Node) {
-            return false;
-          }
-          // The first choice is "(none)".
-          value.text = picked == kNoAsset ? std::string() : picked;
-          return true;
-        },
-        {},
-        document,
-        selection);
-    }
-    if (key == "env.skybox") {
-      // The first choice is "(none)".
-      SceneEnvironment environment = document.scene().document().environment;
-      environment.skybox = next == 0 ? std::string() : picked;
-      return document.setEnvironment(environment, {});
-    }
-    if (assetField) {
-      return editAsset(
-        document,
-        assetId,
-        "Edit asset " + assetId,
-        {},
-        [&property, next](SceneAsset& asset) {
-          if (property == "type") {
-            const SceneAssetType types[] = { SceneAssetType::Texture,
-                                             SceneAssetType::Atlas,
-                                             SceneAssetType::CubemapCross };
-            asset.type = types[std::clamp(next, 0, 2)];
-          } else if (property == "filter") {
-            asset.texture.filter = next == 0 ? SceneTextureFilter::Nearest
-                                             : SceneTextureFilter::Linear;
-          } else if (property == "wrap") {
-            asset.texture.wrap =
-              next == 0 ? SceneTextureWrap::Clamp : SceneTextureWrap::Repeat;
-          } else {
-            return false;
-          }
-          return true;
-        });
-    }
-    return document.editNodes(
-      selection.ids(),
-      "Set " + key,
-      {},
-      [&key, &picked, next, &document](SceneNode& node) {
-        if (key == "mesh.asset") {
-          SceneMeshRenderer* mesh = componentOf<SceneMeshRenderer>(node);
-          return mesh != nullptr && ((mesh->asset = picked), true);
-        }
-        if (key == "sprite.texture" || key == "sprite.source") {
-          SceneSprite* sprite = componentOf<SceneSprite>(node);
-          if (sprite == nullptr) {
-            return false;
-          }
-          if (key == "sprite.source") {
-            sprite->hasCell = next == 1;
-            return true;
-          }
-          sprite->texture = picked;
-          // Only an atlas has cells; a plain texture shows its region.
-          const SceneAsset* asset = findAsset(document, picked);
-          if (asset == nullptr || asset->type != SceneAssetType::Atlas) {
-            sprite->hasCell = false;
-          }
-          return true;
-        }
-        if (key == "primitive.shape") {
-          ScenePrimitive* primitive = componentOf<ScenePrimitive>(node);
-          return primitive != nullptr &&
-                 parseScenePrimitiveShape(picked, primitive->shape);
-        }
-        if (key == "sprite.facing") {
-          SceneSprite* sprite = componentOf<SceneSprite>(node);
-          if (sprite == nullptr) {
-            return false;
-          }
-          sprite->facing =
-            next == 1 ? SceneSpriteFacing::Billboard : SceneSpriteFacing::World;
-          return true;
-        }
-        if (key == "camera.projection") {
-          SceneCamera* camera = componentOf<SceneCamera>(node);
-          if (camera == nullptr) {
-            return false;
-          }
-          camera->projection = next == 1 ? SceneProjection::Orthographic
-                                         : SceneProjection::Perspective;
-          return true;
-        }
-        return false;
-      });
+    return applyChoice(target,
+                       (target.choice + (reverse ? count - 1 : 1)) % count,
+                       document,
+                       selection);
   }
   if (target.kind == InspectorFieldKind::Button) {
     if (key.starts_with("behaviour.remove:")) {
@@ -2218,6 +2112,131 @@ EditorInspector::activate(const InspectorField& target,
     }
   }
   return false;
+}
+
+bool
+EditorInspector::applyChoice(const InspectorField& target,
+                             int next,
+                             EditorDocument& document,
+                             const EditorSelection& selection)
+{
+  const std::string& key = target.key;
+  if (next < 0 || next >= static_cast<int>(target.choices.size())) {
+    return false;
+  }
+  std::string property;
+  std::string assetId;
+  const bool assetField = splitAssetKey(key, &property, &assetId);
+  if (key == "scene.mode") {
+    return document.setWorldMode(next == 1 ? SceneWorldMode::World3D
+                                           : SceneWorldMode::World2D);
+  }
+  if (key == "scene.play") {
+    return document.setPlayApplication(
+      next == 0 ? std::string() : target.choices[static_cast<size_t>(next)]);
+  }
+  const std::string picked = target.choices[static_cast<size_t>(next)];
+  if (key.starts_with("behaviour:")) {
+    return applyBehaviour(
+      key,
+      [&picked](BehaviourValue& value, const BehaviourField& field, char) {
+        if (field.kind == BehaviourFieldKind::Choice) {
+          value.text = picked;
+          return true;
+        }
+        if (field.kind != BehaviourFieldKind::Asset &&
+            field.kind != BehaviourFieldKind::Node) {
+          return false;
+        }
+        // The first choice is "(none)".
+        value.text = picked == kNoAsset ? std::string() : picked;
+        return true;
+      },
+      {},
+      document,
+      selection);
+  }
+  if (key == "env.skybox") {
+    // The first choice is "(none)".
+    SceneEnvironment environment = document.scene().document().environment;
+    environment.skybox = next == 0 ? std::string() : picked;
+    return document.setEnvironment(environment, {});
+  }
+  if (assetField) {
+    return editAsset(
+      document,
+      assetId,
+      "Edit asset " + assetId,
+      {},
+      [&property, next](SceneAsset& asset) {
+        if (property == "type") {
+          const SceneAssetType types[] = { SceneAssetType::Texture,
+                                           SceneAssetType::Atlas,
+                                           SceneAssetType::CubemapCross };
+          asset.type = types[std::clamp(next, 0, 2)];
+        } else if (property == "filter") {
+          asset.texture.filter = next == 0 ? SceneTextureFilter::Nearest
+                                           : SceneTextureFilter::Linear;
+        } else if (property == "wrap") {
+          asset.texture.wrap =
+            next == 0 ? SceneTextureWrap::Clamp : SceneTextureWrap::Repeat;
+        } else {
+          return false;
+        }
+        return true;
+      });
+  }
+  return document.editNodes(
+    selection.ids(),
+    "Set " + key,
+    {},
+    [&key, &picked, next, &document](SceneNode& node) {
+      if (key == "mesh.asset") {
+        SceneMeshRenderer* mesh = componentOf<SceneMeshRenderer>(node);
+        return mesh != nullptr && ((mesh->asset = picked), true);
+      }
+      if (key == "sprite.texture" || key == "sprite.source") {
+        SceneSprite* sprite = componentOf<SceneSprite>(node);
+        if (sprite == nullptr) {
+          return false;
+        }
+        if (key == "sprite.source") {
+          sprite->hasCell = next == 1;
+          return true;
+        }
+        sprite->texture = picked;
+        // Only an atlas has cells; a plain texture shows its region.
+        const SceneAsset* asset = findAsset(document, picked);
+        if (asset == nullptr || asset->type != SceneAssetType::Atlas) {
+          sprite->hasCell = false;
+        }
+        return true;
+      }
+      if (key == "primitive.shape") {
+        ScenePrimitive* primitive = componentOf<ScenePrimitive>(node);
+        return primitive != nullptr &&
+               parseScenePrimitiveShape(picked, primitive->shape);
+      }
+      if (key == "sprite.facing") {
+        SceneSprite* sprite = componentOf<SceneSprite>(node);
+        if (sprite == nullptr) {
+          return false;
+        }
+        sprite->facing =
+          next == 1 ? SceneSpriteFacing::Billboard : SceneSpriteFacing::World;
+        return true;
+      }
+      if (key == "camera.projection") {
+        SceneCamera* camera = componentOf<SceneCamera>(node);
+        if (camera == nullptr) {
+          return false;
+        }
+        camera->projection = next == 1 ? SceneProjection::Orthographic
+                                       : SceneProjection::Perspective;
+        return true;
+      }
+      return false;
+    });
 }
 
 bool
@@ -2331,12 +2350,42 @@ EditorInspector::layout()
 {
   const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
   const float rowHeight = std::max(20.0f, std::round(22.0f * fontScale));
-  const float labelWidth = std::round(m_width * 0.34f);
+  // The label column fits the longest label (and a swatch), within limits.
+  const float labelFont = std::max(9.0f, std::round(12.0f * fontScale));
+  float widest = 0.0f;
+  for (const InspectorRow& row : m_rows) {
+    if (row.section || row.label.empty()) {
+      continue;
+    }
+    float width = GuiToolStyle::textWidth(row.label, labelFont);
+    if (!row.fields.empty() &&
+        m_fields[row.fields.front()].kind == InspectorFieldKind::Swatch) {
+      width += rowHeight + 2.0f;
+    }
+    widest = std::max(widest, width);
+  }
+  m_labelWidth =
+    std::round(std::clamp(widest + GuiToolStyle::kPad + 10.0f * fontScale,
+                          m_width * 0.26f,
+                          m_width * 0.36f));
+  const float labelWidth = m_labelWidth;
   const float gap = std::round(3.0f * fontScale);
   float y = m_y + std::round(4.0f * fontScale) - m_scroll;
   for (InspectorRow& row : m_rows) {
     row.y = y;
-    if (!row.fields.empty()) {
+    if (row.section) {
+      // Header buttons sit at the header's right end, right to left.
+      const float size = rowHeight - 6.0f;
+      float right = m_x + m_width - 8.0f * fontScale;
+      for (size_t index : row.fields) {
+        InspectorField& target = m_fields[index];
+        right -= size;
+        target.x = right;
+        target.y = y + 2.0f;
+        target.width = size;
+        right -= gap;
+      }
+    } else if (!row.fields.empty()) {
       // A swatch sits at the right end of the label column; the other
       // fields share the rest of the row.
       std::vector<size_t> flowing;
@@ -2444,8 +2493,15 @@ EditorInspector::update(InputManager* input,
     const InspectorField* wheeled =
       m_hoverField >= 0 ? &m_fields[static_cast<size_t>(m_hoverField)]
                         : nullptr;
-    if (wheel != 0.0f && input->isControlPressed() && wheeled != nullptr &&
-        wheeled->kind == InspectorFieldKind::Number && !m_edit.active()) {
+    if (wheel != 0.0f && m_listOpen) {
+      const int last =
+        std::max(0, static_cast<int>(m_listOptions.size()) - kListRows);
+      m_listFirst =
+        std::clamp(m_listFirst - static_cast<int>(std::round(wheel)), 0, last);
+    } else if (wheel != 0.0f && input->isControlPressed() &&
+               wheeled != nullptr &&
+               wheeled->kind == InspectorFieldKind::Number &&
+               !m_edit.active()) {
       // Ctrl+wheel steps the number under the pointer (Shift finer); one
       // command per field however many notches.
       const InspectorField target = *wheeled;
@@ -2467,6 +2523,33 @@ EditorInspector::update(InputManager* input,
     }
   }
 
+  // An open option list takes the next press: an option is chosen, anything
+  // else closes it.
+  if (m_listOpen) {
+    const InspectorField* choice = field(m_listKey);
+    if (choice == nullptr || choice->hidden) {
+      m_listOpen = false;
+    }
+  }
+  if (m_listOpen) {
+    m_listHover = listOptionAt(mouseX, mouseY);
+    if (m_pointer.clicked() || m_pointer.rightClicked()) {
+      const int option = m_pointer.clicked() ? m_listHover : -1;
+      m_listOpen = false;
+      m_consumedPress = true;
+      const InspectorField* choice = field(m_listKey);
+      if (option >= 0 && choice != nullptr) {
+        const InspectorField copy = *choice;
+        changed = applyChoice(copy, option, *document, *selection) || changed;
+      }
+      if (changed) {
+        refreshFields(*document, *selection);
+        layout();
+      }
+      rebuildVisual();
+      return changed;
+    }
+  }
   // The open menu takes the next press: an item runs, anything else closes.
   if (m_menuOpen) {
     m_menuHover = menuItemAt(mouseX, mouseY);
@@ -2525,10 +2608,27 @@ EditorInspector::update(InputManager* input,
         m_scrubAccumulated = 0.0f;
         m_scrubCarry = 0.0;
         ++m_scrubSerial;
+      } else if (target.kind == InspectorFieldKind::Choice &&
+                 !target.choices.empty()) {
+        // The arrows step through the options; the middle opens the list.
+        const float zone = std::min(18.0f, target.width * 0.25f);
+        const int count = static_cast<int>(target.choices.size());
+        if (mouseX < target.x + zone) {
+          changed = applyChoice(target,
+                                (target.choice + count - 1) % count,
+                                *document,
+                                *selection) ||
+                    changed;
+        } else if (mouseX > target.x + target.width - zone) {
+          changed =
+            applyChoice(
+              target, (target.choice + 1) % count, *document, *selection) ||
+            changed;
+        } else {
+          openList(target);
+        }
       } else if (!m_edit.active() || target.key != m_editKey) {
-        const bool reverse = input != nullptr && input->isShiftPressed() &&
-                             target.kind == InspectorFieldKind::Choice;
-        changed = activate(target, reverse, *document, *selection) || changed;
+        changed = activate(target, false, *document, *selection) || changed;
       }
     }
   } else if (m_pointer.clicked() && m_edit.active()) {
@@ -2639,7 +2739,7 @@ EditorInspector::rebuildVisual()
         row.label,
         m_x + GuiToolStyle::kPad,
         row.y + std::round((rowHeight - fontSize) * 0.5f) - 1.0f,
-        std::round(m_width * 0.34f) - GuiToolStyle::kPad - 4.0f -
+        m_labelWidth - GuiToolStyle::kPad - 4.0f -
           (swatch ? rowHeight + 4.0f : 0.0f),
         fontSize,
         GuiToolPalette::dim);
@@ -2702,25 +2802,52 @@ EditorInspector::rebuildVisual()
         break;
       }
       case InspectorFieldKind::Toggle: {
-        m_visual.addFilledRect(target.x,
-                               target.y,
-                               target.width,
-                               h,
-                               target.toggle ? GuiToolPalette::selection
-                                             : GuiToolPalette::field);
-        m_visual.addOutlineRect(target.x,
-                                target.y,
-                                target.width,
-                                h,
+        // A check box and its label, like the Tools panel; a mixed
+        // selection shows a dash in the box.
+        if (hovered) {
+          m_visual.addFilledRect(
+            target.x, target.y, target.width, h, GuiToolPalette::hover);
+        }
+        const float box = std::min(12.0f * fontScale, h - 6.0f);
+        const float boxX = target.x + 3.0f;
+        const float boxY = target.y + std::round((h - box) * 0.5f);
+        m_visual.addFilledRect(boxX, boxY, box, box, GuiToolPalette::field);
+        m_visual.addOutlineRect(boxX,
+                                boxY,
+                                box,
+                                box,
                                 target.toggle || hovered
                                   ? GuiToolPalette::accent
                                   : GuiToolPalette::border,
                                 1.0f);
-        GuiKit::drawTextCentered(m_visual,
-                                 target.label +
-                                   (target.toggle ? " on" : " off"),
-                                 target.x + target.width * 0.5f,
-                                 target.y + h * 0.5f,
+        if (target.mixed) {
+          m_visual.addFilledRect(boxX + 3.0f,
+                                 boxY + box * 0.5f - 1.0f,
+                                 box - 6.0f,
+                                 2.0f,
+                                 GuiToolPalette::accent);
+        } else if (target.toggle) {
+          m_visual.addFilledRect(boxX + 3.0f,
+                                 boxY + 3.0f,
+                                 box - 6.0f,
+                                 box - 6.0f,
+                                 GuiToolPalette::accent);
+        }
+        // A lone toggle named like its row ("Sun") needs no text of its own.
+        const bool named =
+          std::any_of(m_rows.begin(),
+                      m_rows.end(),
+                      [&target, index](const InspectorRow& row) {
+                        return row.fields.size() == 1 &&
+                               row.fields.front() == index &&
+                               row.label == target.label;
+                      });
+        GuiToolStyle::fittedText(m_visual,
+                                 named ? std::string() : target.label,
+                                 boxX + box + 5.0f,
+                                 target.y + std::round((h - fontSize) * 0.5f) -
+                                   1.0f,
+                                 target.width - box - 10.0f,
                                  fontSize,
                                  GuiToolPalette::text);
         break;
@@ -2728,6 +2855,32 @@ EditorInspector::rebuildVisual()
       case InspectorFieldKind::Choice:
       case InspectorFieldKind::Button: {
         const bool isButton = target.kind == InspectorFieldKind::Button;
+        if (target.header) {
+          // A small cross in the section header.
+          if (hovered) {
+            m_visual.addFilledRect(target.x,
+                                   target.y,
+                                   target.width,
+                                   target.width,
+                                   GuiToolPalette::pressed);
+          }
+          const float inset = target.width * 0.3f;
+          const ColorRgba cross =
+            hovered ? GuiToolPalette::error : GuiToolPalette::dim;
+          m_visual.addLine(target.x + inset,
+                           target.y + inset,
+                           target.x + target.width - inset,
+                           target.y + target.width - inset,
+                           cross,
+                           1.0f);
+          m_visual.addLine(target.x + target.width - inset,
+                           target.y + inset,
+                           target.x + inset,
+                           target.y + target.width - inset,
+                           cross,
+                           1.0f);
+          break;
+        }
         m_visual.addFilledRect(target.x,
                                target.y,
                                target.width,
@@ -2758,7 +2911,157 @@ EditorInspector::rebuildVisual()
     GuiToolStyle::dropdown(
       m_visual, m_menuX, m_menuY, menuItems(), m_menuHover);
   }
+  if (m_listOpen) {
+    const std::vector<GuiToolStyle::MenuItem> items = listItems();
+    GuiToolStyle::dropdown(
+      m_visual, m_listX, m_listY, items, m_listHover - m_listFirst);
+    const int total = static_cast<int>(m_listOptions.size());
+    if (total > kListRows) {
+      const float height =
+        6.0f + static_cast<float>(items.size()) * GuiToolStyle::kRowHeight;
+      GuiToolStyle::scrollbar(
+        m_visual,
+        GuiToolRect{ m_listX + listWidth() - GuiToolStyle::kScrollbar - 2.0f,
+                     m_listY + 3.0f,
+                     GuiToolStyle::kScrollbar,
+                     height - 6.0f },
+        static_cast<float>(m_listFirst),
+        static_cast<float>(kListRows),
+        static_cast<float>(total));
+    }
+  }
 }
+void
+EditorInspector::moveRemoveButtonsToHeaders()
+{
+  std::vector<InspectorRow> kept;
+  kept.reserve(m_rows.size());
+  int section = -1;
+  for (InspectorRow& row : m_rows) {
+    if (row.section) {
+      kept.push_back(row);
+      section = static_cast<int>(kept.size()) - 1;
+      continue;
+    }
+    std::vector<size_t> rest;
+    for (size_t index : row.fields) {
+      InspectorField& target = m_fields[index];
+      const bool remove = target.kind == InspectorFieldKind::Button &&
+                          (target.key.starts_with("component.remove.") ||
+                           target.key.starts_with("behaviour.remove:"));
+      if (remove && section >= 0) {
+        target.header = true;
+        kept[static_cast<size_t>(section)].fields.push_back(index);
+      } else {
+        rest.push_back(index);
+      }
+    }
+    if (rest.empty() && !row.fields.empty()) {
+      continue;
+    }
+    row.fields = rest;
+    kept.push_back(row);
+  }
+  m_rows.swap(kept);
+}
+
+void
+EditorInspector::openList(const InspectorField& choice)
+{
+  m_listOpen = true;
+  m_listKey = choice.key;
+  m_listOptions = choice.choices;
+  m_listCurrent = choice.choice;
+  m_listHover = -1;
+  const int total = static_cast<int>(m_listOptions.size());
+  m_listFirst = std::clamp(
+    m_listCurrent - kListRows / 2, 0, std::max(0, total - kListRows));
+  const float height = 6.0f + static_cast<float>(std::min(total, kListRows)) *
+                                GuiToolStyle::kRowHeight;
+  const float width = listWidth();
+  m_listX = std::clamp(
+    choice.x, m_x + 2.0f, std::max(m_x + 2.0f, m_x + m_width - width - 2.0f));
+  m_listY = choice.y + rowHeight() - 2.0f;
+  if (m_listY + height > m_y + m_height) {
+    m_listY = std::max(m_y, choice.y - height + 2.0f);
+  }
+}
+
+std::vector<GuiToolStyle::MenuItem>
+EditorInspector::listItems() const
+{
+  std::vector<GuiToolStyle::MenuItem> items;
+  const int total = static_cast<int>(m_listOptions.size());
+  for (int index = m_listFirst;
+       index < std::min(total, m_listFirst + kListRows);
+       ++index) {
+    GuiToolStyle::MenuItem item;
+    item.label = m_listOptions[static_cast<size_t>(index)];
+    item.checked = index == m_listCurrent;
+    items.push_back(item);
+  }
+  return items;
+}
+
+float
+EditorInspector::listWidth() const
+{
+  std::vector<GuiToolStyle::MenuItem> all;
+  for (const std::string& option : m_listOptions) {
+    GuiToolStyle::MenuItem item;
+    item.label = option;
+    item.checked = true;
+    all.push_back(item);
+  }
+  const InspectorField* choice = field(m_listKey);
+  return std::max(GuiToolStyle::dropdownWidth(all),
+                  choice != nullptr ? choice->width : 0.0f);
+}
+
+int
+EditorInspector::listOptionAt(float x, float y) const
+{
+  if (!m_listOpen) {
+    return -1;
+  }
+  const int row =
+    GuiToolStyle::dropdownItemAt(m_listX, m_listY, listItems(), x, y);
+  return row < 0 ? -1 : m_listFirst + row;
+}
+
+bool
+EditorInspector::openListForTesting(const std::string& key,
+                                    EditorDocument* document,
+                                    const EditorSelection* selection)
+{
+  if (document == nullptr || selection == nullptr) {
+    return false;
+  }
+  refreshFields(*document, *selection);
+  layout();
+  const InspectorField* choice = field(key);
+  if (choice == nullptr || choice->kind != InspectorFieldKind::Choice) {
+    return false;
+  }
+  openList(*choice);
+  return true;
+}
+
+bool
+EditorInspector::chooseListForTesting(int option,
+                                      EditorDocument* document,
+                                      const EditorSelection* selection)
+{
+  const InspectorField* choice = field(m_listKey);
+  if (!m_listOpen || choice == nullptr || document == nullptr ||
+      selection == nullptr) {
+    return false;
+  }
+  m_listOpen = false;
+  const InspectorField copy = *choice;
+  return applyChoice(copy, option, *document, *selection);
+}
+
 void
 EditorInspector::applyFolding()
 {

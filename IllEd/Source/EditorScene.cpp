@@ -445,6 +445,7 @@ EditorScene::update(double dt)
     rebuildSelectionOverlay();
   }
   storeCameraState();
+  followGrid();
 
   if (m_tools) {
     EditorToolsState state;

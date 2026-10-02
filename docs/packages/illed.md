@@ -173,7 +173,10 @@ pointer positions into rays and deltas into transforms.
   scene's `editor` block. The Tools panel sets them with steppers that walk
   fixed ladders (move 0.05-5, rotate 1-90 degrees, scale 0.01-1, grid
   0.1-10); a hand-edited value between steps moves to the next step in the
-  chosen direction. View > Show Grid also toggles the grid.
+  chosen direction. View > Show Grid also toggles the grid. The grid follows
+  the view: it is centred on the camera and sized to cover the viewport,
+  rebuilt when the view drifts toward its edge or zooms past it, and far out
+  it steps in fives so at most about 160 lines cross each way.
 - Frame selection (F) fits the selection's world bounds into the visible
   viewport between the dock columns and centres it there; Reset Camera (Home)
   likewise centres the origin. In 3D the target shifts along the camera's
@@ -263,7 +266,7 @@ Fields are rebuilt from the document every frame.
   shadows; camera projection, field of view, clip planes, zoom and primary.
   Mesh assets and sprite textures are choices among the compatible
   asset-table entries; picking a plain texture returns a sprite to its
-  region. Each core component has a Remove button, and an Add component
+  region. Each component's header has a small remove cross, and an Add component
   section adds a Shape, Mesh, Sprite, Light or Camera the node does not have
   yet (Mesh and Sprite only when a compatible asset exists, starting on the
   first).
@@ -305,6 +308,11 @@ Fields are rebuilt from the document every frame.
   to (a mesh's asset, a sprite's texture), a primitive's shape and a
   camera's primary flag. Section headers fold and unfold with a click
   (session state).
+- **Layout:** the label column fits the longest label within 26-36% of the
+  panel (longer labels end in an ellipsis); toggles are check boxes (a dash
+  for a mixed selection, no text when the row already names them); a
+  choice steps with its `<` and `>` ends and opens a list of its options
+  from the middle (ten rows, the wheel scrolls, the current one checked).
 - Enter commits one history command, Escape cancels, invalid text is rejected
   in place. Number fields accept arithmetic (`2*(3+1)`) and relative edits
   applied to each selected node (`+=1`, `-=1`, `*=2`, `/=2`). Ctrl+wheel over
@@ -380,7 +388,7 @@ them to reach the same flows as the UI.
 The editor is drawn in the plain tool look (`GuiToolStyle`, D-UI7): a File /
 Edit / Create / Tools / Arrange / View menu bar and a status bar
 (`EditorToolbar`), the viewport, and one `GuiPanelDock` holding four panels.
-The left column has the Hierarchy (`EditorSceneGraphView`) above the Assets
+IllEd's right column starts 290 units wide (a saved layout wins). The left column has the Hierarchy (`EditorSceneGraphView`) above the Assets
 browser (`EditorAssetBrowser`); the right column has Tools
 (`EditorToolsPanel`: 2D/3D mode, Move/Rotate/Scale, local axes, snap, pivot
 and grid toggles, the Create tools, snap and grid steppers, and the Align and

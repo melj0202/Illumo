@@ -53,6 +53,8 @@ struct InspectorField
   size_t maxBytes = GuiTextEdit::kDefaultMaximumBytes;
   // In a folded section: kept for field(), never laid out, drawn or hit.
   bool hidden = false;
+  // A small button in its section's header (a component's remove).
+  bool header = false;
   // Swatch fields: the color shown, the channel fields it edits (r, g, b
   // and maybe a) and whether those hold 0-1 floats (else bytes).
   ColorRgba swatch{ 128, 128, 128, 255 };
@@ -142,6 +144,15 @@ public:
                             EditorDocument* document,
                             const EditorSelection* selection);
   bool menuOpen() const { return m_menuOpen; }
+  // A Choice field's option list (a click on its middle opens it).
+  bool listOpen() const { return m_listOpen; }
+  bool openListForTesting(const std::string& key,
+                          EditorDocument* document,
+                          const EditorSelection* selection);
+  bool chooseListForTesting(int option,
+                            EditorDocument* document,
+                            const EditorSelection* selection);
+  float labelWidthForTesting() const { return m_labelWidth; }
   // The color picker a swatch opens: whose channels it edits, and picking a
   // color (hue, saturation and value in 0-1, alpha in 0-1) as a drag would.
   bool pickerOpen() const { return m_pickerOpen; }
@@ -211,6 +222,20 @@ private:
   std::string m_fieldsPrimary;
   std::vector<std::string> m_fieldsSelection;
   bool m_fieldsBuilt = false;
+  // The label column's width this frame: fits the longest label, within
+  // 26-36% of the panel.
+  float m_labelWidth = 0.0f;
+  // A Choice field's open option list: its key, options, the current one,
+  // the first row shown and the hovered row.
+  static constexpr int kListRows = 10;
+  bool m_listOpen = false;
+  std::string m_listKey;
+  std::vector<std::string> m_listOptions;
+  int m_listCurrent = -1;
+  int m_listFirst = 0;
+  int m_listHover = -1;
+  float m_listX = 0.0f;
+  float m_listY = 0.0f;
   // Section titles folded by clicking their headers (session state).
   std::unordered_set<std::string> m_folded;
   // The group buildFields is filling (see InspectorRow::group).
@@ -265,6 +290,12 @@ private:
   void rebuildVisual();
   // Drops the rows of folded sections and hides their fields.
   void applyFolding();
+  // Moves components' Remove buttons into their section headers.
+  void moveRemoveButtonsToHeaders();
+  void openList(const InspectorField& choice);
+  std::vector<GuiToolStyle::MenuItem> listItems() const;
+  float listWidth() const;
+  int listOptionAt(float x, float y) const;
   // The row at a panel y (fields or a section header); -1 for none.
   int rowAt(float y) const;
   float rowHeight() const;
@@ -296,6 +327,12 @@ private:
   void drawPicker();
   int hitTest(float x, float y) const;
   bool beginEdit(const InspectorField& field);
+  // Sets a Choice field to option index next (cycling and the list share
+  // it).
+  bool applyChoice(const InspectorField& target,
+                   int next,
+                   EditorDocument& document,
+                   const EditorSelection& selection);
   bool commitEdit(EditorDocument& document, const EditorSelection& selection);
   bool activate(const InspectorField& field,
                 bool reverse,

@@ -67,7 +67,10 @@ oracle suite.
   the label column; its picker writes the channels with one merge key per
   open picker. Rows carry a `group` for the right-click menu; folded
   sections hide their fields (`InspectorField::hidden`) but `field()` still
-  finds them.
+  finds them. After each build, components' Remove buttons move into their section
+  headers (`InspectorField::header`); a Choice's middle opens an option
+  list and its ends step (`applyChoice`), while `activate()` keeps cycling
+  for keys and tests.
 - Locks live in the `illed.view` scene extension (`EditorDocument::
   setLocked`, a settings command; read through `SceneExtensionList`) and
   feed `pickRay`'s skip set and box selection. Isolation is

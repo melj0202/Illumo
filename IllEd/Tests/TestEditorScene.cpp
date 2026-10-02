@@ -2166,9 +2166,40 @@ testViewportInteraction()
   return counters.failures;
 }
 
+// The grid follows the view: it recentres when the camera travels and grows
+// when it zooms out, so it always covers the viewport.
+static int
+testGridFollowsView()
+{
+  TestCounters counters;
+  EditorFixture fixture;
+  EditorScene& module = fixture.module;
+  module.update(0.016);
+  const Vector3 start = EditorSceneTestAccess::gridWindow(module);
+  fixture.camera.SetPositionPrecise(400.0, -300.0);
+  module.update(0.016);
+  const Vector3 moved = EditorSceneTestAccess::gridWindow(module);
+  testTrue(counters,
+           std::fabs(moved.x - 400.0f) < 10.0f &&
+             std::fabs(moved.y + 300.0f) < 10.0f,
+           "the grid recentres on the camera");
+  fixture.camera.SetZoom(2.0f);
+  // The camera eases toward a new zoom.
+  for (int frame = 0; frame < 120; ++frame) {
+    module.update(0.016);
+  }
+  const Vector3 zoomed = EditorSceneTestAccess::gridWindow(module);
+  testTrue(counters,
+           zoomed.z > start.z * 10.0f,
+           "zooming out grows the grid past the view");
+  return counters.failures;
+}
+
 void
 registerEditorSceneTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllEd.Module.GridFollowsView",
+               []() { return testGridFollowsView(); });
   registry.add("IllEd.Assets.ProjectFlow",
                []() { return testAssetsProjectFlow(); });
   registry.add("IllEd.Module.PlayScene", []() { return testPlayScene(); });

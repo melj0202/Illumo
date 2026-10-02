@@ -103,6 +103,11 @@ private:
   float m_boxEndY = 0.0f;
   bool m_gridBuilt = false;
   SceneWorldMode m_gridMode = SceneWorldMode::World2D;
+  // The window the grid was built for (it follows the view).
+  float m_gridCenterX = 0.0f;
+  float m_gridCenterY = 0.0f;
+  float m_gridHalf = 0.0f;
+  float m_gridSpacing = 0.0f;
   EditorCommand m_activeTool;
   std::string m_initialScenePath;
   bool m_dragging;
@@ -293,6 +298,8 @@ private:
   void updateSelection(double dt);
   void rebuildSelectionOverlay();
   void rebuildGrid();
+  // Rebuilds the grid when the view has moved or zoomed out of it.
+  void followGrid();
   void frameSelection();
   // The viewport between the dock columns and bars, in window pixels: its
   // size, and how far its centre sits from the window's centre.

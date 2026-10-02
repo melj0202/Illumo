@@ -732,9 +732,65 @@ testInspectorColorPicker()
   return counters.failures;
 }
 
+// Layout refinements: header remove buttons, a label column that fits its
+// labels, and the option list for choices.
+static int
+testInspectorRefinements()
+{
+  TestCounters counters;
+  HeadlessRenderFixture fixture(1280, 720);
+  EditorInspector inspector(&fixture.window, &fixture.renderer);
+  inspector.setPlacement(panelArea(1040.0f, 100.0f, 240.0f, 600.0f));
+  InputManager input(nullptr);
+  EditorDocument document;
+  EditorSelection selection;
+  const std::string id = cube(document);
+  selection.set(id);
+  inspector.update(&input, &document, &selection, 0.016f);
+  const InspectorField* remove = inspector.field("component.remove.primitive");
+  const InspectorField* shape = inspector.field("primitive.shape");
+  testTrue(counters,
+           remove != nullptr && remove->header && !remove->hidden &&
+             remove->x > shape->x && remove->width < 30.0f,
+           "a component's Remove is a small button in its header");
+  inspector.activateField("component.remove.primitive", &document, &selection);
+  testTrue(counters,
+           document.findNode(id)->find(SceneComponentType::Primitive) ==
+             nullptr,
+           "and it still removes the component");
+  document.undo();
+
+  selection.clear();
+  inspector.update(&input, &document, &selection, 0.016f);
+  testTrue(counters,
+           inspector.labelWidthForTesting() >=
+               GuiToolStyle::textWidth("Description", 12.0f) &&
+             inspector.labelWidthForTesting() <= 240.0f * 0.36f + 1.0f,
+           "the label column fits the longest label, within limits");
+
+  selection.set(id);
+  inspector.update(&input, &document, &selection, 0.016f);
+  testTrue(
+    counters,
+    inspector.openListForTesting("primitive.shape", &document, &selection) &&
+      inspector.listOpen(),
+    "a choice opens its option list");
+  inspector.chooseListForTesting(5, &document, &selection);
+  const SceneComponent* primitive =
+    document.findNode(id)->find(SceneComponentType::Primitive);
+  testTrue(counters,
+           !inspector.listOpen() &&
+             std::get<ScenePrimitive>(primitive->value).shape ==
+               ScenePrimitiveShape::Sphere,
+           "picking an option sets it and closes the list");
+  return counters.failures;
+}
+
 void
 registerEditorInspectorTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllEd.Inspector.Refinements",
+               []() { return testInspectorRefinements(); });
   registry.add("IllEd.Inspector.ColorPicker",
                []() { return testInspectorColorPicker(); });
   registry.add("IllEd.Inspector.Tweaks",
