@@ -14,6 +14,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import build
 
 
+def has_windows_console() -> bool:
+    """Whether stdin is a real Windows console, not merely a character device.
+
+    isatty() is also true for NUL, the stdin of many tool and CI shells, where
+    GetConsoleMode fails, so the native console tests cannot run there.
+    """
+    if sys.platform != "win32" or not sys.stdin.isatty():
+        return False
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetStdHandle.argtypes = [wintypes.DWORD]
+    kernel.GetStdHandle.restype = wintypes.HANDLE
+    kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel.GetConsoleMode.restype = wintypes.BOOL
+    mode = wintypes.DWORD()
+    return bool(kernel.GetConsoleMode(kernel.GetStdHandle(-10), ctypes.byref(mode)))
+
+
 class BuildTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -358,7 +377,7 @@ class DashboardProgressTests(unittest.TestCase):
         self.assertIn("Build everything failed (2.0s)", state.status)
         self.assertIn(build.ANSI_LEAVE_SCREEN, output.getvalue())
 
-    @unittest.skipUnless(sys.platform == "win32" and sys.stdin.isatty(), "requires isolated Windows console")
+    @unittest.skipUnless(has_windows_console(), "requires isolated Windows console")
     def test_native_console_progress_cancellation(self):
         calls = 0
         def cancel_once(progress):
@@ -598,7 +617,7 @@ class DashboardMouseTests(unittest.TestCase):
             self.assertEqual(build.main(["menu"]), 1)
         self.assertEqual(errors.getvalue(), "error: read failed\n")
 
-    @unittest.skipUnless(sys.platform == "win32" and sys.stdin.isatty(), "requires isolated Windows console")
+    @unittest.skipUnless(has_windows_console(), "requires isolated Windows console")
     def test_native_console_mouse_and_keyboard_smoke(self):
         from ctypes import wintypes
         reader = build.WindowsDashboardInput()
