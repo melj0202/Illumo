@@ -181,28 +181,13 @@ public:
     module.advanceCanvasEntrance(dt);
   }
 
-  static GameVisual* getHamburgerVisual(CanvasScene& module)
+  static CanvasChromeButton& getSettingsButton(CanvasScene& module)
   {
-    return &module.hamburgerVisual;
+    return module.m_settingsButton;
   }
 
-  static float getHamburgerX(const CanvasScene& module)
+  static CanvasChromeButton& getWorkshopButton(CanvasScene& module)
   {
-    return module.hamburgerX;
-  }
-
-  static float getHamburgerY(const CanvasScene& module)
-  {
-    return module.hamburgerY;
-  }
-
-  static float getHamburgerSize(const CanvasScene& module)
-  {
-    return module.hamburgerSize;
-  }
-
-  static bool isHamburgerHovered(const CanvasScene& module)
-  {
-    return module.isHamburgerHovered();
+    return module.m_workshopButton;
   }
 };

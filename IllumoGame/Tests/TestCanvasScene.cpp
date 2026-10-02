@@ -1913,8 +1913,9 @@ testHamburgerMenuButton()
 
   // Initial update establishes hamburger button placement and dimensions
   fixture.module.update(0.016);
-  GameVisual* hamburger =
-    CanvasSceneTestAccess::getHamburgerVisual(fixture.module);
+  CanvasChromeButton& button =
+    CanvasSceneTestAccess::getSettingsButton(fixture.module);
+  GameVisual* hamburger = &button.getVisual();
   testTrue(g,
            hamburger != nullptr && hamburger->isVisible(),
            "hamburger button is visible in default state");
@@ -1928,10 +1929,9 @@ testHamburgerMenuButton()
              uiDrawables.end(),
            "hamburger button is on the UI layer");
 
-  const float hx = CanvasSceneTestAccess::getHamburgerX(fixture.module);
-  const float hy = CanvasSceneTestAccess::getHamburgerY(fixture.module);
-  const float hsize =
-    CanvasSceneTestAccess::getHamburgerSize(fixture.module);
+  const float hx = button.x();
+  const float hy = button.y();
+  const float hsize = button.size();
   testTrue(g,
            hx > 0.0f && hy > 0.0f && hsize > 0.0f,
            "hamburger button has valid bounds");
@@ -1940,18 +1940,15 @@ testHamburgerMenuButton()
   fixture.window.mouseX = 0.0;
   fixture.window.mouseY = 0.0;
   fixture.module.update(0.016);
-  testTrue(g,
-           !CanvasSceneTestAccess::isHamburgerHovered(fixture.module),
-           "hamburger is not hovered when mouse is away");
+  testTrue(
+    g, !button.isHovered(), "hamburger is not hovered when mouse is away");
 
   // Move mouse inside hamburger -> hovered
   CSimSounds::resetCounts();
   fixture.window.mouseX = static_cast<double>(hx + hsize * 0.5f);
   fixture.window.mouseY = static_cast<double>(hy + hsize * 0.5f);
   fixture.module.update(0.016);
-  testTrue(g,
-           CanvasSceneTestAccess::isHamburgerHovered(fixture.module),
-           "hamburger is hovered when mouse is over it");
+  testTrue(g, button.isHovered(), "hamburger is hovered when mouse is over it");
   fixture.module.update(0.016);
   testTrue(g,
            CSimSounds::playCount(CSimSound::MenuHover) == 1,
@@ -1988,6 +1985,77 @@ testHamburgerMenuButton()
   testTrue(g,
            CSimSounds::playCount(CSimSound::MenuSelect) == 1,
            "holding and closing do not repeat the select cue");
+  CSimSounds::resetCounts();
+}
+
+static void
+testWorkshopButton()
+{
+  testSection("CanvasScene: the workshop button opens the Ruleset Workshop");
+  CellGameFixture fixture;
+  RulesetWorkshopMenu* menu =
+    CanvasSceneTestAccess::getRulesetWorkshopMenu(fixture.module);
+  testTrue(g, menu != nullptr && !menu->isOpen(), "the workshop starts closed");
+  if (menu == nullptr) {
+    return;
+  }
+  fixture.window.mouseX = 0.0;
+  fixture.window.mouseY = 0.0;
+  fixture.module.update(0.016);
+  CanvasChromeButton& settings =
+    CanvasSceneTestAccess::getSettingsButton(fixture.module);
+  CanvasChromeButton& workshop =
+    CanvasSceneTestAccess::getWorkshopButton(fixture.module);
+  testTrue(g,
+           workshop.isVisible() && workshop.x() == settings.x() &&
+             workshop.y() >= settings.y() + settings.size(),
+           "the workshop button sits right under the settings button");
+
+  fixture.scene.ClearDrawables();
+  fixture.module.dispatch(fixture.scene);
+  const std::vector<DrawableBase*> uiDrawables =
+    fixture.scene.drawablesIn(RenderLayerId::UI);
+  testTrue(g,
+           std::find(uiDrawables.begin(),
+                     uiDrawables.end(),
+                     &workshop.getVisual()) != uiDrawables.end(),
+           "the workshop button is on the UI layer");
+
+  CSimSounds::resetCounts();
+  fixture.window.mouseX =
+    static_cast<double>(workshop.x() + workshop.size() * 0.5f);
+  fixture.window.mouseY =
+    static_cast<double>(workshop.y() + workshop.size() * 0.5f);
+  fixture.module.update(0.016);
+  testTrue(g,
+           workshop.isHovered() && !settings.isHovered(),
+           "hovering the workshop button does not hover settings");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.update(0.016);
+  testTrue(g, menu->isOpen(), "clicking the workshop button opens it");
+  ConfigurationMenu* settingsMenu =
+    CanvasSceneTestAccess::getConfigurationMenu(fixture.module);
+  testTrue(g,
+           settingsMenu != nullptr && !settingsMenu->isOpen(),
+           "the click does not also open settings");
+  testTrue(g,
+           CSimSounds::playCount(CSimSound::MenuSelect) == 1,
+           "clicking the workshop button plays the select cue once");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.update(0.016);
+  testTrue(g,
+           menu->isOpen() && !workshop.isVisible() && !settings.isVisible(),
+           "both corner buttons hide while the workshop is open");
+
+  fixture.input.getKeyQueue().push(
+    InputManager::KeyPressEvent{ KeyCode::Escape, InputAction::Press, 0 });
+  fixture.module.update(0.016);
+  fixture.module.update(0.016);
+  testTrue(g,
+           !menu->isOpen() && workshop.isVisible() && settings.isVisible(),
+           "the corner buttons return when the workshop closes");
   CSimSounds::resetCounts();
 }
 
@@ -2855,14 +2923,13 @@ testRulesetWorkshopF2Draft()
        text->sizePt >= 12.0f);
     hasReadableControlHelp =
       hasReadableControlHelp ||
-      (text != nullptr && text->content.find("ARROWS / W,S MOVE") == 0u &&
-       text->sizePt >= 12.0f);
+      (text != nullptr && text->content == "adjust" && text->sizePt >= 10.0f);
   }
   testTrue(g, hasWorkshopTitle, "the menu presents the Ruleset Workshop name");
   testTrue(g,
            hasReadableRowLabel && hasReadableStepperValue &&
              hasReadableControlHelp,
-           "workshop labels, values, and controls use readable type sizes");
+           "workshop labels, values, and key hints use readable type sizes");
   testTrue(g,
            menu->getAnimationProgressForTesting() > 0.0f &&
              menu->getAnimationProgressForTesting() < 1.0f,
@@ -2897,7 +2964,7 @@ testRulesetWorkshopF2Draft()
            "workshop text caret alternates off during its blink cycle");
 
   const bool birthFocused =
-    focusWorkshopControl(*menu, fixture.input, "Birth counts");
+    focusWorkshopControl(*menu, fixture.input, "Born with");
   testTrue(
     g, birthFocused, "keyboard focus reaches the family-specific birth chips");
   fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
@@ -2916,7 +2983,7 @@ testRulesetWorkshopF2Draft()
     g,
     menu->getSelectionPositionForTesting() > selectionBefore &&
       menu->getSelectionPositionForTesting() <
-        static_cast<float>(menu->getControlIndexForTesting("Survival counts")),
+        static_cast<float>(menu->getControlIndexForTesting("Survives with")),
     "workshop selection highlight glides between rows");
   fixture.input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
   fixture.module.update(0.016);
@@ -2999,27 +3066,28 @@ testRulesetWorkshopFamilyControls()
 
   testTrue(g,
            openWorkshop(*menu, *life, true) &&
-             menu->hasControlForTesting("Birth counts") &&
-             menu->hasControlForTesting("Survival counts") &&
+             menu->hasControlForTesting("Born with") &&
+             menu->hasControlForTesting("Survives with") &&
              !menu->hasControlForTesting("Number of states") &&
              !menu->hasControlForTesting("Wolfram rule number") &&
              !menu->hasControlForTesting("Transition table"),
            "Life-like family shows only its B/S rule controls");
   testTrue(g,
-           focusWorkshopControl(*menu, fixture.input, "Live neighbors (0-8)"),
-           "preview inputs are independently keyboard navigable");
+           focusWorkshopControl(*menu, fixture.input, "Alive") &&
+             menu->hasControlForTesting("Background"),
+           "the preview has a keyboard-navigable row per state");
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
   menu->update(&fixture.input);
   testTrue(g,
            menu->getPreviewText().find("4 live neighbors") != std::string::npos,
            "changing a preview input refreshes its example transition");
   testTrue(g,
-           focusWorkshopControl(*menu, fixture.input, "Birth counts"),
+           focusWorkshopControl(*menu, fixture.input, "Born with"),
            "birth chips are reachable after changing the preview");
   TextPrimitive* birthLabel = nullptr;
   for (std::size_t index = 0u; index < menu->getVisual().textCount(); ++index) {
     TextPrimitive* text = menu->getVisual().getText(index);
-    if (text != nullptr && text->content == "Birth counts") {
+    if (text != nullptr && text->content == "Born with") {
       birthLabel = text;
       break;
     }
@@ -3047,8 +3115,8 @@ testRulesetWorkshopFamilyControls()
 
   testTrue(g,
            openWorkshop(*menu, *generations, true) &&
-             menu->hasControlForTesting("Birth counts") &&
-             menu->hasControlForTesting("Survival counts") &&
+             menu->hasControlForTesting("Born with") &&
+             menu->hasControlForTesting("Survives with") &&
              menu->hasControlForTesting("Number of states") &&
              !menu->hasControlForTesting("Wolfram rule number"),
            "Generations form adds its state-count control to B/S");
@@ -3070,7 +3138,7 @@ testRulesetWorkshopFamilyControls()
     openWorkshop(*menu, *cyclic, true) &&
       menu->hasControlForTesting("Successor threshold") &&
       menu->hasControlForTesting("Cycle step") &&
-      !menu->hasControlForTesting("Birth counts") &&
+      !menu->hasControlForTesting("Born with") &&
       !menu->hasControlForTesting("Transition table"),
     "cyclic form exposes interaction controls without count-table fields");
   testTrue(g,
@@ -3089,9 +3157,6 @@ testRulesetWorkshopFamilyControls()
   testTrue(g,
            menu->getDraft().cyclicStep == 5u,
            "cycle step skips values that would exclude declared states");
-  testTrue(g,
-           focusWorkshopControl(*menu, fixture.input, "Live neighbors (0-8)"),
-           "cyclic preview successor count is navigable");
   testTrue(
     g,
     menu->getPreviewText().find("successor neighbors") != std::string::npos,
@@ -3100,21 +3165,20 @@ testRulesetWorkshopFamilyControls()
   testTrue(g,
            openWorkshop(*menu, *table, true) &&
              menu->hasControlForTesting("Transition table") &&
-             !menu->hasControlForTesting("Birth counts") &&
-             !menu->hasControlForTesting("Survival counts") &&
+             !menu->hasControlForTesting("Born with") &&
+             !menu->hasControlForTesting("Survives with") &&
              !menu->hasControlForTesting("Wolfram rule number"),
            "Moore-table form explains JSON editing without irrelevant fields");
 
   testTrue(g,
            openWorkshop(*menu, *elementary, true) &&
              menu->hasControlForTesting("Wolfram rule number") &&
-             menu->hasControlForTesting("Example neighborhood") &&
-             !menu->hasControlForTesting("Birth counts") &&
-             !menu->hasControlForTesting("Survival counts") &&
-             !menu->hasControlForTesting("Live neighbors (0-8)"),
+             menu->hasControlForTesting("Neighborhood") &&
+             !menu->hasControlForTesting("Born with") &&
+             !menu->hasControlForTesting("Survives with"),
            "elementary form shows its rule number and 1D preview pattern");
   testTrue(g,
-           focusWorkshopControl(*menu, fixture.input, "Example neighborhood"),
+           focusWorkshopControl(*menu, fixture.input, "Neighborhood"),
            "elementary preview neighborhood is keyboard navigable");
   fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
   menu->update(&fixture.input);
@@ -3189,37 +3253,210 @@ testRulesetWorkshopPointerNavigation()
   menu->update(&fixture.input);
   testTrue(g,
            menu->getSelectedControlForTesting() == "Starter rule" &&
-             menu->getDraft().id != startingId,
-           "clicking the visible minus control changes the starting template");
+             menu->getDropdownForTesting().isOpen() &&
+             menu->getDraft().id == startingId,
+           "clicking the starter rule field drops its list open");
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Release);
   menu->update(&fixture.input);
-
-  fixture.window.mouseX = 580.0;
+  fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
   menu->update(&fixture.input);
-  InputManagerTestAccess::setAction(
-    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           !menu->getDropdownForTesting().isOpen() &&
+             menu->getDraft().id != startingId,
+           "choosing from the list changes the starting template");
+
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  fixture.input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
+  testTrue(g,
+           menu->getDropdownForTesting().isOpen() &&
+             menu->update(&fixture.input) == RulesetWorkshopAction::None &&
+             !menu->getDropdownForTesting().isOpen() && menu->isOpen(),
+           "Escape closes an open list without discarding the workshop");
+
+  fixture.input.getKeyQueue().push({ KeyCode::Left, InputAction::Press, 0 });
   menu->update(&fixture.input);
   testTrue(g,
            menu->getDraft().id == startingId,
-           "clicking the right value area cycles the template forward");
-  InputManagerTestAccess::setAction(
-    fixture.input, KeyCode::MouseLeft, InputAction::Release);
-  menu->update(&fixture.input);
+           "Left still steps the starter rule back without opening the list");
 
   fixture.input.getKeyQueue().push({ KeyCode::End, InputAction::Press, 0 });
   menu->update(&fixture.input);
   testTrue(g,
            menu->getSelectedControlForTesting() == "Discard",
            "End focuses the persistent discard action");
-  fixture.window.mouseX = 500.0;
-  fixture.window.mouseY = 443.0;
+  TextPrimitive* discardLabel = nullptr;
+  for (std::size_t index = 0; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    if (text != nullptr && text->content == "DISCARD") {
+      discardLabel = text;
+    }
+  }
+  testTrue(g, discardLabel != nullptr, "the discard button is drawn");
+  if (discardLabel == nullptr) {
+    return;
+  }
+  fixture.window.mouseX = discardLabel->x + 4.0;
+  fixture.window.mouseY = discardLabel->y + discardLabel->sizePt * 0.5f;
   menu->update(&fixture.input);
   InputManagerTestAccess::setAction(
     fixture.input, KeyCode::MouseLeft, InputAction::Press);
   testTrue(g,
            menu->update(&fixture.input) == RulesetWorkshopAction::Cancel,
            "clicking the pinned discard button cancels the draft");
+}
+
+static TextPrimitive*
+findWorkshopText(RulesetWorkshopMenu& menu, const std::string& content)
+{
+  GameVisual& visual = menu.getVisual();
+  for (std::size_t index = 0; index < visual.textCount(); ++index) {
+    TextPrimitive* text = visual.getText(index);
+    if (text != nullptr && text->content == content) {
+      return text;
+    }
+  }
+  return nullptr;
+}
+
+static void
+testRulesetWorkshopModernControls()
+{
+  CellGameFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  RulesetWorkshopMenu* menu =
+    CanvasSceneTestAccess::getRulesetWorkshopMenu(fixture.module);
+  const RuleSetDefinition* gameOfLife =
+    RuleSetRegistry::instance().getRuleSetDefinition("GAME_OF_LIFE");
+  testTrue(g,
+           menu != nullptr && gameOfLife != nullptr &&
+             openWorkshop(*menu, *gameOfLife, true),
+           "workshop opens on Life");
+  if (menu == nullptr || gameOfLife == nullptr || !menu->isOpen()) {
+    return;
+  }
+  menu->update(&fixture.input);
+
+  testEqStr(g,
+            menu->getNotationForTesting(),
+            "B3/S23",
+            "the header summarizes the draft as B/S notation");
+  testTrue(g,
+           findWorkshopText(*menu, "B3/S23") != nullptr,
+           "the notation is drawn in the header");
+  focusWorkshopControl(*menu, fixture.input, "Born with");
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testEqStr(g,
+            menu->getNotationForTesting(),
+            "B/S23",
+            "the notation follows a toggled birth count");
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+
+  const std::string familyBefore = menu->getFamilyDraft().id;
+  const std::string draftIdBefore = menu->getDraft().id;
+  testTrue(g,
+           focusWorkshopControl(*menu, fixture.input, "Cell family"),
+           "the cell family field is reachable");
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  const GuiDropdownList& list = menu->getDropdownForTesting();
+  testTrue(g,
+           list.isOpen() && list.itemCount() > 1 && list.currentIndex() >= 0 &&
+             list.highlightedIndex() == list.currentIndex(),
+           "Enter drops the family list open on the current family");
+  fixture.input.getKeyQueue().push({ KeyCode::Down, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  fixture.input.getKeyQueue().push({ KeyCode::Enter, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           !list.isOpen() && menu->getFamilyDraft().id != familyBefore &&
+             menu->getDraft().id == draftIdBefore &&
+             menu->getSelectedControlForTesting() == "Cell family",
+           "choosing a family keeps the draft's identity and focus");
+  testTrue(
+    g, openWorkshop(*menu, *gameOfLife, true), "the workshop reopens on Life");
+  menu->update(&fixture.input);
+
+  testTrue(g,
+           focusWorkshopControl(*menu, fixture.input, "Background"),
+           "the background preview row is reachable");
+  testEqStr(g,
+            menu->getPreviewText(),
+            "Background + 3 live neighbors -> Alive",
+            "focusing a preview row makes its state the example");
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testEqStr(g,
+            menu->getPreviewText(),
+            "Background + 4 live neighbors -> Background",
+            "Left/Right walks the example along the neighbor counts");
+
+  testTrue(g,
+           focusWorkshopControl(*menu, fixture.input, "Red channel"),
+           "the red channel slider is reachable");
+  const unsigned char redBefore = menu->getFamilyDraft().stateColors[0][0];
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 0 });
+  menu->update(&fixture.input);
+  testTrue(g,
+           menu->getFamilyDraft().stateColors[0][0] ==
+             static_cast<unsigned char>(std::min(255, redBefore + 8)),
+           "Right steps a color channel by eight");
+  InputManagerTestAccess::setModifierFlags(fixture.input, 1);
+  fixture.input.getKeyQueue().push({ KeyCode::Right, InputAction::Press, 1 });
+  menu->update(&fixture.input);
+  InputManagerTestAccess::setModifierFlags(fixture.input, 0);
+  testTrue(g,
+           menu->getFamilyDraft().stateColors[0][0] ==
+             static_cast<unsigned char>(std::min(255, redBefore + 9)),
+           "Shift+Right steps a color channel by one");
+
+  TextPrimitive* redLabel = findWorkshopText(*menu, "Red channel");
+  testTrue(g, redLabel != nullptr, "the red channel row is visible");
+  if (redLabel != nullptr) {
+    // Press at the track's right end, drag past its left end, release.
+    const double rowY = redLabel->y + redLabel->sizePt * 0.5f;
+    fixture.window.mouseX = 550.0;
+    fixture.window.mouseY = rowY;
+    menu->update(&fixture.input);
+    InputManagerTestAccess::setAction(
+      fixture.input, KeyCode::MouseLeft, InputAction::Press);
+    menu->update(&fixture.input);
+    testTrue(g,
+             menu->getFamilyDraft().stateColors[0][0] == 255u &&
+               menu->isFamilyDraftChanged(),
+             "pressing the slider's end sets the channel to full");
+    fixture.window.mouseX = 200.0;
+    fixture.window.mouseY = rowY + 80.0;
+    menu->update(&fixture.input);
+    testTrue(g,
+             menu->getFamilyDraft().stateColors[0][0] == 0u &&
+               menu->getSelectedControlForTesting() == "Red channel",
+             "dragging keeps steering the slider and holds focus");
+    InputManagerTestAccess::setAction(
+      fixture.input, KeyCode::MouseLeft, InputAction::Release);
+    menu->update(&fixture.input);
+  }
+
+  TextPrimitive* importLabel = findWorkshopText(*menu, "IMPORT");
+  testTrue(g, importLabel != nullptr, "the footer shows an Import button");
+  if (importLabel != nullptr) {
+    fixture.window.mouseX = importLabel->x + 4.0;
+    fixture.window.mouseY = importLabel->y + importLabel->sizePt * 0.5f;
+    menu->update(&fixture.input);
+    InputManagerTestAccess::setAction(
+      fixture.input, KeyCode::MouseLeft, InputAction::Press);
+    testTrue(g,
+             menu->update(&fixture.input) == RulesetWorkshopAction::Import,
+             "clicking the footer Import button requests an import");
+    InputManagerTestAccess::setAction(
+      fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  }
+  menu->close();
 }
 
 static void
@@ -3243,7 +3480,7 @@ testRulesetWorkshopNavigation()
   TextPrimitive* birthLabel = nullptr;
   for (std::size_t index = 0; index < visual.textCount(); ++index) {
     TextPrimitive* text = visual.getText(index);
-    if (text != nullptr && text->content == "Birth counts") {
+    if (text != nullptr && text->content == "Born with") {
       birthLabel = text;
       break;
     }
@@ -3254,7 +3491,7 @@ testRulesetWorkshopNavigation()
     fixture.window.mouseY = birthLabel->y + birthLabel->sizePt * 0.5f;
     menu->update(&fixture.input);
     testTrue(g,
-             menu->getSelectedControlForTesting() == "Birth counts",
+             menu->getSelectedControlForTesting() == "Born with",
              "moving the pointer focuses the row under it");
   }
 
@@ -3262,7 +3499,7 @@ testRulesetWorkshopNavigation()
   menu->update(&fixture.input);
   testTrue(g,
            menu->getFirstVisibleRowForTesting() == 1 &&
-             menu->getSelectedControlForTesting() == "Birth counts" &&
+             menu->getSelectedControlForTesting() == "Born with" &&
              *fixture.input.getMouseScrollOffset() == 0.0,
            "wheel scrolls the workshop viewport without stealing focus");
 
@@ -3276,19 +3513,19 @@ testRulesetWorkshopNavigation()
   fixture.input.getKeyQueue().push({ KeyCode::S, InputAction::Press, 0 });
   menu->update(&fixture.input);
   testTrue(g,
-           menu->getSelectedControlForTesting() == "Survival counts",
+           menu->getSelectedControlForTesting() == "Survives with",
            "S moves focus down across actionable controls");
   fixture.input.getKeyQueue().push({ KeyCode::Tab, InputAction::Press, 0 });
   menu->update(&fixture.input);
   testTrue(g,
-           menu->getSelectedControlForTesting() == "Example cell state",
-           "Tab advances to the next actionable control");
+           menu->getSelectedControlForTesting() == "Background",
+           "Tab advances to the first preview row");
   InputManagerTestAccess::setModifierFlags(fixture.input, 1);
   fixture.input.getKeyQueue().push({ KeyCode::Tab, InputAction::Press, 1 });
   menu->update(&fixture.input);
   InputManagerTestAccess::setModifierFlags(fixture.input, 0);
   testTrue(g,
-           menu->getSelectedControlForTesting() == "Survival counts",
+           menu->getSelectedControlForTesting() == "Survives with",
            "Shift+Tab moves focus backward");
 
   fixture.input.getKeyQueue().push({ KeyCode::Home, InputAction::Press, 0 });
@@ -3985,6 +4222,9 @@ registerCanvasSceneTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.CellGame.RulesetWorkshopPointerNavigation", []() {
     return runCanvasSceneCase(testRulesetWorkshopPointerNavigation);
   });
+  registry.add("IllumoGame.CellGame.RulesetWorkshopModernControls", []() {
+    return runCanvasSceneCase(testRulesetWorkshopModernControls);
+  });
   registry.add("IllumoGame.CellGame.RulesetWorkshopNavigation", []() {
     return runCanvasSceneCase(testRulesetWorkshopNavigation);
   });
@@ -4044,12 +4284,12 @@ registerCanvasSceneTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.CellGame.HamburgerMenu",
                []() { return runCanvasSceneCase(testHamburgerMenuButton); });
-  registry.add("IllumoGame.CellGame.SettingsYieldToConsole", []() {
-    return runCanvasSceneCase(testSettingsYieldToConsole);
-  });
-  registry.add("IllumoGame.CellGame.ExitConfirmation", []() {
-    return runCanvasSceneCase(testExitConfirmationFromQ);
-  });
+  registry.add("IllumoGame.CellGame.WorkshopButton",
+               []() { return runCanvasSceneCase(testWorkshopButton); });
+  registry.add("IllumoGame.CellGame.SettingsYieldToConsole",
+               []() { return runCanvasSceneCase(testSettingsYieldToConsole); });
+  registry.add("IllumoGame.CellGame.ExitConfirmation",
+               []() { return runCanvasSceneCase(testExitConfirmationFromQ); });
   registry.add("IllumoGame.CellGame.InvalidSaveFiles", []() {
     return runCanvasSceneCase(testLoadRejectsInvalidFiles);
   });

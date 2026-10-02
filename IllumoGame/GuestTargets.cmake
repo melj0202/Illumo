@@ -33,6 +33,7 @@ illumo_add_guest(IllumoGame
   "${_game}/Source/Game/CellContext.cpp"
   "${_game}/Source/Game/CanvasScene.cpp"
   "${_game}/Source/Game/CanvasActionBar.cpp"
+  "${_game}/Source/Game/CanvasChromeButton.cpp"
   "${_game}/Source/Game/CanvasContextMenu.cpp"
   "${_game}/Source/Game/CanvasEditIcons.cpp"
   "${_game}/Source/Game/ConfigurationMenu.cpp"

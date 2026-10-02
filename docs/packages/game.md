@@ -162,11 +162,21 @@ shows its canonical range/threshold summary and uses JSON import for parameter
 editing. Hodgepodge, Turmite, lattice-gas, dominance, rule-table, sandpile, and
 Lenia definitions show their compiled interaction contract and retain their
 parameters through JSON import/export.
-Rule settings and a configurable transition example come first; state labels
-and colors plus JSON import/export are lower sections in the same scrollable
-page. Save & Apply and Discard stay in a pinned action area below the scrolling
-content. Values show their step controls, and B/S counts can be toggled directly
-with the mouse or by focusing a count and pressing Enter.
+The glider button under the canvas's settings button (`CanvasChromeButton`,
+the settings button's tile, springs and hint with its own glyph) opens the
+workshop like F2; both corner buttons hide while a menu, the console or a
+dialog is open, and the FPS readout sits below them. The page reads Start From
+(cell family and starter rule as New Canvas's drop-down lists, which Left/Right
+still step, then the ruleset name), Behavior, Preview, then Cell States
+(family name, a state swatch picker, the state label and draggable color
+channel sliders that step by 8, or 1 with Shift). The header's notation card
+(`B3/S23` and the like) follows every edit. The preview is a transition map:
+one row per state, up to six, paints each neighbor count in the state it leads
+to and rims the counts that change the cell; elementary rules show their eight
+patterns. Import, Export, Save & Apply and Discard stay in a pinned footer
+below the scrolling content. Steppers step back from their left half and
+forward from their right, and B/S counts can be toggled directly with the
+mouse or by focusing a count and pressing Enter.
 Save & Apply validates the draft, drains the simulation, rejects family schema
 changes that would invalidate live cells, writes family data before the
 referencing rule, then activates the pair. Import also rejects a replacement for

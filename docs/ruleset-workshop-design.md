@@ -68,18 +68,34 @@ ruleset/mode commands continue to identify behavior by the stable ruleset ID.
 
 ## F2 user interface
 
-F2 opens a dedicated, primitive-composed `RulesetWorkshopMenu`. One scrollable
-page is organized as Rule, Preview, Appearance, and Files. Rule controls and a
-plain-language transition example appear first. Appearance exposes family
-state names and colors; Files exposes JSON import/export. Save & Apply and
-Discard remain in a fixed action area below the content viewport.
+F2, or the glider button stacked under the canvas's settings button, opens a
+dedicated, primitive-composed `RulesetWorkshopMenu`. One scrollable page reads
+in the order of the job: Start From (cell family, starter rule, ruleset name),
+Behavior, Preview, and Cell States. The header summarizes the draft live in a
+notation card (`B3/S23`, `B2/S/C3`, `W90`, a cyclic `T3 +1`) over its model
+and state count, beside keycap hints. Import, Export, Save & Apply and Discard
+sit in a pinned footer below the content viewport, in keyboard order.
+
+Cell family and starter rule are drop-down fields, the same `GuiDropdownList`
+as New Canvas: Enter or a click opens the list (families show how many rules
+they offer; the starter list is filtered to the family), it takes every key
+while open so Escape closes only the list, and Left/Right still step the value
+without opening it.
 
 Controls depend on the chosen family's model. Life-like and Generations expose
-selectable birth/survival counts; Generations also exposes state count;
-elementary rules expose their Wolfram number; Moore-table rules direct users to
-JSON editing. The preview labels its sample inputs and resulting state. State
-labels, colors, and palette previews belong to the family draft, separate from
-rule transition parameters.
+"Born with" and "Survives with" count chips; Generations also exposes state
+count; elementary rules expose their Wolfram number; Moore-table rules direct
+users to JSON editing. The preview is a transition map rather than one sample:
+one row per cell state (background first, at most six) paints every neighbor
+count 0-8 in the state it leads to, with a lit rim where the cell changes, so a
+B/S edit shows its whole effect at once. Elementary rules show the eight
+left-centre-right patterns; directional families show the result among empty
+neighbors. Focusing a row and pressing Left/Right picks the example the footer
+spells out ("Background + 3 live neighbors -> Alive"). State labels and colors
+belong to the family draft, separate from rule transition parameters: a
+swatch row picks the state (up to twelve; longer palettes step through a
+list), and each color channel is a slider painted with the color it would mix,
+dragged with the mouse or stepped by 8 (Shift: 1).
 
 Mouse focus, keyboard movement, text entry, and wheel scrolling have separate
 roles. Arrows/WASD and Tab navigate applicable controls; Page Up/Down and

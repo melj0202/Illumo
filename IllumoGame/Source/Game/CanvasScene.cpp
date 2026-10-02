@@ -263,11 +263,6 @@ CanvasScene::CanvasScene(std::string initialSavePath)
   , hoverX(0)
   , hoverY(0)
   , hoverValid(false)
-  , hamburgerX(0.0f)
-  , hamburgerY(0.0f)
-  , hamburgerSize(32.0f)
-  , hamburgerHovered(false)
-  , hamburgerMouseWasDown(false)
   , inspectorEnabled(false)
   , simulationGeneration(0)
   , copyHeld(false)
@@ -443,18 +438,9 @@ CanvasScene::start(IllumoContext& startContext)
   m_rightMouseWasDown = false;
   m_rightPressEdge = false;
 
-  for (GameVisual* visual : { &m_hamburgerHaloVisual, &hamburgerVisual }) {
-    visual->setRenderer(ic->renderer);
-    visual->setWindow(ic->window);
-    visual->setSpace(PrimitiveSpace::Pixels);
-    visual->setLayerHint(RenderLayerId::UI);
-    visual->setVisible(false);
-    if (ic->renderer != nullptr) {
-      visual->prepare(ic->renderer);
-    }
-  }
-  m_hamburgerHaloKey.invalidate();
-  m_hamburgerKey.invalidate();
+  m_settingsButton.prepare(ic->window, ic->renderer);
+  m_workshopButton.prepare(ic->window, ic->renderer);
+  m_chromeMouseWasDown = false;
 
   for (GameVisual* visual : { &m_paintBubbleHaloVisual,
                               &m_paintPaletteVisual,
@@ -490,18 +476,6 @@ CanvasScene::start(IllumoContext& startContext)
   m_paintPaletteHeightMorph.snapTo(0.0f);
   m_paintPaletteWidthMorph.snapTo(0.0f);
   m_paintPaletteBubbleHover.snapTo(0.0f);
-  m_hamburgerPop.configure(GuiMotion::kBoing);
-  m_hamburgerHover.configure(GuiMotion::kJelly);
-  m_hamburgerTip.configure(GuiMotion::kBoing);
-  m_hamburgerTip.snapTo(0.0f);
-  for (GuiSpring& bar : m_hamburgerBars) {
-    bar.configure(GuiMotion::kBoing);
-    bar.snapTo(0.0f);
-  }
-  m_hamburgerPop.snapTo(0.0f);
-  m_hamburgerHover.snapTo(0.0f);
-  m_hamburgerHoverClock = 0.0;
-  m_hamburgerShown = false;
   m_paintPaletteMouseWasDown = false;
   m_paintPaletteCapturing = false;
   m_paintPaletteHovered = false;
@@ -1936,17 +1910,23 @@ CanvasScene::update(double dt)
   const bool mouseLeftDown =
     ic->inputManager != nullptr &&
     ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
-  const bool hamburgerClicked = !consoleOpen && !exitConfirmOpen &&
-                                hamburgerHovered && mouseLeftDown &&
-                                !hamburgerMouseWasDown;
-  hamburgerMouseWasDown = mouseLeftDown;
+  // A corner button takes a click on the press edge while it was hovered
+  // (and therefore shown) last frame.
+  const bool chromePressEdge =
+    !consoleOpen && !exitConfirmOpen && mouseLeftDown && !m_chromeMouseWasDown;
+  m_chromeMouseWasDown = mouseLeftDown;
+  const bool settingsClicked = chromePressEdge &&
+                               m_settingsButton.isVisible() &&
+                               m_settingsButton.isHovered();
+  const bool workshopClicked = chromePressEdge &&
+                               m_workshopButton.isVisible() &&
+                               m_workshopButton.isHovered();
 
   if (!consoleOpen && !exitConfirmOpen &&
       (rulesetWorkshopMenu == nullptr || !rulesetWorkshopMenu->isOpen()) &&
       configurationMenu != nullptr &&
-      (ic->inputManager->isActionActive("ToggleSettings") ||
-       hamburgerClicked)) {
-    if (hamburgerClicked) {
+      (ic->inputManager->isActionActive("ToggleSettings") || settingsClicked)) {
+    if (settingsClicked) {
       CSimSounds::play(CSimSound::MenuSelect);
     }
     toggleSettingsMenu();
@@ -1989,7 +1969,7 @@ CanvasScene::update(double dt)
     updateModeBadge(dt);
     updateEditTools(dt);
     updateEditorCursor(dt);
-    updateHamburgerVisual(dt);
+    updateChromeButtons(dt);
     updateSelectionVisual();
     updateInspectorVisual();
     updateVisualTargets();
@@ -2041,7 +2021,7 @@ CanvasScene::update(double dt)
     updateModeBadge(dt);
     updateEditTools(dt);
     updateEditorCursor(dt);
-    updateHamburgerVisual(dt);
+    updateChromeButtons(dt);
     updateSelectionVisual();
     updateInspectorVisual();
     updateVisualTargets();
@@ -2052,24 +2032,11 @@ CanvasScene::update(double dt)
   if (!consoleOpen && !exitConfirmOpen &&
       (configurationMenu == nullptr || !configurationMenu->isOpen()) &&
       rulesetWorkshopMenu != nullptr && !rulesetWorkshopMenu->isOpen() &&
-      consumeKeyPress(ic->inputManager, KeyCode::F2)) {
-    ILLUMO_PROFILE_ZONE("CanvasScene.openRulesetWorkshop");
-    const RuleSetDefinition* definition =
-      RuleSetRegistry::instance().getRuleSetDefinition(
-        cellContext->getModeString());
-    const RuleFamilyDefinition* family =
-      definition == nullptr
-        ? nullptr
-        : RuleSetRegistry::instance().getFamilyDefinition(definition->familyId);
-    if (definition != nullptr && family != nullptr) {
-      drainSimulation();
-      const bool reducedMotion =
-        ic->envVars != nullptr &&
-        ic->envVars->getVar("reducedUiMotion").valueAsBool;
-      rulesetWorkshopMenu->open(*family, *definition, reducedMotion);
-      ic->inputManager->clearCharQueue();
-      Logger::LogTrace("Ruleset workshop opened on " + definition->id);
+      (consumeKeyPress(ic->inputManager, KeyCode::F2) || workshopClicked)) {
+    if (workshopClicked) {
+      CSimSounds::play(CSimSound::MenuSelect);
     }
+    openRulesetWorkshop();
   }
 
   if (rulesetWorkshopMenu != nullptr && rulesetWorkshopMenu->isOpen()) {
@@ -2215,7 +2182,7 @@ CanvasScene::update(double dt)
     updateModeBadge(dt);
     updateEditTools(dt);
     updateEditorCursor(dt);
-    updateHamburgerVisual(dt);
+    updateChromeButtons(dt);
     updateSelectionVisual();
     updateInspectorVisual();
     updateVisualTargets();
@@ -2236,7 +2203,7 @@ CanvasScene::update(double dt)
     updateModeBadge(dt);
     updateEditTools(dt);
     updateEditorCursor(dt);
-    updateHamburgerVisual(dt);
+    updateChromeButtons(dt);
     updateSelectionVisual();
     updateInspectorVisual();
     updateVisualTargets();
@@ -2358,7 +2325,7 @@ CanvasScene::update(double dt)
     handleEditorHotkeys();
   }
   updateEditorCursor(dt);
-  updateHamburgerVisual(dt);
+  updateChromeButtons(dt);
   updateSelectionVisual();
   updateInspectorVisual();
   // Map dirty life cells to palette target colors, then ease display toward
@@ -2395,13 +2362,8 @@ CanvasScene::stop()
   m_actionBar.hide();
   render3dScene.reset();
   render3dLoadFailed = false;
-  m_hamburgerHaloVisual.clearPrimitives();
-  m_hamburgerHaloVisual.setVisible(false);
-  hamburgerVisual.clearPrimitives();
-  hamburgerVisual.setVisible(false);
-  m_hamburgerHaloKey.invalidate();
-  m_hamburgerKey.invalidate();
-  m_hamburgerShown = false;
+  m_settingsButton.hide();
+  m_workshopButton.hide();
   for (GameVisual* visual : { &m_paintBubbleHaloVisual,
                               &m_paintPaletteVisual,
                               &m_paintDropVisual,
@@ -3215,13 +3177,15 @@ CanvasScene::buildEditHints(float width,
   // A soft glow hugs the lit top edge: it rises into the canvas and sinks a
   // little way into the bar, cyan in the middle fading toward cyan and violet
   // at the ends like the hairline it surrounds. It breathes in step with the
-  // hamburger's halo (the same clock and period), swelling and brightening.
+  // settings button's halo (the same clock and period), swelling and
+  // brightening.
   const bool stillHints = ic->envVars != nullptr &&
                           ic->envVars->getVar("reducedUiMotion").valueAsBool;
   const float hintBreath =
-    stillHints ? 0.5f
-               : 0.5f + 0.5f * std::sin(static_cast<float>(m_hamburgerClock) *
-                                        6.2831853f / 3.2f);
+    stillHints
+      ? 0.5f
+      : 0.5f + 0.5f * std::sin(static_cast<float>(m_settingsButton.clock()) *
+                               6.2831853f / 3.2f);
   const float glowStrength = 0.28f + 0.1f * hintBreath;
   const float glowAbove = 11.0f + 4.0f * hintBreath;
   const float glowBelow = 5.0f + 1.5f * hintBreath;
@@ -3547,7 +3511,7 @@ CanvasScene::Edit(double dt)
     const bool shift = ic->inputManager->isShiftPressed();
 
     const bool pointerInWorld =
-      hoverValid && !isHamburgerHovered() && !m_paintPaletteHovered &&
+      hoverValid && !isChromeButtonHovered() && !m_paintPaletteHovered &&
       !m_paintPaletteCapturing && !m_editToolsCapturing &&
       !m_contextMenu.isOpen() && !isPointerOverEditTools();
     // A right press inside the selection opens its menu instead of erasing;
@@ -4729,361 +4693,82 @@ CanvasScene::toggleSettingsMenu()
 }
 
 bool
-CanvasScene::isHamburgerHovered() const
+CanvasScene::isChromeButtonHovered() const
 {
-  if (ic == nullptr || ic->window == nullptr) {
-    return false;
-  }
-  const bool consoleOpen =
-    ic->commandLine != nullptr && ic->commandLine->isOpen;
-  const bool exitConfirmOpen =
-    exitConfirmDialog != nullptr && exitConfirmDialog->isOpen();
-  if (consoleOpen || exitConfirmOpen) {
-    return false;
-  }
-  const std::array<double, 2> mouseCoords = ic->window->getMouseCoords();
-  const float scale =
-    ic->renderer != nullptr ? ic->renderer->getUiScale() : 1.0f;
-  const float mx =
-    static_cast<float>(mouseCoords[0]) / (scale > 0.0f ? scale : 1.0f);
-  const float my =
-    static_cast<float>(mouseCoords[1]) / (scale > 0.0f ? scale : 1.0f);
-
-  return mx >= hamburgerX && mx <= (hamburgerX + hamburgerSize) &&
-         my >= hamburgerY && my <= (hamburgerY + hamburgerSize);
+  return (m_settingsButton.isVisible() && m_settingsButton.isHovered()) ||
+         (m_workshopButton.isVisible() && m_workshopButton.isHovered());
 }
 
 void
-CanvasScene::updateHamburgerVisual(double dt)
+CanvasScene::openRulesetWorkshop()
 {
-  ILLUMO_PROFILE_ZONE("CanvasScene.updateHamburgerVisual");
-  const auto hide = [this]() {
-    m_hamburgerHaloVisual.setVisible(false);
-    hamburgerVisual.setVisible(false);
-  };
-  if (ic == nullptr || ic->window == nullptr) {
-    hide();
-    m_hamburgerShown = false;
+  ILLUMO_PROFILE_ZONE("CanvasScene.openRulesetWorkshop");
+  const RuleSetDefinition* definition =
+    RuleSetRegistry::instance().getRuleSetDefinition(
+      cellContext->getModeString());
+  const RuleFamilyDefinition* family =
+    definition == nullptr
+      ? nullptr
+      : RuleSetRegistry::instance().getFamilyDefinition(definition->familyId);
+  if (definition == nullptr || family == nullptr) {
     return;
   }
+  drainSimulation();
+  const bool reducedMotion = ic->envVars != nullptr &&
+                             ic->envVars->getVar("reducedUiMotion").valueAsBool;
+  paintStrokeActive = false;
+  clipboard.stopSelectionDrag();
+  rulesetWorkshopMenu->open(*family, *definition, reducedMotion);
+  ic->inputManager->clearCharQueue();
+  Logger::LogTrace("Ruleset workshop opened on " + definition->id);
+}
 
+void
+CanvasScene::updateChromeButtons(double dt)
+{
+  ILLUMO_PROFILE_ZONE("CanvasScene.updateChromeButtons");
+  if (ic == nullptr || ic->window == nullptr) {
+    m_settingsButton.hide();
+    m_workshopButton.hide();
+    return;
+  }
   const bool consoleOpen =
     ic->commandLine != nullptr && ic->commandLine->isOpen;
   const bool exitConfirmOpen =
     exitConfirmDialog != nullptr && exitConfirmDialog->isOpen();
   const bool settingsOpen =
     configurationMenu != nullptr && configurationMenu->isOpen();
-
-  if (consoleOpen || exitConfirmOpen || settingsOpen) {
-    hide();
-    hamburgerHovered = false;
-    m_hamburgerShown = false;
+  const bool workshopOpen =
+    rulesetWorkshopMenu != nullptr && rulesetWorkshopMenu->isOpen();
+  if (consoleOpen || exitConfirmOpen || settingsOpen || workshopOpen) {
+    m_settingsButton.hide();
+    m_workshopButton.hide();
     return;
   }
 
-  const std::array<int, 2> winDims = ic->window->getWindowDimensions();
   const float scale =
-    ic->renderer != nullptr ? ic->renderer->getUiScale() : 1.0f;
-  const float virtWidth =
-    static_cast<float>(winDims[0]) / (scale > 0.0f ? scale : 1.0f);
-
-  hamburgerSize = 32.0f;
-  hamburgerX = std::max(0.0f, virtWidth - hamburgerSize - 12.0f);
-  hamburgerY = 12.0f;
-
-  const bool wasHovered = hamburgerHovered;
-  hamburgerHovered = isHamburgerHovered();
-  if (hamburgerHovered) {
-    GuiPointerHint::markInteractive();
-  }
-  if (hamburgerHovered && !wasHovered) {
-    CSimSounds::play(CSimSound::MenuHover);
-  }
-  const bool isMouseDown =
+    ic->renderer != nullptr && ic->renderer->getUiScale() > 0.0f
+      ? ic->renderer->getUiScale()
+      : 1.0f;
+  const std::array<int, 2> windowSize = ic->window->getWindowDimensions();
+  const std::array<double, 2> mouse = ic->window->getMouseCoords();
+  const float virtualWidth = static_cast<float>(windowSize[0]) / scale;
+  const float pointerX = static_cast<float>(mouse[0]) / scale;
+  const float pointerY = static_cast<float>(mouse[1]) / scale;
+  const bool mouseDown =
     ic->inputManager != nullptr &&
     ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
-  const bool isPressed = hamburgerHovered && isMouseDown;
-
   const bool reducedMotion = ic->envVars != nullptr &&
                              ic->envVars->getVar("reducedUiMotion").valueAsBool;
-  const float step =
-    std::isfinite(dt) && dt > 0.0 ? static_cast<float>(dt) : 0.0f;
 
-  // Reappearing (entering the canvas, or closing settings, the console or
-  // the exit dialog) pops the button back in from nothing.
-  if (!m_hamburgerShown) {
-    m_hamburgerShown = true;
-    m_hamburgerPop.snapTo(0.0f);
-    m_hamburgerHover.snapTo(0.0f);
-    m_hamburgerTip.snapTo(0.0f);
-    for (GuiSpring& bar : m_hamburgerBars) {
-      bar.snapTo(0.0f);
-    }
-    m_hamburgerHoverClock = 0.0;
-  }
-  m_hamburgerPop.setTarget(1.0f);
-  m_hamburgerPop.tick(step, reducedMotion);
-
-  m_hamburgerHover.setTarget(hamburgerHovered ? 1.0f : 0.0f);
-  m_hamburgerHover.tick(step, reducedMotion);
-  m_hamburgerHoverClock =
-    hamburgerHovered != wasHovered ? 0.0 : m_hamburgerHoverClock + step;
-  // The bars follow in a cascade: top first as the pointer arrives, bottom
-  // first as it leaves.
-  for (std::size_t i = 0; i < m_hamburgerBars.size(); ++i) {
-    const std::size_t order =
-      hamburgerHovered ? i : m_hamburgerBars.size() - 1u - i;
-    if (reducedMotion ||
-        m_hamburgerHoverClock >= 0.05 * static_cast<double>(order)) {
-      m_hamburgerBars[i].setTarget(hamburgerHovered ? 1.0f : 0.0f);
-    }
-    m_hamburgerBars[i].tick(step, reducedMotion);
-  }
-
-  // The hint follows a beat after the pointer arrives, on its own springier
-  // spring, and tucks away at once when it leaves.
-  m_hamburgerTip.setTarget(hamburgerHovered &&
-                               (reducedMotion || m_hamburgerHoverClock >= 0.04)
-                             ? 1.0f
-                             : 0.0f);
-  m_hamburgerTip.tick(step, reducedMotion);
-  // A slow clock for the idle breath and the hovered bars' ripple.
-  m_hamburgerClock = std::fmod(m_hamburgerClock + step, 60.0);
-  const float clock = static_cast<float>(m_hamburgerClock);
-  const float breathe = CanvasChromeStyle::breathe(clock, reducedMotion);
-
-  const float hoverSpring = m_hamburgerHover.value();
-  const float hover = std::clamp(hoverSpring, 0.0f, 1.0f);
-  const float pop = std::max(0.0f, m_hamburgerPop.value());
-  const ColorRgba cyan = UiTheme::accentCool();
-  const ColorRgba violet = UiTheme::accentViolet();
-
-  // Jelly: the tile stretches tall while it grows and bulges wide as it
-  // recoils, driven by how fast the pop and hover springs are moving. A held
-  // press squashes it flat.
-  const float squash = CanvasChromeStyle::squash(
-    m_hamburgerPop.velocity(), m_hamburgerHover.velocity(), isPressed);
-  const float grow = pop * (1.0f + 0.1f * hoverSpring);
-  const float tileWidth = hamburgerSize * grow * (1.0f + squash);
-  const float tileHeight = hamburgerSize * grow * (1.0f - squash);
-  const bool tileShown = tileWidth > 2.0f && tileHeight > 2.0f;
-  // An opaque icon tile scaled about its centre. A press sinks it.
-  const float centerX = hamburgerX + hamburgerSize * 0.5f;
-  const float centerY =
-    hamburgerY + hamburgerSize * 0.5f + (isPressed ? 1.0f : 0.0f);
-  const float tileX = centerX - tileWidth * 0.5f;
-  const float tileY = centerY - tileHeight * 0.5f;
-  const float radius =
-    std::min(10.0f * grow, std::min(tileWidth, tileHeight) * 0.5f);
-
-  // Behind the tile: a soft drop shadow and a cyan-to-violet halo that
-  // breathes at rest and blooms on hover.
-  m_hamburgerHaloKey.begin().add(
-    { tileShown ? 1.0f : 0.0f, tileX, tileY, tileWidth, tileHeight, radius });
-  m_hamburgerHaloKey.add({ isPressed ? 1.0f : 0.0f, hover, breathe, pop });
-  if (m_hamburgerHaloKey.changed()) {
-    ILLUMO_PROFILE_ZONE("CanvasScene.rebuildHamburgerHalo");
-    m_hamburgerHaloVisual.clearPrimitives();
-    if (tileShown) {
-      GuiKit::drawSoftShadow(m_hamburgerHaloVisual,
-                             tileX,
-                             tileY,
-                             tileWidth,
-                             tileHeight,
-                             radius,
-                             10.0f,
-                             (isPressed ? 1.0f : 3.0f) + 2.0f * hover,
-                             UiTheme::glowShadow());
-      const ColorRgba halo = CanvasChromeStyle::halo(hover);
-      GuiKit::drawRoundedBand(
-        m_hamburgerHaloVisual,
-        tileX,
-        tileY,
-        tileWidth,
-        tileHeight,
-        radius,
-        0.0f,
-        CanvasChromeStyle::haloWidth(breathe, hover),
-        UiTheme::fade(halo, CanvasChromeStyle::haloOpacity(breathe, hover) * pop),
-        UiTheme::transparentOf(halo));
-    }
-  }
-  m_hamburgerHaloVisual.setVisible(true);
-
-  // Rounded bars widen on their own springs, overshooting before they
-  // settle, then ripple gently while the pointer stays.
-  const float barHeight = 2.5f * grow * (1.0f - squash);
-  const float spacing = 5.5f * grow * (1.0f - squash);
-  std::array<float, 3> barWidths{};
-  for (std::size_t i = 0; i < m_hamburgerBars.size(); ++i) {
-    const float ripple =
-      reducedMotion ? 0.0f
-                    : 1.2f * hover *
-                        std::sin(clock * 7.0f - static_cast<float>(i) * 0.9f);
-    barWidths[i] = (14.0f + 6.0f * m_hamburgerBars[i].value() + ripple) *
-                   grow * (1.0f + squash);
-  }
-
-  const float tipSpring = m_hamburgerTip.value();
-  const float tipShown = std::clamp(tipSpring * 1.4f, 0.0f, 1.0f);
-  const bool tipDrawn = tipShown > 0.01f && pop > 0.5f;
-  const float tipSquash =
-    std::clamp(0.01f * m_hamburgerTip.velocity(), -0.15f, 0.15f);
-
-  // The tile, bars and hint change only on interaction, so they redraw only
-  // when their inputs do.
-  m_hamburgerKey.begin().add({ tileShown ? 1.0f : 0.0f,
-                               hamburgerX,
-                               hamburgerY,
-                               centerY,
-                               tileWidth,
-                               tileHeight,
-                               radius,
-                               hover,
-                               isPressed ? 1.0f : 0.0f,
-                               barHeight,
-                               spacing });
-  m_hamburgerKey.add({ barWidths[0], barWidths[1], barWidths[2] });
-  m_hamburgerKey.add(
-    { tipDrawn ? 1.0f : 0.0f, tipDrawn ? tipSpring : 0.0f, tipDrawn ? tipSquash : 0.0f });
-  hamburgerVisual.setVisible(true);
-  if (!m_hamburgerKey.changed()) {
-    return;
-  }
-  hamburgerVisual.clearPrimitives();
-
-  if (tileShown) {
-    ILLUMO_PROFILE_ZONE("CanvasScene.rebuildHamburgerTile");
-    // A rim lit cyan at the top and violet at the bottom, and a
-    // teal-to-indigo face that brightens toward the accents on hover.
-    GuiKit::drawRoundedGradientRect(
-      hamburgerVisual,
-      tileX,
-      tileY,
-      tileWidth,
-      tileHeight,
-      radius,
-      isPressed ? cyan : CanvasChromeStyle::rimTop(hover),
-      isPressed ? cyan : CanvasChromeStyle::rimBottom(hover));
-    GuiKit::drawRoundedGradientRect(hamburgerVisual,
-                                    tileX + 1.0f,
-                                    tileY + 1.0f,
-                                    tileWidth - 2.0f,
-                                    tileHeight - 2.0f,
-                                    std::max(0.0f, radius - 1.0f),
-                                    CanvasChromeStyle::faceTop(hover),
-                                    CanvasChromeStyle::faceBottom(hover));
-    // A cyan-to-violet hairline crowns the flat top, as on the paint drawer.
-    const float crownInset = std::max(3.0f, radius);
-    if (tileWidth - 2.0f * crownInset > 2.0f) {
-      const unsigned char crownOpacity =
-        static_cast<unsigned char>(255.0f * (0.55f + 0.45f * hover));
-      hamburgerVisual.addGradientRect(
-        tileX + crownInset,
-        tileY + 1.0f,
-        tileWidth - 2.0f * crownInset,
-        1.5f,
-        UiTheme::applyOpacity(cyan, crownOpacity),
-        UiTheme::applyOpacity(violet, crownOpacity),
-        UiTheme::applyOpacity(violet, crownOpacity),
-        UiTheme::applyOpacity(cyan, crownOpacity));
-    }
-
-    // The bars run cyan to violet from top to bottom, pastel at rest and
-    // vivid on hover.
-    const ColorRgba barTints[3] = { cyan,
-                                    UiTheme::mix(cyan, violet, 0.5f),
-                                    violet };
-    for (std::size_t i = 0; i < m_hamburgerBars.size(); ++i) {
-      const ColorRgba barColor =
-        isPressed
-          ? ColorRgba{ 236, 250, 255, 255 }
-          : UiTheme::mix(
-              UiTheme::mix(ColorRgba{ 214, 230, 246, 255 }, barTints[i], 0.45f),
-              barTints[i],
-              hover);
-      const float barWidth = barWidths[i];
-      const float y =
-        centerY + (static_cast<float>(i) - 1.0f) * spacing - barHeight * 0.5f;
-      GuiKit::drawRoundedRect(hamburgerVisual,
-                              centerX - barWidth * 0.5f,
-                              y,
-                              barWidth,
-                              barHeight,
-                              barHeight * 0.5f,
-                              barColor);
-    }
-  }
-
-  if (tipDrawn) {
-    ILLUMO_PROFILE_ZONE("CanvasScene.rebuildHamburgerTip");
-    // A glass hint springs out of the button: it grows from its end nearest
-    // the button, sails past its spot and bounces back, stretching along its
-    // travel and bulging as it recoils. It shows the action, then its key as
-    // a keycap, the way the menus' footers show shortcuts.
-    const unsigned char opacity = static_cast<unsigned char>(255.0f * tipShown);
-    const float tipScale = std::max(0.2f, 0.6f + 0.4f * tipSpring);
-    const float labelSize = 11.0f * tipScale;
-    const float keySize = 8.5f * tipScale;
-    const float tipHeight = 26.0f * tipScale * (1.0f - tipSquash);
-    const float labelWidth =
-      GuiKit::measureEmphasizedText("Settings", labelSize, 0.5f);
-    // The keycap alone: a hint with no action, less its spacing.
-    const float keyWidth =
-      GuiKit::measureKeyHint("F1", std::string(), keySize) - keySize * 2.2f;
-    const float restWidth = 14.0f * tipScale + labelWidth + 8.0f * tipScale +
-                            keyWidth + 6.0f * tipScale;
-    const float tipWidth = restWidth * (1.0f + tipSquash);
-    const float tipRight = hamburgerX - 8.0f + (1.0f - tipSpring) * 18.0f;
-    const float tipX = tipRight - tipWidth;
-    const float tipY = hamburgerY + (hamburgerSize - tipHeight) * 0.5f;
-    const float contentX = tipX + (tipWidth - restWidth) * 0.5f;
-    GuiKit::drawSoftShadow(
-      hamburgerVisual,
-      tipX,
-      tipY,
-      tipWidth,
-      tipHeight,
-      tipHeight * 0.5f,
-      10.0f,
-      3.0f,
-      UiTheme::applyOpacity(UiTheme::glowShadow(), opacity));
-    GuiKit::drawRoundedGradientRect(
-      hamburgerVisual,
-      tipX,
-      tipY,
-      tipWidth,
-      tipHeight,
-      tipHeight * 0.5f,
-      UiTheme::applyOpacity(UiTheme::mix(UiTheme::glassRim(), cyan, 0.45f),
-                            opacity),
-      UiTheme::applyOpacity(UiTheme::mix(UiTheme::glassRim(), violet, 0.45f),
-                            opacity));
-    GuiKit::drawRoundedGradientRect(
-      hamburgerVisual,
-      tipX + 1.0f,
-      tipY + 1.0f,
-      tipWidth - 2.0f,
-      tipHeight - 2.0f,
-      std::max(0.0f, tipHeight * 0.5f - 1.0f),
-      UiTheme::applyOpacity(UiTheme::glassTop(), opacity),
-      UiTheme::applyOpacity(UiTheme::glassBottom(), opacity));
-    GuiKit::drawEmphasizedText(
-      hamburgerVisual,
-      "Settings",
-      contentX + 14.0f * tipScale,
-      tipY + (tipHeight - labelSize) * 0.5f,
-      labelSize,
-      UiTheme::applyOpacity(UiTheme::textPrimary(), opacity),
-      0.5f);
-    GuiKit::drawKeycap(
-      hamburgerVisual,
-      contentX + 14.0f * tipScale + labelWidth + 8.0f * tipScale,
-      tipY + (tipHeight - keySize * 1.75f) * 0.5f - 0.75f * tipScale,
-      "F1",
-      keySize,
-      opacity);
-  }
+  // Settings in the corner; the workshop stacked just beneath it. The FPS
+  // readout (PerformanceOverlay) sits below both.
+  const float size = 32.0f;
+  const float x = std::max(0.0f, virtualWidth - size - 12.0f);
+  m_settingsButton.update(
+    dt, x, 12.0f, size, pointerX, pointerY, mouseDown, reducedMotion);
+  m_workshopButton.update(
+    dt, x, 52.0f, size, pointerX, pointerY, mouseDown, reducedMotion);
 }
 
 void
@@ -5114,6 +4799,7 @@ CanvasScene::updateEditorCursor(double dt)
     !isPointerOverEditTools() &&
     (ic->commandLine == nullptr || !ic->commandLine->isOpen) &&
     (configurationMenu == nullptr || !configurationMenu->isOpen()) &&
+    (rulesetWorkshopMenu == nullptr || !rulesetWorkshopMenu->isOpen()) &&
     (exitConfirmDialog == nullptr || !exitConfirmDialog->isOpen());
   if (!canShow) {
     editorCursor.setVisible(false);
@@ -6030,9 +5716,11 @@ CanvasScene::dispatch(DrawList& frame)
   if (modeBadge.isVisible()) {
     scene->AddDrawable(&modeBadge.getVisual(), RenderLayerId::UI);
   }
-  if (hamburgerVisual.isVisible()) {
-    scene->AddDrawable(&m_hamburgerHaloVisual, RenderLayerId::UI);
-    scene->AddDrawable(&hamburgerVisual, RenderLayerId::UI);
+  for (CanvasChromeButton* button : { &m_settingsButton, &m_workshopButton }) {
+    if (button->isVisible()) {
+      scene->AddDrawable(&button->getHaloVisual(), RenderLayerId::UI);
+      scene->AddDrawable(&button->getVisual(), RenderLayerId::UI);
+    }
   }
   if (m_contextMenu.isOpen()) {
     scene->AddDrawable(&m_contextMenu.getPanelVisual(), RenderLayerId::UI);

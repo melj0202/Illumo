@@ -206,12 +206,15 @@ input. Reduced menu motion snaps all menu transitions, including pause/exit,
 and stops decorative motion without changing simulation or cell fading. The in-game
 settings button eases its hover highlight and displays the F1 shortcut.
 
-F2 opens a separate Ruleset Workshop in the canvas. Family and ruleset drafts
-are separate, and every rule references one required family. Family data owns
-state count, labels, and colors; rule data owns transition parameters. The
-family-aware Rule, Preview, Appearance, and Files sections show only applicable
-controls and a labeled sample transition. Import/export uses a portable family
-and ruleset package. Save \& Apply validates the pair, drains the simulation,
+F2, or the glider button stacked under the settings button, opens a separate
+Ruleset Workshop in the canvas. Family and ruleset drafts are separate, and
+every rule references one required family. Family data owns state count,
+labels, and colors; rule data owns transition parameters. The family-aware
+Start From, Behavior, Preview, and Cell States sections show only applicable
+controls; cell family and starter rule are drop-down lists like New Canvas's. The header carries the draft's live notation (such as B3/S23); the
+preview maps every state's next state for each neighbor count; colors are
+picked by swatch and mixed on draggable channel sliders. Import/export uses a
+portable family and ruleset package from the pinned footer. Save \& Apply validates the pair, drains the simulation,
 rejects family schema changes that invalidate live cells, persists family data
 before its rule, then activates the pair. Moore transition tables remain JSON
 editable rather than a large in-game matrix. Wheel scrolling does not steal

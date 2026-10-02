@@ -1182,11 +1182,14 @@ Larger high-contrast labels, readable ruleset names, keycap hints, and a
 selected-setting explanation keep the Release surface legible. Q and its Exit
 action open a confirmation overlay; confirming requests window closure so the
 Illumo application runner performs normal engine shutdown.
-F2 opens the separate Ruleset Workshop in the canvas. Family and transition
-drafts are independent, and every ruleset remains bound to one family. Family
-edits own cell-state names, colors, and state count; ruleset edits own identity
-and transitions. The family-aware form previews a representative transition
-and state palette, and imports or exports family/rule packages. Save & Apply
+F2, or the glider button stacked under the canvas's settings button, opens the
+separate Ruleset Workshop in the canvas. Family and transition drafts are
+independent, and every ruleset remains bound to one family. Family edits own
+cell-state names, colors, and state count; ruleset edits own identity and
+transitions. The family-aware form summarizes the draft as live notation,
+previews a transition map (each state's next state for every neighbor count),
+edits state colors with swatches and draggable channel sliders, and imports or
+exports family/rule packages from its pinned footer. Save & Apply
 validates and persists the family before its referencing rule, drains the
 simulation, rejects state-schema changes that invalidate live cells, then
 activates the pair. Cyclic families expose successor threshold and coprime cycle

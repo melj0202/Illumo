@@ -1,5 +1,6 @@
 #pragma once
 #include "CanvasActionBar.h"
+#include "CanvasChromeButton.h"
 #include "CanvasContextMenu.h"
 #include "CellClipboard.h"
 #include "CellContext.h"
@@ -99,7 +100,8 @@ private:
   // out otherwise (running, left for the title, or exiting).
   void syncEditMusic();
   void updateEditorCursor(double dt);
-  void updateHamburgerVisual(double dt);
+  // Places and animates the settings and workshop corner buttons.
+  void updateChromeButtons(double dt);
   void updatePaintPalette(double dt);
   void updateModeBadge(double dt);
   void advanceCanvasEntrance(double dt);
@@ -107,8 +109,12 @@ private:
   void requestMainMenuReturn();
   void completeMainMenuReturn();
   void rebuildCanvasEntrance();
-  bool isHamburgerHovered() const;
+  // Whether the pointer is over a corner button that can take a click.
+  bool isChromeButtonHovered() const;
   void toggleSettingsMenu();
+  // Drains the simulation and opens the workshop on the active rule (F2 or
+  // the workshop button).
+  void openRulesetWorkshop();
   void updateSelectionVisual();
   void updateEditHintsVisual(double dt);
   // Lays out the hint footer's primitives; updateEditHintsVisual calls it
@@ -208,13 +214,15 @@ private:
   double render3dTestTime;
   bool render3dCameraApplied;
   Cursor editorCursor;
-  // The button's shadow and breathing halo animate every frame, so they sit
-  // in their own visual behind the tile; the tile, bars and hint redraw only
-  // when m_hamburgerKey changes.
-  GameVisual m_hamburgerHaloVisual;
-  GameVisual hamburgerVisual;
-  GuiDrawKey m_hamburgerHaloKey;
-  GuiDrawKey m_hamburgerKey;
+  // The top-right corner buttons: settings (F1), and beneath it the Ruleset
+  // Workshop (F2). Both hide while a menu, the console or a dialog is open.
+  CanvasChromeButton m_settingsButton{ CanvasChromeIcon::Settings,
+                                       "Settings",
+                                       "F1" };
+  CanvasChromeButton m_workshopButton{ CanvasChromeIcon::Rules,
+                                       "Ruleset Workshop",
+                                       "F2" };
+  bool m_chromeMouseWasDown = false;
   // The paint drawer draws in three layers so its breathing drop can redraw
   // alone: the blob, header and cards; the chosen brush's drop; then the
   // swatches, labels and hints. The outer two redraw only when their keys
@@ -289,23 +297,6 @@ private:
   static constexpr double kCanvasExitSeconds = 0.48;
   bool mainMenuReturnPending = false;
   bool mainMenuReturnSubmitted = false;
-  float hamburgerX;
-  float hamburgerY;
-  float hamburgerSize;
-  bool hamburgerHovered;
-  bool hamburgerMouseWasDown;
-  // The button moves on the shared springs: it pops in like a bead whenever
-  // it reappears, hover swells it with a jelly overshoot (squashing along the
-  // way), each bar widens on its own springy spring a beat after the one
-  // above it, and the hint springs out on its own. A slow clock breathes its
-  // halo and ripples the hovered bars.
-  GuiSpring m_hamburgerPop;
-  GuiSpring m_hamburgerHover;
-  GuiSpring m_hamburgerTip;
-  std::array<GuiSpring, 3> m_hamburgerBars;
-  double m_hamburgerHoverClock = 0.0;
-  double m_hamburgerClock = 0.0;
-  bool m_hamburgerShown = false;
   GameVisual editHintsVisual;
   int editHintsInsetPixels = 0;
   int editHintsFullInsetPixels = 0;

@@ -11,6 +11,7 @@ add_library(IllumoGameCore STATIC
   Source/Game/CellContext.cpp
   Source/Game/CanvasScene.cpp
   Source/Game/CanvasActionBar.cpp
+  Source/Game/CanvasChromeButton.cpp
   Source/Game/CanvasContextMenu.cpp
   Source/Game/CanvasEditIcons.cpp
   Source/Game/CellPattern.cpp
