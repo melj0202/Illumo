@@ -119,6 +119,14 @@ target_include_directories(IllumoRuntime SYSTEM PRIVATE
   "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/json/single_include"
   "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/tracy-0.14.1/public")
 illumo_configure_runtime_target(IllumoRuntime)
+# Release (and MinSizeRel) runtimes are Windows programs: launching one opens
+# no console window. The entry stays main(); WinMain.cpp attaches to a parent
+# terminal's console for command-line output. Debug and RelWithDebInfo keep
+# their console for logs.
+if(MSVC)
+  target_link_options(IllumoRuntime PRIVATE
+    "$<$<CONFIG:Release,MinSizeRel>:/SUBSYSTEM:WINDOWS;/ENTRY:mainCRTStartup>")
+endif()
 illumo_stage_runtime(IllumoRuntime)
 illumo_stage_default_file(IllumoRuntime
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/RuntimeEnvVars.json" envvars.json)

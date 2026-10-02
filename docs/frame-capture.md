@@ -21,10 +21,16 @@ directory; relative paths resolve against the directory it was started from):
 
 ```powershell
 cd build-workspace\Release
-.\IllumoRuntime.exe --capture game.png
-.\IllumoRuntime.exe --app illed --open scene.ilsc --capture editor.png
-.\IllumoRuntime.exe --app meshviewer --open model.obj --capture frame.png --capture-frame 90 -ww 1280 -wh 720
+.\IllumoRuntime.exe --capture game.png | Out-Host
+.\IllumoRuntime.exe --app illed --open scene.ilsc --capture editor.png | Out-Host
+.\IllumoRuntime.exe --app meshviewer --open model.obj --capture frame.png --capture-frame 90 -ww 1280 -wh 720 | Out-Host
 ```
+
+A Release runtime is a Windows program (no console window), so an interactive
+shell returns before it finishes; piping its output, as above, or
+`Start-Process -Wait -NoNewWindow` makes the shell wait for the JSON result.
+Scripts that read the result through a pipe (`tools/verify_capture.py`, CTest)
+are unaffected. Debug and RelWithDebInfo runtimes are console programs.
 
 - `--capture path.png`: required for capture. The path must end in `.png` and
   must not already exist; anything else is refused before the app starts.

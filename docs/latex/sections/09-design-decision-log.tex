@@ -3805,6 +3805,26 @@ replaces throwing from \texttt{bootstrap}. The
 \texttt{catch} or \texttt{throw} in first-party C++.
 \end{decisionbox}
 
+\subsection*{D-F4 --- Release runtimes open no console}
+\begin{decisionbox}[title={D-F4 \quad 2026-10-02}]
+\textbf{Decision:} A Release or MinSizeRel \texttt{IllumoRuntime} links with
+\texttt{/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup}: a Windows program whose
+entry stays \texttt{main()}, so launching it opens no console window. Debug
+and RelWithDebInfo runtimes stay console programs. Started from a terminal
+with standard output or error not redirected, the runtime attaches to the
+parent's console and reopens those streams on it
+(\pathref{Illumo/Source/Platform/Windows/WinMain.cpp}); redirected streams
+are left alone.\\
+\textbf{Why:} Owner request: a shipped or Release launch showed a console
+window beside the game.\\
+\textbf{Consequences:} \texttt{--help} and the \texttt{--capture}/\texttt{--bench}
+JSON still reach a terminal and every pipe (CTest,
+\texttt{tools/verify\_capture.py}, \pathref{build.py}), but an interactive
+shell no longer waits for a Release runtime; scripts pipe its output or use
+\texttt{Start-Process -Wait}. Logs still go to \texttt{log.txt}. Child
+launches and restarts run the same executable, and the module compiler
+already starts with \texttt{CREATE\_NO\_WINDOW}.
+\end{decisionbox}
 \subsection*{D-PL1 --- Retire the macOS scaffold (2026-09-19)}
 macOS is not a current product target. Remove the first-party Apple platform
 files, Cocoa framework/source selection, and dedicated scaffold package map.

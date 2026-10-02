@@ -354,6 +354,15 @@ IllumoRuntime.exe --game module.wasm --package dir --storage dir
 IllumoRuntime.exe --help
 ```
 
+A Release (or MinSizeRel) `IllumoRuntime.exe` is a Windows program, so
+launching it, from Explorer or a shortcut, opens no console window; Debug and
+RelWithDebInfo builds keep their console for logs (`log.txt` beside the
+runtime always has them). Started from a terminal, a Release runtime still
+prints `--help` and the `--capture`/`--bench` JSON there, but the shell does
+not wait for it: pipe its output (`.\IllumoRuntime.exe --capture x.png |
+Out-Host`) or use `Start-Process -Wait -NoNewWindow` (cmd: `start /wait`) when
+a script needs the result.
+
 `--app` cannot be combined with `--package` or `--game`. Every package in
 `packages\` beside the runtime (directories with an `illumo.json` and `*.ilpk`
 files), and each `--mount`, is mounted on the host's virtual file tree at
