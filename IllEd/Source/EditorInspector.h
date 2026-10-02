@@ -9,6 +9,7 @@
 #include <Illumo/Rendering/Primitives/GameVisual.h>
 #include <functional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 class InputManager;
@@ -22,7 +23,9 @@ enum class InspectorFieldKind
   Toggle,
   Choice,
   Button,
-  ReadOnly
+  ReadOnly,
+  // A color row's swatch, drawn in its label column; opens the picker.
+  Swatch
 };
 
 // One editable value. Keys name what it edits ("position.x",
@@ -48,17 +51,29 @@ struct InspectorField
   bool scrub = true;
   // Longest text a Text or Number field accepts.
   size_t maxBytes = GuiTextEdit::kDefaultMaximumBytes;
+  // In a folded section: kept for field(), never laid out, drawn or hit.
+  bool hidden = false;
+  // Swatch fields: the color shown, the channel fields it edits (r, g, b
+  // and maybe a) and whether those hold 0-1 floats (else bytes).
+  ColorRgba swatch{ 128, 128, 128, 255 };
+  std::vector<std::string> channels;
+  bool unitChannels = false;
   // Layout, in UI space.
   float x = 0.0f;
   float y = 0.0f;
   float width = 0.0f;
 };
 
-// A label and the fields beside it, or a section header.
+// A label and the fields beside it, or a section header. `group` names what
+// the section edits, for its menu: "transform", a core component
+// ("primitive", "mesh", "sprite", "light", "camera") or
+// "behaviour:<type>"; empty for anything else.
 struct InspectorRow
 {
   std::string label;
   bool section = false;
+  bool folded = false;
+  std::string group;
   std::vector<size_t> fields;
   float y = 0.0f;
 };
@@ -110,6 +125,41 @@ public:
   bool activateField(const std::string& key,
                      EditorDocument* document,
                      const EditorSelection* selection);
+  // Folds or unfolds a section by its title, as clicking its header does.
+  void toggleSectionForTesting(const std::string& title);
+  bool sectionFolded(const std::string& title) const
+  {
+    return m_folded.contains(title);
+  }
+  // The right-click menu: opens on a row (a field's key, or a section title
+  // when `key` is empty), lists its labels, and runs one by label.
+  bool openMenuForTesting(const std::string& key,
+                          const std::string& sectionTitle,
+                          EditorDocument* document,
+                          const EditorSelection* selection);
+  std::vector<std::string> menuLabelsForTesting() const;
+  bool chooseMenuForTesting(const std::string& label,
+                            EditorDocument* document,
+                            const EditorSelection* selection);
+  bool menuOpen() const { return m_menuOpen; }
+  // The color picker a swatch opens: whose channels it edits, and picking a
+  // color (hue, saturation and value in 0-1, alpha in 0-1) as a drag would.
+  bool pickerOpen() const { return m_pickerOpen; }
+  const std::string& pickerSwatch() const { return m_pickerSwatch; }
+  // Types into the picker's hex box and presses Enter.
+  bool typeHexForTesting(const std::string& text,
+                         EditorDocument* document,
+                         const EditorSelection* selection)
+  {
+    return m_pickerOpen && document != nullptr && selection != nullptr &&
+           applyText("picker.hex", text, *document, *selection);
+  }
+  bool pickForTesting(float hue,
+                      float saturation,
+                      float value,
+                      float alpha,
+                      EditorDocument* document,
+                      const EditorSelection* selection);
   bool scrubForTesting(const std::string& key,
                        float pixels,
                        EditorDocument* document,
@@ -161,6 +211,49 @@ private:
   std::string m_fieldsPrimary;
   std::vector<std::string> m_fieldsSelection;
   bool m_fieldsBuilt = false;
+  // Section titles folded by clicking their headers (session state).
+  std::unordered_set<std::string> m_folded;
+  // The group buildFields is filling (see InspectorRow::group).
+  std::string m_buildGroup;
+  // The right-click menu: what it acts on and its entries.
+  enum class MenuAction
+  {
+    ResetRow,
+    ResetGroup,
+    CopyGroup,
+    PasteGroup,
+    RemoveGroup
+  };
+  struct MenuEntry
+  {
+    std::string label;
+    MenuAction action = MenuAction::ResetRow;
+    bool enabled = true;
+  };
+  bool m_menuOpen = false;
+  float m_menuX = 0.0f;
+  float m_menuY = 0.0f;
+  int m_menuHover = -1;
+  std::vector<MenuEntry> m_menu;
+  std::vector<std::string> m_menuKeys;
+  std::string m_menuGroup;
+  // The color picker: the swatch it belongs to and its channels, its color
+  // in HSV, which part a drag holds (0 none, 1 square, 2 hue, 3 alpha) and a
+  // serial so one open picker is one undo step.
+  bool m_pickerOpen = false;
+  std::string m_pickerSwatch;
+  std::vector<std::string> m_pickerChannels;
+  bool m_pickerUnit = false;
+  float m_pickerHue = 0.0f;
+  float m_pickerSaturation = 0.0f;
+  float m_pickerValue = 1.0f;
+  float m_pickerAlpha = 1.0f;
+  int m_pickerDrag = 0;
+  uint64_t m_pickerSerial = 0;
+  // Copied values: a component (by group) or a transform.
+  std::string m_clipboardGroup;
+  SceneComponent m_clipboardComponent;
+  Transform3D m_clipboardTransform;
 
   // Rebuilds the fields only when their inputs changed: the document's
   // scene (generation and revision), the selection or the known behaviours.
@@ -170,6 +263,37 @@ private:
                    const EditorSelection& selection);
   void layout();
   void rebuildVisual();
+  // Drops the rows of folded sections and hides their fields.
+  void applyFolding();
+  // The row at a panel y (fields or a section header); -1 for none.
+  int rowAt(float y) const;
+  float rowHeight() const;
+  void openMenu(int row,
+                float x,
+                float y,
+                const EditorDocument& document,
+                const EditorSelection& selection);
+  std::vector<GuiToolStyle::MenuItem> menuItems() const;
+  int menuItemAt(float x, float y) const;
+  bool runMenu(MenuAction action,
+               EditorDocument& document,
+               const EditorSelection& selection);
+  // The color picker (EditorInspector.cpp, end).
+  void openPicker(const InspectorField& swatch);
+  GuiToolRect pickerRect() const;
+  GuiToolRect pickerSquare() const;
+  GuiToolRect pickerHueStrip() const;
+  GuiToolRect pickerAlphaStrip() const;
+  GuiToolRect pickerHexBox() const;
+  // Writes the picker's color to its channels as one merged command.
+  bool applyPicker(EditorDocument& document, const EditorSelection& selection);
+  // Pointer handling while the picker is open; true when it took the press.
+  bool updatePicker(float x,
+                    float y,
+                    bool* changed,
+                    EditorDocument& document,
+                    const EditorSelection& selection);
+  void drawPicker();
   int hitTest(float x, float y) const;
   bool beginEdit(const InspectorField& field);
   bool commitEdit(EditorDocument& document, const EditorSelection& selection);
@@ -191,6 +315,13 @@ private:
     const std::string& mergeKey,
     EditorDocument& document,
     const EditorSelection& selection);
+  // A number edit as a function of each target's current value (typed
+  // "*=2", a wheel step).
+  bool applyNumberWith(const std::string& key,
+                       const std::function<double(double current)>& change,
+                       const std::string& mergeKey,
+                       EditorDocument& document,
+                       const EditorSelection& selection);
   bool applyText(const std::string& key,
                  const std::string& text,
                  EditorDocument& document,

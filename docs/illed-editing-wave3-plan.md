@@ -1,6 +1,6 @@
 # IllEd editing wave 3: interaction, tweaking, color and grouping (plan)
 
-Status: in progress. The owner asked on 2026-10-01 for "more ways to edit,
+Status: complete (2026-10-01). The owner asked on 2026-10-01 for "more ways to edit,
 tweak and interact" and chose all four offered groups: viewport interaction,
 inspector tweaking, color picking, and hierarchy and grouping.
 
@@ -50,9 +50,9 @@ inspector tweaking, color picking, and hierarchy and grouping.
 | X1 | Content hooks: view-hidden nodes, pick skip set, extension string lists; tests | done |
 | X2 | Hierarchy and grouping: group/ungroup, select parent/children, lock, isolate | done |
 | X3 | Viewport: hover, context menu, Alt-drag duplicate, Drop to Floor, nudge | done |
-| X4 | Inspector: wheel and modifier steps, expressions, field menu, folding | |
-| X5 | Color swatches and picker | |
-| X6 | Docs, full Release build and labelled CTest | |
+| X4 | Inspector: wheel and modifier steps, expressions, field menu, folding | done |
+| X5 | Color swatches and picker | done |
+| X6 | Docs, full Release build and labelled CTest | done |
 
 ## 4. Validation log
 
@@ -61,3 +61,12 @@ inspector tweaking, color picking, and hierarchy and grouping.
   `IllEd.Module.ViewportInteraction` (real pointer input: hover, the right-click
   menu, Alt-drag copies, the empty-space menu's Create, Drop to Floor, nudges);
   736 of 736 workspace tests.
+- X4-X5: `IllEd.Inspector.Tweaks` (arithmetic, relative edits on a mixed
+  selection, Ctrl+wheel through real pointer input, folding, the field menu's
+  reset, copy, paste and remove) and `IllEd.Inspector.ColorPicker` (bytes and
+  float channels, one command per open picker, hex, closing on an outside
+  press); 738 of 738 workspace tests. A Release capture of the demo scene with
+  `scene_field swatch:primitive.color.r` shows the swatch, the picker under
+  the row, fold arrows and the hierarchy padlock.
+- Not covered by an automated case: the viewport menu's drawing (the
+  capture script cannot right-click) and the Linux build.

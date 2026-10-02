@@ -28,6 +28,7 @@ generic `IFileTreeSource` (`<Illumo/Services/FileTreeSource.h>`).
 | `IlscCodec` | yes | yes | `.ilsc` format 2 parse and canonical encode |
 | `SceneAssetRefs` | yes | yes | Package roots, reference resolution, fetch lists |
 | `SceneInstance` | yes | yes | Live `SceneGraph` plus attachments from a document |
+| `SceneExtensionList` | yes | yes | String lists inside a namespaced scene extension (editor data such as IllEd's locks) |
 | `ProgramScene` | yes | yes | One screen of a program: logic, UI, commands, content, render world |
 | `SceneDirector` | yes | yes | A program's named scenes and switches between them |
 | `PackageArchive` | yes | no | `.ilpk` ZIP-subset reader, writer, CRC-32 |
@@ -216,7 +217,11 @@ comes from the first enabled, visible light component in preorder, else the
 environment sun; 2D scenes are unlit. The skybox is a separate `SkyboxVisual`
 drawable (`skybox()`), not a graph node. `pickRay` uses attachment local
 bounds with rotation, scale and effective visibility; `SceneInstanceOptions::
-pickProxies` adds pick boxes for nodes that draw nothing. Programs call
+pickProxies` adds pick boxes for nodes that draw nothing; an optional skip
+set lets the ray pass through nodes (an editor's locked ones).
+`setViewHidden` hides nodes, and so their subtrees, from drawing, lighting
+and picking without changing their document `visible` or `revision()` (an
+editor's isolation); loading or clearing empties it. Programs call
 `update()` once per frame. All of it is main-thread affine.
 
 IllEd's `EditorDocument`, IllMeshViewer's scene view and IllumoGame's

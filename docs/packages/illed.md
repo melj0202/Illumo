@@ -139,9 +139,16 @@ cleared on load.
 | Find in the hierarchy (filter field) | Ctrl+F |
 | 2D or 3D world | 2 / 3 |
 | Frame selection / reset camera | F / Home |
+| Group / Ungroup | Ctrl+G / Ctrl+Shift+G |
+| Lock or unlock / isolate the selection | Ctrl+L / Shift+H |
+| Drop to Floor | End |
+| Nudge by the move snap step | Alt+arrows, Alt+PageUp/PageDown (3D) |
+| Play / stop | Ctrl+P |
 
 Camera navigation uses the arrows, PageUp/PageDown and the mouse, so letters
-stay free for commands. While an inspector field or the hierarchy's filter
+stay free for commands; with Alt held the arrows nudge the selection instead
+(along the world axes nearest the view in 3D), a run of nudges being one
+undo step. While an inspector field or the hierarchy's filter
 field has focus it consumes keys and characters, so no shortcut fires.
 
 ## Transform tools
@@ -184,7 +191,32 @@ pointer positions into rays and deltas into transforms.
 
 - **Box select:** a drag that starts on empty viewport space draws a marquee
   and selects every visible node whose world-bounds center projects inside it
-  (Ctrl or Shift adds). A click without a drag clears the selection.
+  (Ctrl or Shift adds). A click without a drag clears the selection. Locked
+  nodes are skipped.
+- **Viewport interaction:** the node under the cursor gets a thin pale
+  outline and its name in the status bar. A right click that does not orbit
+  or pan (under 4 pixels of travel) opens a context menu (a popup of
+  `EditorToolbar`): on a node it selects it unless already selected and
+  offers Frame, Rename, Duplicate, Copy, Cut, Paste, Delete, Group,
+  Ungroup, Select Parent, Select Children, Lock or Unlock, Hide, Isolate or
+  Show Everything, and Drop to Floor; on empty ground it offers Paste,
+  Create Empty, three shapes for the world mode, Light, Camera and Frame,
+  and its shapes land at the clicked point. Alt held as a move starts
+  (gizmo or body grab) duplicates the selection and moves the copies. Drop
+  to Floor casts down from each top-level subtree's base, through itself,
+  and lowers it onto the first surface below or the ground plane (y = 0),
+  as one command.
+- **Grouping and locks:** Group puts the top-level selection under a new
+  empty "Group" node at the centre of their bounds, in the first node's
+  place when they share a parent (else at the root), keeping world poses;
+  Ungroup lifts children into the parent in the group's place and removes
+  it when it draws nothing. Lock makes a node and its subtree unpickable in
+  the viewport (still selectable in the hierarchy and inspector); locks are
+  saved in the IllEd-owned `illed.view` scene extension (`{"locked": [ids]}`,
+  through `SceneExtensionList`) and changing them is a settings command.
+  Isolate hides everything but the selection's subtrees and their ancestors
+  through `SceneInstance::setViewHidden`: view state only, never saved,
+  ended by Shift+H or a new document.
 - **Clipboard** (`EditorClipboard`): Copy, Cut and Paste write the selection's
   top-level subtrees as a format 2 `.ilsc` fragment tagged with the
   `illed.fragment` extension, roots at their world pose, plus the assets they
@@ -210,8 +242,10 @@ pointer positions into rays and deltas into transforms.
   tree (click it or Ctrl+F) keeps rows whose name or id contains its text in
   any case, plus their ancestors drawn dimmed, and ignores folding while it
   holds text; Enter keeps the filter, Escape or its clear button clears it.
-  The right-click menu offers Rename, Duplicate, Copy, Cut, Paste,
-  Add Child, Show/Hide, Enable/Disable, Unparent and Delete; the panel hands
+  A padlock column beside the eye shows and toggles locks (dim when only an
+  ancestor is locked). The right-click menu offers Rename, Duplicate, Copy,
+  Cut, Paste, Add Child, Group, Ungroup, Select Children, Show/Hide,
+  Lock/Unlock, Isolate, Enable/Disable, Unparent and Delete; the panel hands
   its choice to `EditorScene` through `takeCommand()`.
 
 ## Inspector
@@ -257,8 +291,26 @@ Fields are rebuilt from the document every frame.
   (`EditorDocument::setAssets`); a table the scene rejects (an atlas grid
   that would orphan a sprite cell, a skybox that would stop being a cubemap)
   leaves the field invalid or the choice where it was.
+- **Color** rows (primitive color, mesh and sprite tints, light color, sky
+  tint, ambient, sun color and behaviour colors) start with a swatch in the
+  label column. Clicking it opens a picker under the row: a saturation and
+  value square, a hue strip, an alpha strip for RGBA rows and a hex box
+  (`#RRGGBB` or `#RRGGBBAA`) with a preview. Everything picked while it is
+  open is one command; float channels (lights, the environment) take 0-1
+  values. A press outside it, or on the swatch, closes it.
+- **Right-click menu:** on a field it offers Reset of that row (numbers and
+  behaviour fields return to their defaults); within a component or the
+  Transform section it adds Reset, Copy and Paste Values (enabled once that
+  kind was copied) and Remove. Resetting a component keeps what it refers
+  to (a mesh's asset, a sprite's texture), a primitive's shape and a
+  camera's primary flag. Section headers fold and unfold with a click
+  (session state).
 - Enter commits one history command, Escape cancels, invalid text is rejected
-  in place. Number fields scrub by dragging their label, one merged command
+  in place. Number fields accept arithmetic (`2*(3+1)`) and relative edits
+  applied to each selected node (`+=1`, `-=1`, `*=2`, `/=2`). Ctrl+wheel over
+  a number steps it ten scrub steps per notch (Shift for one; one command per
+  field). Number fields scrub by dragging their label (Shift ten times finer,
+  Ctrl ten times coarser), one merged command
   per scrub; whole-number fields carry fractions between frames. Multi-
   selection shows shared values, marks mixed ones with a dash, and applies
   one command to every selected node (`EditorDocument::editNodes`, which
@@ -318,8 +370,10 @@ game window closes (polled about twice a second). Without the capability
 ## Console commands
 
 IllEd registers `scene_select [id...]`, `scene_place <virtual path> [x] [y]`,
-`scene_save_project`, `scene_undo`, `scene_redo`, `scene_frame` and `scene_play`. Capture
-scripts and package tests use them to reach the same flows as the UI.
+`scene_save_project`, `scene_undo`, `scene_redo`, `scene_frame`,
+`scene_field <inspector key>` (activates a field as a click would; a swatch
+opens its picker) and `scene_play`. Capture scripts and package tests use
+them to reach the same flows as the UI.
 
 ## UI
 
@@ -371,7 +425,9 @@ package. Completions may arrive synchronously or on a later update.
 every command, sibling order after delete, drag merging, byte cap, dirty
 cursor), `IllEd.Document.*`, `IllEd.Module.*` (including `CameraDoesNotDirty`,
 `NewNodeParentsToRoot`, `ShortcutsMatchMenus`, `KeyboardUndoRedo`),
-`IllEd.Inspector.*`, `IllEd.Behaviours.*` (typed fields, add and remove,
+`IllEd.Inspector.*` (including `Tweaks` and `ColorPicker`),
+`IllEd.Module.GroupLockIsolate`, `IllEd.Module.ViewportInteraction`,
+`IllEd.Behaviours.*` (typed fields, add and remove,
 reference remap on duplicate and paste, discovery), `IllEd.Gizmo.*` (axis
 projection, ring angles, scale,
 local space, real pointer drags, snapping under a rotated parent, frame

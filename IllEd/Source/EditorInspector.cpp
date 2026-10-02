@@ -44,21 +44,191 @@ formatNumber(double value)
   return text == "-0" ? "0" : text;
 }
 
-static bool
-parseNumber(const std::string& text, double* value)
+// HSV and RGB, every channel in 0-1 (hue wraps).
+static void
+hsvToRgb(float hue, float saturation, float value, float* r, float* g, float* b)
 {
-  if (text.empty()) {
+  const float scaled = (hue - std::floor(hue)) * 6.0f;
+  const int sector = static_cast<int>(std::floor(scaled)) % 6;
+  const float fraction = scaled - std::floor(scaled);
+  const float p = value * (1.0f - saturation);
+  const float q = value * (1.0f - fraction * saturation);
+  const float t = value * (1.0f - (1.0f - fraction) * saturation);
+  const float table[6][3] = {
+    { value, t, p }, { q, value, p }, { p, value, t },
+    { p, q, value }, { t, p, value }, { value, p, q }
+  };
+  *r = table[sector][0];
+  *g = table[sector][1];
+  *b = table[sector][2];
+}
+
+static void
+rgbToHsv(float r, float g, float b, float* hue, float* saturation, float* value)
+{
+  const float maximum = std::max({ r, g, b });
+  const float minimum = std::min({ r, g, b });
+  const float range = maximum - minimum;
+  *value = maximum;
+  *saturation = maximum > 0.0f ? range / maximum : 0.0f;
+  if (range <= 0.0f) {
+    // Grey keeps whatever hue the picker had.
+    return;
+  }
+  float sector = 0.0f;
+  if (maximum == r) {
+    sector = (g - b) / range;
+  } else if (maximum == g) {
+    sector = 2.0f + (b - r) / range;
+  } else {
+    sector = 4.0f + (r - g) / range;
+  }
+  *hue = sector / 6.0f;
+  if (*hue < 0.0f) {
+    *hue += 1.0f;
+  }
+}
+
+static ColorRgba
+toBytes(float r, float g, float b, float a)
+{
+  return ColorRgba{
+    static_cast<unsigned char>(std::lround(std::clamp(r, 0.0f, 1.0f) * 255)),
+    static_cast<unsigned char>(std::lround(std::clamp(g, 0.0f, 1.0f) * 255)),
+    static_cast<unsigned char>(std::lround(std::clamp(b, 0.0f, 1.0f) * 255)),
+    static_cast<unsigned char>(std::lround(std::clamp(a, 0.0f, 1.0f) * 255))
+  };
+}
+
+// Arithmetic in number fields: numbers, + - * /, parentheses and unary
+// signs, evaluated with an operator stack (no recursion). False on anything
+// else, a division by zero or a non-finite result.
+static int
+operatorPrecedence(char op)
+{
+  return op == 'u' || op == 'p' ? 3 : (op == '*' || op == '/' ? 2 : 1);
+}
+
+static bool
+applyOperator(char op, std::vector<double>& values)
+{
+  if (op == 'u' || op == 'p') {
+    if (values.empty()) {
+      return false;
+    }
+    if (op == 'u') {
+      values.back() = -values.back();
+    }
+    return true;
+  }
+  if (values.size() < 2) {
     return false;
   }
-  char* end = nullptr;
-  const double parsed = std::strtod(text.c_str(), &end);
-  while (end != nullptr && *end == ' ') {
-    ++end;
+  const double right = values.back();
+  values.pop_back();
+  double& left = values.back();
+  switch (op) {
+    case '+':
+      left += right;
+      return true;
+    case '-':
+      left -= right;
+      return true;
+    case '*':
+      left *= right;
+      return true;
+    case '/':
+      if (right == 0.0) {
+        return false;
+      }
+      left /= right;
+      return true;
+    default:
+      return false;
   }
-  if (end == nullptr || *end != '\0' || !std::isfinite(parsed)) {
+}
+
+static bool
+evaluateExpression(const std::string& text, double* result)
+{
+  std::vector<double> values;
+  std::vector<char> operators;
+  bool expectOperand = true;
+  size_t index = 0;
+  while (index < text.size()) {
+    const char character = text[index];
+    if (character == ' ') {
+      ++index;
+      continue;
+    }
+    if (expectOperand) {
+      if (character == '-' || character == '+') {
+        operators.push_back(character == '-' ? 'u' : 'p');
+        ++index;
+        continue;
+      }
+      if (character == '(') {
+        operators.push_back('(');
+        ++index;
+        continue;
+      }
+      if (!((character >= '0' && character <= '9') || character == '.')) {
+        return false;
+      }
+      const char* start = text.c_str() + index;
+      char* end = nullptr;
+      const double value = std::strtod(start, &end);
+      if (end == start) {
+        return false;
+      }
+      values.push_back(value);
+      index += static_cast<size_t>(end - start);
+      expectOperand = false;
+      continue;
+    }
+    if (character == ')') {
+      while (!operators.empty() && operators.back() != '(') {
+        if (!applyOperator(operators.back(), values)) {
+          return false;
+        }
+        operators.pop_back();
+      }
+      if (operators.empty()) {
+        return false;
+      }
+      operators.pop_back();
+      ++index;
+      continue;
+    }
+    if (character != '+' && character != '-' && character != '*' &&
+        character != '/') {
+      return false;
+    }
+    while (!operators.empty() && operators.back() != '(' &&
+           operatorPrecedence(operators.back()) >=
+             operatorPrecedence(character)) {
+      if (!applyOperator(operators.back(), values)) {
+        return false;
+      }
+      operators.pop_back();
+    }
+    operators.push_back(character);
+    expectOperand = true;
+    ++index;
+  }
+  if (expectOperand) {
     return false;
   }
-  *value = parsed;
+  while (!operators.empty()) {
+    if (operators.back() == '(' || !applyOperator(operators.back(), values)) {
+      return false;
+    }
+    operators.pop_back();
+  }
+  if (values.size() != 1 || !std::isfinite(values.front())) {
+    return false;
+  }
+  *result = values.front();
   return true;
 }
 
@@ -608,6 +778,7 @@ EditorInspector::refreshFields(const EditorDocument& document,
     return;
   }
   buildFields(document, selection);
+  applyFolding();
   m_fieldsBuilt = true;
   m_fieldsDocument = &document;
   m_fieldsGeneration = document.sceneGeneration();
@@ -659,6 +830,112 @@ readOnly(const std::string& key, const char* label, const std::string& value)
   field.kind = InspectorFieldKind::ReadOnly;
   field.value = value;
   return field;
+}
+
+// A swatch for a color row's channel fields: their color (the primary
+// node's; marked mixed when the selection disagrees), editing the same keys.
+static InspectorField
+makeSwatch(const std::vector<InspectorField>& channels, bool unit)
+{
+  InspectorField swatch;
+  swatch.kind = InspectorFieldKind::Swatch;
+  swatch.key =
+    "swatch:" + (channels.empty() ? std::string() : channels.front().key);
+  swatch.label = "Color";
+  swatch.unitChannels = unit;
+  unsigned char bytes[4] = { 255, 255, 255, 255 };
+  for (size_t index = 0; index < channels.size() && index < 4; ++index) {
+    swatch.channels.push_back(channels[index].key);
+    swatch.mixed = swatch.mixed || channels[index].mixed;
+    const double value = std::strtod(channels[index].value.c_str(), nullptr);
+    bytes[index] = static_cast<unsigned char>(
+      std::lround(std::clamp(unit ? value * 255.0 : value, 0.0, 255.0)));
+  }
+  swatch.swatch = ColorRgba{ bytes[0], bytes[1], bytes[2], bytes[3] };
+  return swatch;
+}
+
+// What a component's section edits, for its menu (see InspectorRow::group);
+// empty for a namespaced component no known behaviour describes.
+static std::string
+componentGroup(const SceneComponent& component,
+               const EditorBehaviours* behaviours)
+{
+  switch (component.type()) {
+    case SceneComponentType::Primitive:
+      return "primitive";
+    case SceneComponentType::Mesh:
+      return "mesh";
+    case SceneComponentType::Sprite:
+      return "sprite";
+    case SceneComponentType::Light:
+      return "light";
+    case SceneComponentType::Camera:
+      return "camera";
+    default:
+      break;
+  }
+  const SceneOpaqueComponent* opaque =
+    std::get_if<SceneOpaqueComponent>(&component.value);
+  if (opaque != nullptr && behaviours != nullptr &&
+      behaviours->schema().find(opaque->type) != nullptr) {
+    return "behaviour:" + opaque->type;
+  }
+  return {};
+}
+
+// A component of the same kind with default values, keeping what it refers
+// to (a mesh's asset, a sprite's texture), a primitive's shape and a
+// camera's primary flag. Behaviours take their described defaults.
+static SceneComponent
+defaultComponentLike(const SceneComponent& current,
+                     const EditorBehaviours* behaviours)
+{
+  SceneComponent result = current;
+  if (const ScenePrimitive* primitive =
+        std::get_if<ScenePrimitive>(&current.value)) {
+    ScenePrimitive reset;
+    reset.shape = primitive->shape;
+    result.value = reset;
+  } else if (const SceneMeshRenderer* mesh =
+               std::get_if<SceneMeshRenderer>(&current.value)) {
+    SceneMeshRenderer reset;
+    reset.asset = mesh->asset;
+    result.value = reset;
+  } else if (const SceneSprite* sprite =
+               std::get_if<SceneSprite>(&current.value)) {
+    SceneSprite reset;
+    reset.texture = sprite->texture;
+    result.value = reset;
+  } else if (std::get_if<SceneLight>(&current.value) != nullptr) {
+    result.value = SceneLight{};
+  } else if (const SceneCamera* camera =
+               std::get_if<SceneCamera>(&current.value)) {
+    SceneCamera reset;
+    reset.primary = camera->primary;
+    result.value = reset;
+  } else if (const SceneOpaqueComponent* opaque =
+               std::get_if<SceneOpaqueComponent>(&current.value)) {
+    const BehaviourType* type =
+      behaviours != nullptr ? behaviours->schema().find(opaque->type) : nullptr;
+    if (type != nullptr) {
+      result.value = BehaviourSchema::defaultComponent(*type);
+    }
+  }
+  return result;
+}
+
+// The node with default transform and component values (see
+// defaultComponentLike), for resetting a row through readNumber.
+static SceneNode
+defaultsOf(const SceneNode& node, const EditorBehaviours* behaviours)
+{
+  SceneNode defaults = node;
+  defaults.transform = Transform3D{};
+  for (SceneComponent& component : defaults.components) {
+    component = defaultComponentLike(component, behaviours);
+  }
+  return defaults;
 }
 
 // A known behaviour component: one typed field per described field, mixed
@@ -728,6 +1005,7 @@ buildBehaviourFields(const BehaviourType& type,
         }
         break;
       case BehaviourFieldKind::Color:
+        fields.push_back(InspectorField{});
         for (const char* channel : { "r", "g", "b", "a" }) {
           InspectorField field = make(channel[0],
                                       channel[0] == 'r'   ? "R"
@@ -739,6 +1017,8 @@ buildBehaviourFields(const BehaviourType& type,
           field.step = 1.0f;
           fields.push_back(field);
         }
+        fields.front() = makeSwatch(
+          std::vector<InspectorField>(fields.begin() + 1, fields.end()), false);
         break;
       case BehaviourFieldKind::Bool: {
         InspectorField field = make('\0', "Value");
@@ -900,22 +1180,34 @@ EditorInspector::buildFields(const EditorDocument& document,
 {
   m_fields.clear();
   m_rows.clear();
+  m_buildGroup.clear();
   const std::function<void(const std::string&)> section =
     [this](const std::string& title) {
       InspectorRow row;
       row.label = title;
       row.section = true;
+      row.group = m_buildGroup;
       m_rows.push_back(row);
     };
   const std::function<void(const std::string&, std::vector<InspectorField>)>
     row = [this](const std::string& label, std::vector<InspectorField> fields) {
       InspectorRow entry;
       entry.label = label;
+      entry.group = m_buildGroup;
       for (InspectorField& value : fields) {
         entry.fields.push_back(m_fields.size());
         m_fields.push_back(std::move(value));
       }
       m_rows.push_back(entry);
+    };
+  // A color row: its channel fields behind a swatch that opens the picker.
+  const std::function<void(
+    const std::string&, bool, std::vector<InspectorField>)>
+    colorRow = [&row](const std::string& label,
+                      bool unit,
+                      std::vector<InspectorField> channels) {
+      channels.insert(channels.begin(), makeSwatch(channels, unit));
+      row(label, std::move(channels));
     };
 
   const SceneNode* primary = document.findNode(selection.primary());
@@ -1089,25 +1381,28 @@ EditorInspector::buildFields(const EditorDocument& document,
           return field;
         };
     if (!environment.skybox.empty()) {
-      row("Sky tint",
-          { environmentNumber("env.tint.r", "R", 0.01f),
-            environmentNumber("env.tint.g", "G", 0.01f),
-            environmentNumber("env.tint.b", "B", 0.01f) });
+      colorRow("Sky tint",
+               true,
+               { environmentNumber("env.tint.r", "R", 0.01f),
+                 environmentNumber("env.tint.g", "G", 0.01f),
+                 environmentNumber("env.tint.b", "B", 0.01f) });
     }
-    row("Ambient",
-        { environmentNumber("env.ambient.r", "R", 0.01f),
-          environmentNumber("env.ambient.g", "G", 0.01f),
-          environmentNumber("env.ambient.b", "B", 0.01f) });
+    colorRow("Ambient",
+             true,
+             { environmentNumber("env.ambient.r", "R", 0.01f),
+               environmentNumber("env.ambient.g", "G", 0.01f),
+               environmentNumber("env.ambient.b", "B", 0.01f) });
     row("Sun", { toggle("env.sun", "Sun", environment.hasSun) });
     if (environment.hasSun) {
       row("Direction",
           { environmentNumber("env.sun.direction.x", "X", 0.01f),
             environmentNumber("env.sun.direction.y", "Y", 0.01f),
             environmentNumber("env.sun.direction.z", "Z", 0.01f) });
-      row("Color",
-          { environmentNumber("env.sun.color.r", "R", 0.01f),
-            environmentNumber("env.sun.color.g", "G", 0.01f),
-            environmentNumber("env.sun.color.b", "B", 0.01f) });
+      colorRow("Color",
+               true,
+               { environmentNumber("env.sun.color.r", "R", 0.01f),
+                 environmentNumber("env.sun.color.g", "G", 0.01f),
+                 environmentNumber("env.sun.color.b", "B", 0.01f) });
       row("Intensity",
           { environmentNumber("env.sun.intensity", "I", 0.01f),
             toggle("env.sun.shadows", "Shadows", environment.sun.shadows) });
@@ -1133,6 +1428,7 @@ EditorInspector::buildFields(const EditorDocument& document,
     tags.mixed = tags.mixed || other->tags != primary->tags;
   }
   row("Tags", { tags });
+  m_buildGroup = "transform";
   section("Transform");
   row("Position",
       { number("position.x", "X", 0.05f),
@@ -1148,6 +1444,7 @@ EditorInspector::buildFields(const EditorDocument& document,
         number("scale.z", "Z", 0.01f) });
 
   for (const SceneComponent& component : primary->components) {
+    m_buildGroup = componentGroup(component, m_behaviours);
     if (const ScenePrimitive* primitive =
           std::get_if<ScenePrimitive>(&component.value)) {
       section("Primitive");
@@ -1170,11 +1467,12 @@ EditorInspector::buildFields(const EditorDocument& document,
           { number("primitive.extent.x", "X", 0.01f),
             number("primitive.extent.y", "Y", 0.01f),
             number("primitive.extent.z", "Z", 0.01f) });
-      row("Color",
-          { number("primitive.color.r", "R", 1.0f),
-            number("primitive.color.g", "G", 1.0f),
-            number("primitive.color.b", "B", 1.0f),
-            number("primitive.color.a", "A", 1.0f) });
+      colorRow("Color",
+               false,
+               { number("primitive.color.r", "R", 1.0f),
+                 number("primitive.color.g", "G", 1.0f),
+                 number("primitive.color.b", "B", 1.0f),
+                 number("primitive.color.a", "A", 1.0f) });
       row("", { button("component.remove.primitive", "Remove") });
     } else if (const SceneMeshRenderer* mesh =
                  std::get_if<SceneMeshRenderer>(&component.value)) {
@@ -1185,11 +1483,12 @@ EditorInspector::buildFields(const EditorDocument& document,
                         mesh->asset,
                         { SceneAssetType::Mesh },
                         false) });
-      row("Tint",
-          { number("mesh.tint.r", "R", 1.0f),
-            number("mesh.tint.g", "G", 1.0f),
-            number("mesh.tint.b", "B", 1.0f),
-            number("mesh.tint.a", "A", 1.0f) });
+      colorRow("Tint",
+               false,
+               { number("mesh.tint.r", "R", 1.0f),
+                 number("mesh.tint.g", "G", 1.0f),
+                 number("mesh.tint.b", "B", 1.0f),
+                 number("mesh.tint.a", "A", 1.0f) });
       row("Shadows",
           { toggle("mesh.cast_shadows", "Cast", mesh->castShadows),
             button("component.remove.mesh", "Remove") });
@@ -1229,11 +1528,12 @@ EditorInspector::buildFields(const EditorDocument& document,
                    "Facing",
                    { "world", "billboard" },
                    sprite->facing == SceneSpriteFacing::Billboard ? 1 : 0) });
-      row("Tint",
-          { number("sprite.tint.r", "R", 1.0f),
-            number("sprite.tint.g", "G", 1.0f),
-            number("sprite.tint.b", "B", 1.0f),
-            number("sprite.tint.a", "A", 1.0f) });
+      colorRow("Tint",
+               false,
+               { number("sprite.tint.r", "R", 1.0f),
+                 number("sprite.tint.g", "G", 1.0f),
+                 number("sprite.tint.b", "B", 1.0f),
+                 number("sprite.tint.a", "A", 1.0f) });
       row("Flip",
           { toggle("sprite.flip.x", "X", sprite->flipX),
             toggle("sprite.flip.y", "Y", sprite->flipY),
@@ -1241,10 +1541,11 @@ EditorInspector::buildFields(const EditorDocument& document,
     } else if (const SceneLight* light =
                  std::get_if<SceneLight>(&component.value)) {
       section("Light");
-      row("Color",
-          { number("light.color.r", "R", 0.01f),
-            number("light.color.g", "G", 0.01f),
-            number("light.color.b", "B", 0.01f) });
+      colorRow("Color",
+               true,
+               { number("light.color.r", "R", 0.01f),
+                 number("light.color.g", "G", 0.01f),
+                 number("light.color.b", "B", 0.01f) });
       row("Intensity",
           { number("light.intensity", "I", 0.01f),
             toggle("light.shadows", "Shadows", light->shadows) });
@@ -1284,6 +1585,7 @@ EditorInspector::buildFields(const EditorDocument& document,
       buildBehaviourFields(*type, *opaque, nodes, scene, section, row);
     }
   }
+  m_buildGroup.clear();
   section("Add component");
   std::vector<InspectorField> adds;
   if (primary->find(SceneComponentType::Primitive) == nullptr) {
@@ -1400,15 +1702,32 @@ EditorInspector::applyNumber(const std::string& key,
                              EditorDocument& document,
                              const EditorSelection& selection)
 {
+  return applyNumberWith(
+    key,
+    [value, relative](double current) {
+      return relative ? current + value : value;
+    },
+    mergeKey,
+    document,
+    selection);
+}
+
+bool
+EditorInspector::applyNumberWith(
+  const std::string& key,
+  const std::function<double(double current)>& change,
+  const std::string& mergeKey,
+  EditorDocument& document,
+  const EditorSelection& selection)
+{
   if (key.starts_with("behaviour:")) {
     return applyBehaviour(
       key,
-      [value, relative](
+      [&change](
         BehaviourValue& target, const BehaviourField& field, char axis) {
         double current = 0.0;
         return behaviourNumber(target, axis, &current) &&
-               setBehaviourNumber(
-                 target, field, axis, relative ? current + value : value);
+               setBehaviourNumber(target, field, axis, change(current));
       },
       mergeKey,
       document,
@@ -1420,7 +1739,7 @@ EditorInspector::applyNumber(const std::string& key,
     if (slot == nullptr) {
       return false;
     }
-    *slot = static_cast<float>(relative ? *slot + value : value);
+    *slot = static_cast<float>(change(*slot));
     return document.setEnvironment(environment, mergeKey);
   }
   std::string property;
@@ -1430,33 +1749,61 @@ EditorInspector::applyNumber(const std::string& key,
                      assetId,
                      "Edit asset " + assetId,
                      mergeKey,
-                     [&property, value, relative](SceneAsset& asset) {
+                     [&property, &change](SceneAsset& asset) {
                        const NumberSlot slot = resolveAsset(asset, property);
                        double current = 0.0;
                        if (!readSlot(slot, &current)) {
                          return false;
                        }
-                       return writeSlot(slot,
-                                        relative ? current + value : value);
+                       return writeSlot(slot, change(current));
                      });
   }
   const std::string label = "Set " + key;
   return document.editNodes(
-    selection.ids(), label, mergeKey, [&key, value, relative](SceneNode& node) {
+    selection.ids(), label, mergeKey, [&key, &change](SceneNode& node) {
       double current = 0.0;
       if (!readNumber(node, key, &current)) {
         return false;
       }
-      return writeNumber(node, key, relative ? current + value : value);
+      return writeNumber(node, key, change(current));
     });
 }
-
 bool
 EditorInspector::applyText(const std::string& key,
                            const std::string& text,
                            EditorDocument& document,
                            const EditorSelection& selection)
 {
+  if (key == "picker.hex") {
+    // "#RRGGBB" or "#RRGGBBAA", the '#' optional.
+    std::string digits = text;
+    digits.erase(std::remove(digits.begin(), digits.end(), ' '), digits.end());
+    if (!digits.empty() && digits.front() == '#') {
+      digits.erase(digits.begin());
+    }
+    if ((digits.size() != 6 && digits.size() != 8) ||
+        digits.find_first_not_of("0123456789abcdefABCDEF") !=
+          std::string::npos) {
+      return false;
+    }
+    float channels[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    for (size_t index = 0; index * 2 < digits.size(); ++index) {
+      channels[index] = static_cast<float>(std::strtol(
+                          digits.substr(index * 2, 2).c_str(), nullptr, 16)) /
+                        255.0f;
+    }
+    rgbToHsv(channels[0],
+             channels[1],
+             channels[2],
+             &m_pickerHue,
+             &m_pickerSaturation,
+             &m_pickerValue);
+    if (digits.size() == 8) {
+      m_pickerAlpha = channels[3];
+    }
+    applyPicker(document, selection);
+    return true;
+  }
   if (key == "name") {
     return document.setName(selection.primary(), text);
   }
@@ -1505,11 +1852,40 @@ EditorInspector::applyText(const std::string& key,
       document,
       selection);
   }
+  // Arithmetic ("2*3"), or a relative edit of each target ("+=1", "*=2").
+  std::string expression = text;
+  char relative = '\0';
+  const size_t first = expression.find_first_not_of(' ');
+  if (first != std::string::npos && first + 1 < expression.size() &&
+      expression[first + 1] == '=' &&
+      std::string("+-*/").find(expression[first]) != std::string::npos) {
+    relative = expression[first];
+    expression = expression.substr(first + 2);
+  }
   double value = 0.0;
-  if (!parseNumber(text, &value)) {
+  if (!evaluateExpression(expression, &value) ||
+      (relative == '/' && value == 0.0)) {
     return false;
   }
-  return applyNumber(key, value, false, {}, document, selection);
+  return applyNumberWith(
+    key,
+    [relative, value](double current) {
+      switch (relative) {
+        case '+':
+          return current + value;
+        case '-':
+          return current - value;
+        case '*':
+          return current * value;
+        case '/':
+          return current / value;
+        default:
+          return value;
+      }
+    },
+    {},
+    document,
+    selection);
 }
 
 static bool
@@ -1532,6 +1908,14 @@ EditorInspector::activate(const InspectorField& target,
                           const EditorSelection& selection)
 {
   const std::string& key = target.key;
+  if (target.kind == InspectorFieldKind::Swatch) {
+    if (m_pickerOpen && m_pickerSwatch == key) {
+      m_pickerOpen = false;
+    } else {
+      openPicker(target);
+    }
+    return false;
+  }
   std::string property;
   std::string assetId;
   const bool assetField = splitAssetKey(key, &property, &assetId);
@@ -1953,13 +2337,28 @@ EditorInspector::layout()
   for (InspectorRow& row : m_rows) {
     row.y = y;
     if (!row.fields.empty()) {
+      // A swatch sits at the right end of the label column; the other
+      // fields share the rest of the row.
+      std::vector<size_t> flowing;
+      for (size_t index : row.fields) {
+        InspectorField& target = m_fields[index];
+        if (target.kind == InspectorFieldKind::Swatch) {
+          const float size = rowHeight - 3.0f;
+          target.x = m_x + labelWidth - size - 6.0f * fontScale;
+          target.y = y;
+          target.width = size;
+        } else {
+          flowing.push_back(index);
+        }
+      }
       const float startX =
         row.label.empty() ? m_x + 8.0f * fontScale : m_x + labelWidth;
       const float available = m_x + m_width - 8.0f * fontScale - startX;
-      const float count = static_cast<float>(row.fields.size());
+      const float count =
+        static_cast<float>(std::max<size_t>(1, flowing.size()));
       const float fieldWidth = (available - gap * (count - 1.0f)) / count;
-      for (size_t index = 0; index < row.fields.size(); ++index) {
-        InspectorField& target = m_fields[row.fields[index]];
+      for (size_t index = 0; index < flowing.size(); ++index) {
+        InspectorField& target = m_fields[flowing[index]];
         target.x = startX + static_cast<float>(index) * (fieldWidth + gap);
         target.y = y;
         target.width = fieldWidth;
@@ -1980,6 +2379,9 @@ EditorInspector::hitTest(float x, float y) const
   const float rowHeight = std::max(20.0f, std::round(22.0f * fontScale));
   for (size_t index = 0; index < m_fields.size(); ++index) {
     const InspectorField& target = m_fields[index];
+    if (target.hidden) {
+      continue;
+    }
     if (x >= target.x && x <= target.x + target.width && y >= target.y &&
         y < target.y + rowHeight - 2.0f) {
       return static_cast<int>(index);
@@ -2002,7 +2404,9 @@ EditorInspector::update(InputManager* input,
   bool changed = false;
   // The field being edited may vanish (its node was deleted, undo ran).
   refreshFields(*document, *selection);
-  if (m_edit.active() && field(m_editKey) == nullptr) {
+  // The picker's hex box edits no field of its own.
+  if (m_edit.active() && field(m_editKey) == nullptr &&
+      !(m_pickerOpen && m_editKey == "picker.hex")) {
     m_edit.end();
     m_editKey.clear();
   }
@@ -2037,16 +2441,77 @@ EditorInspector::update(InputManager* input,
   m_hoverField = hitTest(mouseX, mouseY);
   if (input != nullptr && containsScreenPoint(mouseX, mouseY)) {
     const float wheel = m_pointer.takeWheel();
-    if (wheel != 0.0f) {
+    const InspectorField* wheeled =
+      m_hoverField >= 0 ? &m_fields[static_cast<size_t>(m_hoverField)]
+                        : nullptr;
+    if (wheel != 0.0f && input->isControlPressed() && wheeled != nullptr &&
+        wheeled->kind == InspectorFieldKind::Number && !m_edit.active()) {
+      // Ctrl+wheel steps the number under the pointer (Shift finer); one
+      // command per field however many notches.
+      const InspectorField target = *wheeled;
+      const double unit = target.integer
+                            ? 1.0
+                            : static_cast<double>(target.step) * 10.0 *
+                                (input->isShiftPressed() ? 0.1 : 1.0);
+      changed = applyNumber(target.key,
+                            static_cast<double>(wheel) * unit,
+                            true,
+                            "wheel:" + target.key,
+                            *document,
+                            *selection) ||
+                changed;
+    } else if (wheel != 0.0f) {
       const float maximum = std::max(0.0f, m_contentHeight - m_height + 8.0f);
       m_scroll = std::clamp(m_scroll - wheel * 40.0f, 0.0f, maximum);
       layout();
     }
   }
 
-  if (m_pointer.clicked() && containsScreenPoint(mouseX, mouseY)) {
+  // The open menu takes the next press: an item runs, anything else closes.
+  if (m_menuOpen) {
+    m_menuHover = menuItemAt(mouseX, mouseY);
+    if (m_pointer.clicked() || m_pointer.rightClicked()) {
+      const int item = m_pointer.clicked() ? m_menuHover : -1;
+      m_menuOpen = false;
+      m_consumedPress = true;
+      if (item >= 0 && m_menu[static_cast<size_t>(item)].enabled) {
+        changed = runMenu(m_menu[static_cast<size_t>(item)].action,
+                          *document,
+                          *selection) ||
+                  changed;
+      }
+      if (changed) {
+        refreshFields(*document, *selection);
+        layout();
+      }
+      rebuildVisual();
+      return changed;
+    }
+  } else if (m_pointer.rightClicked() && containsScreenPoint(mouseX, mouseY)) {
+    m_consumedPress = true;
+    const int row = rowAt(mouseY);
+    if (row >= 0) {
+      openMenu(row, mouseX, mouseY, *document, *selection);
+    }
+  }
+  const bool pickerTook =
+    updatePicker(mouseX, mouseY, &changed, *document, *selection);
+  if (pickerTook) {
+    m_consumedPress = true;
+  } else if (m_pointer.clicked() && containsScreenPoint(mouseX, mouseY)) {
     m_consumedPress = true;
     const int hit = hitTest(mouseX, mouseY);
+    const int headerRow = hit < 0 ? rowAt(mouseY) : -1;
+    if (headerRow >= 0 && m_rows[static_cast<size_t>(headerRow)].section) {
+      // A section header folds or unfolds its section.
+      const std::string& title = m_rows[static_cast<size_t>(headerRow)].label;
+      if (!m_folded.erase(title)) {
+        m_folded.insert(title);
+      }
+      m_fieldsBuilt = false;
+      refreshFields(*document, *selection);
+      layout();
+    }
     if (m_edit.active() &&
         (hit < 0 || m_fields[static_cast<size_t>(hit)].key != m_editKey)) {
       changed = commitEdit(*document, *selection) || changed;
@@ -2076,9 +2541,14 @@ EditorInspector::update(InputManager* input,
       m_scrubAccumulated += std::fabs(delta);
       m_scrubLastX = mouseX;
       if (m_scrubAccumulated > 3.0f && delta != 0.0f && !target->mixed) {
+        // Shift scrubs ten times finer, Ctrl ten times coarser.
+        const float factor = input == nullptr            ? 1.0f
+                             : input->isShiftPressed()   ? 0.1f
+                             : input->isControlPressed() ? 10.0f
+                                                         : 1.0f;
         const InspectorField copy = *target;
         changed = scrubBy(copy,
-                          static_cast<double>(delta * copy.step),
+                          static_cast<double>(delta * copy.step * factor),
                           *document,
                           *selection) ||
                   changed;
@@ -2115,9 +2585,40 @@ EditorInspector::rebuildVisual()
       continue;
     }
     if (row.section) {
+      // A fold arrow: right when folded, down when open.
+      const float arrowX = m_x + GuiToolStyle::kPad;
+      const float arrowY = row.y + rowHeight * 0.5f;
+      const float size = std::max(6.0f, std::round(7.0f * fontScale));
+      if (row.folded) {
+        m_visual.addLine(arrowX,
+                         arrowY - size * 0.5f,
+                         arrowX + size * 0.6f,
+                         arrowY,
+                         GuiToolPalette::dim,
+                         1.0f);
+        m_visual.addLine(arrowX + size * 0.6f,
+                         arrowY,
+                         arrowX,
+                         arrowY + size * 0.5f,
+                         GuiToolPalette::dim,
+                         1.0f);
+      } else {
+        m_visual.addLine(arrowX,
+                         arrowY - size * 0.3f,
+                         arrowX + size * 0.5f,
+                         arrowY + size * 0.3f,
+                         GuiToolPalette::dim,
+                         1.0f);
+        m_visual.addLine(arrowX + size * 0.5f,
+                         arrowY + size * 0.3f,
+                         arrowX + size,
+                         arrowY - size * 0.3f,
+                         GuiToolPalette::dim,
+                         1.0f);
+      }
       GuiToolStyle::text(m_visual,
                          row.label,
-                         m_x + GuiToolStyle::kPad,
+                         arrowX + size + 6.0f * fontScale,
                          row.y + 5.0f * fontScale,
                          fontSize,
                          GuiToolPalette::faint);
@@ -2130,19 +2631,24 @@ EditorInspector::rebuildVisual()
       continue;
     }
     if (!row.label.empty()) {
+      const bool swatch =
+        !row.fields.empty() &&
+        m_fields[row.fields.front()].kind == InspectorFieldKind::Swatch;
       GuiToolStyle::fittedText(
         m_visual,
         row.label,
         m_x + GuiToolStyle::kPad,
         row.y + std::round((rowHeight - fontSize) * 0.5f) - 1.0f,
-        std::round(m_width * 0.34f) - GuiToolStyle::kPad - 4.0f,
+        std::round(m_width * 0.34f) - GuiToolStyle::kPad - 4.0f -
+          (swatch ? rowHeight + 4.0f : 0.0f),
         fontSize,
         GuiToolPalette::dim);
     }
   }
   for (size_t index = 0; index < m_fields.size(); ++index) {
     const InspectorField& target = m_fields[index];
-    if (target.y + rowHeight < m_y || target.y > m_y + m_height) {
+    if (target.hidden || target.y + rowHeight < m_y ||
+        target.y > m_y + m_height) {
       continue;
     }
     const float h = rowHeight - 3.0f;
@@ -2162,6 +2668,39 @@ EditorInspector::rebuildVisual()
           target.kind == InspectorFieldKind::ReadOnly,
           fontSize);
         break;
+      case InspectorFieldKind::Swatch: {
+        // Checks show through a translucent color; a mixed selection reads
+        // as a dash.
+        const float half = h * 0.5f;
+        m_visual.addFilledRect(
+          target.x, target.y, target.width, h, GuiToolPalette::text);
+        m_visual.addFilledRect(
+          target.x, target.y, half, half, GuiToolPalette::faint);
+        m_visual.addFilledRect(
+          target.x + half, target.y + half, half, half, GuiToolPalette::faint);
+        if (!target.mixed) {
+          m_visual.addFilledRect(
+            target.x, target.y, target.width, h, target.swatch);
+        } else {
+          m_visual.addFilledRect(
+            target.x, target.y, target.width, h, GuiToolPalette::field);
+          GuiKit::drawTextCentered(m_visual,
+                                   "-",
+                                   target.x + target.width * 0.5f,
+                                   target.y + h * 0.5f,
+                                   fontSize,
+                                   GuiToolPalette::text);
+        }
+        const bool open = m_pickerOpen && m_pickerSwatch == target.key;
+        m_visual.addOutlineRect(target.x,
+                                target.y,
+                                target.width,
+                                h,
+                                open || hovered ? GuiToolPalette::accent
+                                                : GuiToolPalette::border,
+                                1.0f);
+        break;
+      }
       case InspectorFieldKind::Toggle: {
         m_visual.addFilledRect(target.x,
                                target.y,
@@ -2214,7 +2753,633 @@ EditorInspector::rebuildVisual()
       }
     }
   }
+  drawPicker();
+  if (m_menuOpen) {
+    GuiToolStyle::dropdown(
+      m_visual, m_menuX, m_menuY, menuItems(), m_menuHover);
+  }
 }
+void
+EditorInspector::applyFolding()
+{
+  std::vector<InspectorRow> kept;
+  kept.reserve(m_rows.size());
+  bool folding = false;
+  for (InspectorRow& row : m_rows) {
+    if (row.section) {
+      row.folded = m_folded.contains(row.label);
+      folding = row.folded;
+      kept.push_back(row);
+      continue;
+    }
+    if (folding) {
+      for (size_t index : row.fields) {
+        m_fields[index].hidden = true;
+      }
+      continue;
+    }
+    kept.push_back(row);
+  }
+  m_rows.swap(kept);
+}
+
+float
+EditorInspector::rowHeight() const
+{
+  const float fontScale = m_fontSize / EditorToolbar::kDefaultFontSize;
+  return std::max(20.0f, std::round(22.0f * fontScale));
+}
+
+int
+EditorInspector::rowAt(float y) const
+{
+  for (size_t index = 0; index < m_rows.size(); ++index) {
+    const InspectorRow& row = m_rows[index];
+    const float height =
+      row.section ? std::round(rowHeight() * 1.1f) : rowHeight();
+    if (y >= row.y && y < row.y + height) {
+      return static_cast<int>(index);
+    }
+  }
+  return -1;
+}
+
+void
+EditorInspector::openMenu(int rowIndex,
+                          float x,
+                          float y,
+                          const EditorDocument& document,
+                          const EditorSelection& selection)
+{
+  (void)document;
+  (void)selection;
+  const InspectorRow& target = m_rows[static_cast<size_t>(rowIndex)];
+  std::string title;
+  for (int index = rowIndex; index >= 0; --index) {
+    if (m_rows[static_cast<size_t>(index)].section) {
+      title = m_rows[static_cast<size_t>(index)].label;
+      break;
+    }
+  }
+  m_menu.clear();
+  m_menuKeys.clear();
+  m_menuGroup = target.group;
+  if (!target.section) {
+    bool resettable = false;
+    for (size_t index : target.fields) {
+      const InspectorField& field = m_fields[index];
+      resettable = resettable || field.kind == InspectorFieldKind::Number ||
+                   field.key.starts_with("behaviour:");
+      m_menuKeys.push_back(field.key);
+    }
+    if (resettable) {
+      m_menu.push_back({ "Reset " + (target.label.empty() ? std::string("value")
+                                                          : target.label),
+                         MenuAction::ResetRow,
+                         true });
+    }
+  }
+  if (!m_menuGroup.empty()) {
+    m_menu.push_back({ "Reset " + title, MenuAction::ResetGroup, true });
+    m_menu.push_back({ "Copy " + title, MenuAction::CopyGroup, true });
+    m_menu.push_back({ "Paste " + title + " Values",
+                       MenuAction::PasteGroup,
+                       m_clipboardGroup == m_menuGroup });
+    if (m_menuGroup != "transform") {
+      m_menu.push_back({ "Remove " + title, MenuAction::RemoveGroup, true });
+    }
+  }
+  if (m_menu.empty()) {
+    return;
+  }
+  m_menuOpen = true;
+  m_menuHover = -1;
+  const float width = GuiToolStyle::dropdownWidth(menuItems());
+  const float height =
+    6.0f + static_cast<float>(m_menu.size()) * GuiToolStyle::kRowHeight;
+  m_menuX = std::clamp(
+    x, m_x + 2.0f, std::max(m_x + 2.0f, m_x + m_width - width - 2.0f));
+  m_menuY = std::clamp(y, m_y, std::max(m_y, m_y + m_height - height));
+}
+
+std::vector<GuiToolStyle::MenuItem>
+EditorInspector::menuItems() const
+{
+  std::vector<GuiToolStyle::MenuItem> items;
+  for (const MenuEntry& entry : m_menu) {
+    GuiToolStyle::MenuItem item;
+    item.label = entry.label;
+    item.enabled = entry.enabled;
+    items.push_back(item);
+  }
+  return items;
+}
+
+int
+EditorInspector::menuItemAt(float x, float y) const
+{
+  return m_menuOpen
+           ? GuiToolStyle::dropdownItemAt(m_menuX, m_menuY, menuItems(), x, y)
+           : -1;
+}
+
+bool
+EditorInspector::runMenu(MenuAction action,
+                         EditorDocument& document,
+                         const EditorSelection& selection)
+{
+  const std::string group = m_menuGroup;
+  const EditorBehaviours* behaviours = m_behaviours;
+  switch (action) {
+    case MenuAction::ResetRow: {
+      if (m_menuKeys.empty()) {
+        return false;
+      }
+      const std::string& first = m_menuKeys.front();
+      if (first.starts_with("behaviour:")) {
+        return applyBehaviour(
+          first,
+          [](BehaviourValue& value, const BehaviourField& field, char) {
+            value = field.defaultValue;
+            return true;
+          },
+          {},
+          document,
+          selection);
+      }
+      if (first.starts_with("env.")) {
+        SceneEnvironment environment = document.scene().document().environment;
+        SceneEnvironment defaults;
+        bool any = false;
+        for (const std::string& key : m_menuKeys) {
+          float* slot = resolveEnvironment(environment, key);
+          const float* reset = resolveEnvironment(defaults, key);
+          if (slot != nullptr && reset != nullptr) {
+            *slot = *reset;
+            any = true;
+          }
+        }
+        return any && document.setEnvironment(environment, {});
+      }
+      const std::vector<std::string> keys = m_menuKeys;
+      return document.editNodes(selection.ids(),
+                                "Reset values",
+                                {},
+                                [&keys, behaviours](SceneNode& node) {
+                                  const SceneNode defaults =
+                                    defaultsOf(node, behaviours);
+                                  bool any = false;
+                                  for (const std::string& key : keys) {
+                                    double value = 0.0;
+                                    if (readNumber(defaults, key, &value)) {
+                                      any =
+                                        writeNumber(node, key, value) || any;
+                                    }
+                                  }
+                                  return any;
+                                });
+    }
+    case MenuAction::ResetGroup:
+      return document.editNodes(
+        selection.ids(),
+        "Reset values",
+        {},
+        [&group, behaviours](SceneNode& node) {
+          if (group == "transform") {
+            node.transform = Transform3D{};
+            return true;
+          }
+          for (SceneComponent& component : node.components) {
+            if (componentGroup(component, behaviours) == group) {
+              component = defaultComponentLike(component, behaviours);
+              return true;
+            }
+          }
+          return false;
+        });
+    case MenuAction::CopyGroup: {
+      const SceneNode* node = document.findNode(selection.primary());
+      if (node == nullptr) {
+        return false;
+      }
+      if (group == "transform") {
+        m_clipboardTransform = node->transform;
+        m_clipboardGroup = group;
+        return false;
+      }
+      for (const SceneComponent& component : node->components) {
+        if (componentGroup(component, behaviours) == group) {
+          m_clipboardComponent = component;
+          m_clipboardGroup = group;
+        }
+      }
+      return false;
+    }
+    case MenuAction::PasteGroup: {
+      if (m_clipboardGroup != group) {
+        return false;
+      }
+      const SceneComponent copied = m_clipboardComponent;
+      const Transform3D transform = m_clipboardTransform;
+      return document.editNodes(
+        selection.ids(),
+        "Paste values",
+        {},
+        [&group, &copied, &transform, behaviours](SceneNode& node) {
+          if (group == "transform") {
+            node.transform = transform;
+            return true;
+          }
+          for (SceneComponent& component : node.components) {
+            if (componentGroup(component, behaviours) == group) {
+              component = copied;
+              return true;
+            }
+          }
+          return false;
+        });
+    }
+    case MenuAction::RemoveGroup: {
+      InspectorField remove;
+      remove.kind = InspectorFieldKind::Button;
+      remove.key = group.starts_with("behaviour:")
+                     ? "behaviour.remove:" + group.substr(10)
+                     : "component.remove." + group;
+      return activate(remove, false, document, selection);
+    }
+  }
+  return false;
+}
+
+void
+EditorInspector::toggleSectionForTesting(const std::string& title)
+{
+  if (!m_folded.erase(title)) {
+    m_folded.insert(title);
+  }
+  m_fieldsBuilt = false;
+}
+
+bool
+EditorInspector::openMenuForTesting(const std::string& key,
+                                    const std::string& sectionTitle,
+                                    EditorDocument* document,
+                                    const EditorSelection* selection)
+{
+  if (document == nullptr || selection == nullptr) {
+    return false;
+  }
+  refreshFields(*document, *selection);
+  layout();
+  for (size_t index = 0; index < m_rows.size(); ++index) {
+    const InspectorRow& row = m_rows[index];
+    bool match = key.empty() && row.section && row.label == sectionTitle;
+    for (size_t field : row.fields) {
+      match = match || (!key.empty() && m_fields[field].key == key);
+    }
+    if (match) {
+      openMenu(
+        static_cast<int>(index), m_x + 10.0f, row.y, *document, *selection);
+      return m_menuOpen;
+    }
+  }
+  return false;
+}
+
+std::vector<std::string>
+EditorInspector::menuLabelsForTesting() const
+{
+  std::vector<std::string> labels;
+  for (const MenuEntry& entry : m_menu) {
+    labels.push_back(entry.label);
+  }
+  return labels;
+}
+
+bool
+EditorInspector::chooseMenuForTesting(const std::string& label,
+                                      EditorDocument* document,
+                                      const EditorSelection* selection)
+{
+  if (!m_menuOpen || document == nullptr || selection == nullptr) {
+    return false;
+  }
+  for (const MenuEntry& entry : m_menu) {
+    if (entry.label == label && entry.enabled) {
+      m_menuOpen = false;
+      runMenu(entry.action, *document, *selection);
+      return true;
+    }
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// The color picker.
+
+void
+EditorInspector::openPicker(const InspectorField& swatch)
+{
+  m_pickerOpen = true;
+  m_pickerSwatch = swatch.key;
+  m_pickerChannels = swatch.channels;
+  m_pickerUnit = swatch.unitChannels;
+  rgbToHsv(static_cast<float>(swatch.swatch.r) / 255.0f,
+           static_cast<float>(swatch.swatch.g) / 255.0f,
+           static_cast<float>(swatch.swatch.b) / 255.0f,
+           &m_pickerHue,
+           &m_pickerSaturation,
+           &m_pickerValue);
+  m_pickerAlpha = m_pickerChannels.size() == 4
+                    ? static_cast<float>(swatch.swatch.a) / 255.0f
+                    : 1.0f;
+  m_pickerDrag = 0;
+  ++m_pickerSerial;
+}
+
+GuiToolRect
+EditorInspector::pickerRect() const
+{
+  const InspectorField* swatch = field(m_pickerSwatch);
+  if (!m_pickerOpen || swatch == nullptr) {
+    return {};
+  }
+  const float strips = m_pickerChannels.size() == 4 ? 2.0f : 1.0f;
+  const float height = 6.0f + 110.0f + strips * 18.0f + 6.0f + 20.0f + 6.0f;
+  // Below the swatch's row, or above it when the panel runs out.
+  float y = swatch->y + rowHeight();
+  if (y + height > m_y + m_height) {
+    y = std::max(m_y, swatch->y - height);
+  }
+  return { m_x + 8.0f, y, std::max(60.0f, m_width - 16.0f), height };
+}
+
+GuiToolRect
+EditorInspector::pickerSquare() const
+{
+  const GuiToolRect rect = pickerRect();
+  return { rect.x + 6.0f, rect.y + 6.0f, rect.w - 12.0f, 110.0f };
+}
+
+GuiToolRect
+EditorInspector::pickerHueStrip() const
+{
+  const GuiToolRect square = pickerSquare();
+  return { square.x, square.y + square.h + 6.0f, square.w, 12.0f };
+}
+
+GuiToolRect
+EditorInspector::pickerAlphaStrip() const
+{
+  const GuiToolRect hue = pickerHueStrip();
+  if (m_pickerChannels.size() != 4) {
+    return { hue.x, hue.y, hue.w, 0.0f };
+  }
+  return { hue.x, hue.y + hue.h + 6.0f, hue.w, 12.0f };
+}
+
+GuiToolRect
+EditorInspector::pickerHexBox() const
+{
+  const GuiToolRect last =
+    m_pickerChannels.size() == 4 ? pickerAlphaStrip() : pickerHueStrip();
+  return { last.x, last.y + last.h + 6.0f, last.w, 20.0f };
+}
+
+bool
+EditorInspector::applyPicker(EditorDocument& document,
+                             const EditorSelection& selection)
+{
+  float rgba[4] = { 0.0f, 0.0f, 0.0f, m_pickerAlpha };
+  hsvToRgb(m_pickerHue,
+           m_pickerSaturation,
+           m_pickerValue,
+           &rgba[0],
+           &rgba[1],
+           &rgba[2]);
+  bool changed = false;
+  const std::string mergeKey = "picker:" + std::to_string(m_pickerSerial);
+  for (size_t index = 0; index < m_pickerChannels.size() && index < 4;
+       ++index) {
+    const double value =
+      m_pickerUnit ? static_cast<double>(rgba[index])
+                   : static_cast<double>(std::lround(rgba[index] * 255.0f));
+    changed =
+      applyNumber(
+        m_pickerChannels[index], value, false, mergeKey, document, selection) ||
+      changed;
+  }
+  return changed;
+}
+
+bool
+EditorInspector::updatePicker(float x,
+                              float y,
+                              bool* changed,
+                              EditorDocument& document,
+                              const EditorSelection& selection)
+{
+  if (!m_pickerOpen) {
+    return false;
+  }
+  const InspectorField* swatch = field(m_pickerSwatch);
+  if (swatch == nullptr || swatch->hidden) {
+    // The selection or the document moved on.
+    m_pickerOpen = false;
+    return false;
+  }
+  bool took = false;
+  if (m_pointer.clicked()) {
+    const GuiToolRect rect = pickerRect();
+    if (!rect.contains(x, y)) {
+      // A press elsewhere closes it; on the swatch, the swatch closes it.
+      const bool onSwatch = x >= swatch->x && x <= swatch->x + swatch->width &&
+                            y >= swatch->y && y < swatch->y + rowHeight();
+      if (!onSwatch) {
+        m_pickerOpen = false;
+      }
+      return false;
+    }
+    took = true;
+    if (pickerSquare().contains(x, y)) {
+      m_pickerDrag = 1;
+    } else if (pickerHueStrip().contains(x, y)) {
+      m_pickerDrag = 2;
+    } else if (pickerAlphaStrip().h > 0.0f &&
+               pickerAlphaStrip().contains(x, y)) {
+      m_pickerDrag = 3;
+    } else if (pickerHexBox().contains(x, y)) {
+      float r = 0.0f;
+      float g = 0.0f;
+      float b = 0.0f;
+      hsvToRgb(m_pickerHue, m_pickerSaturation, m_pickerValue, &r, &g, &b);
+      const ColorRgba color = toBytes(r, g, b, m_pickerAlpha);
+      char hex[16];
+      std::snprintf(
+        hex, sizeof(hex), "#%02X%02X%02X", color.r, color.g, color.b);
+      std::string text(hex);
+      if (m_pickerChannels.size() == 4) {
+        std::snprintf(hex, sizeof(hex), "%02X", color.a);
+        text += hex;
+      }
+      m_edit.begin(text, 9);
+      m_editKey = "picker.hex";
+      m_invalid = false;
+    }
+  }
+  if (m_pickerDrag != 0) {
+    took = true;
+    if (!m_pointer.pressed()) {
+      m_pickerDrag = 0;
+      return took;
+    }
+    if (m_pickerDrag == 1) {
+      const GuiToolRect square = pickerSquare();
+      m_pickerSaturation = std::clamp((x - square.x) / square.w, 0.0f, 1.0f);
+      m_pickerValue = 1.0f - std::clamp((y - square.y) / square.h, 0.0f, 1.0f);
+    } else {
+      const GuiToolRect strip =
+        m_pickerDrag == 2 ? pickerHueStrip() : pickerAlphaStrip();
+      const float along = std::clamp((x - strip.x) / strip.w, 0.0f, 1.0f);
+      if (m_pickerDrag == 2) {
+        m_pickerHue = std::min(along, 0.9999f);
+      } else {
+        m_pickerAlpha = along;
+      }
+    }
+    *changed = applyPicker(document, selection) || *changed;
+  }
+  return took;
+}
+
+void
+EditorInspector::drawPicker()
+{
+  if (!m_pickerOpen || field(m_pickerSwatch) == nullptr) {
+    return;
+  }
+  const GuiToolRect rect = pickerRect();
+  m_visual.addFilledRect(rect.x, rect.y, rect.w, rect.h, GuiToolPalette::bar);
+  m_visual.addOutlineRect(
+    rect.x, rect.y, rect.w, rect.h, GuiToolPalette::border, 1.0f);
+  const ColorRgba white{ 255, 255, 255, 255 };
+  const ColorRgba black{ 0, 0, 0, 255 };
+  const ColorRgba clear{ 0, 0, 0, 0 };
+  float r = 0.0f;
+  float g = 0.0f;
+  float b = 0.0f;
+  hsvToRgb(m_pickerHue, 1.0f, 1.0f, &r, &g, &b);
+  const ColorRgba pure = toBytes(r, g, b, 1.0f);
+  // Saturation across, value down: white to the pure hue, then darkened.
+  const GuiToolRect square = pickerSquare();
+  m_visual.addGradientRect(
+    square.x, square.y, square.w, square.h, white, pure, pure, white);
+  m_visual.addGradientRect(
+    square.x, square.y, square.w, square.h, clear, clear, black, black);
+  const float markX = square.x + m_pickerSaturation * square.w;
+  const float markY = square.y + (1.0f - m_pickerValue) * square.h;
+  m_visual.addOutlineRect(markX - 4.0f, markY - 4.0f, 8.0f, 8.0f, black, 1.0f);
+  m_visual.addOutlineRect(markX - 3.0f, markY - 3.0f, 6.0f, 6.0f, white, 1.0f);
+  // The hue strip in six spans.
+  const GuiToolRect hue = pickerHueStrip();
+  for (int span = 0; span < 6; ++span) {
+    float r0 = 0.0f;
+    float g0 = 0.0f;
+    float b0 = 0.0f;
+    float r1 = 0.0f;
+    float g1 = 0.0f;
+    float b1 = 0.0f;
+    hsvToRgb(static_cast<float>(span) / 6.0f, 1.0f, 1.0f, &r0, &g0, &b0);
+    hsvToRgb(
+      static_cast<float>(span + 1) / 6.0f - 0.0001f, 1.0f, 1.0f, &r1, &g1, &b1);
+    const ColorRgba left = toBytes(r0, g0, b0, 1.0f);
+    const ColorRgba right = toBytes(r1, g1, b1, 1.0f);
+    const float width = hue.w / 6.0f;
+    m_visual.addGradientRect(hue.x + width * static_cast<float>(span),
+                             hue.y,
+                             width,
+                             hue.h,
+                             left,
+                             right,
+                             right,
+                             left);
+  }
+  const float hueX = hue.x + m_pickerHue * hue.w;
+  m_visual.addFilledRect(hueX - 1.0f, hue.y - 2.0f, 3.0f, hue.h + 4.0f, white);
+  hsvToRgb(m_pickerHue, m_pickerSaturation, m_pickerValue, &r, &g, &b);
+  if (m_pickerChannels.size() == 4) {
+    const GuiToolRect alpha = pickerAlphaStrip();
+    const float check = alpha.h * 0.5f;
+    for (float x = alpha.x; x < alpha.x + alpha.w; x += check * 2.0f) {
+      m_visual.addFilledRect(x,
+                             alpha.y,
+                             std::min(check, alpha.x + alpha.w - x),
+                             check,
+                             GuiToolPalette::faint);
+      if (x + check < alpha.x + alpha.w) {
+        m_visual.addFilledRect(x + check,
+                               alpha.y + check,
+                               std::min(check, alpha.x + alpha.w - x - check),
+                               check,
+                               GuiToolPalette::faint);
+      }
+    }
+    m_visual.addGradientRect(alpha.x,
+                             alpha.y,
+                             alpha.w,
+                             alpha.h,
+                             toBytes(r, g, b, 0.0f),
+                             toBytes(r, g, b, 1.0f),
+                             toBytes(r, g, b, 1.0f),
+                             toBytes(r, g, b, 0.0f));
+    const float alphaX = alpha.x + m_pickerAlpha * alpha.w;
+    m_visual.addFilledRect(
+      alphaX - 1.0f, alpha.y - 2.0f, 3.0f, alpha.h + 4.0f, white);
+  }
+  // The hex box, with a preview of the color at its right.
+  const GuiToolRect hex = pickerHexBox();
+  const ColorRgba color = toBytes(r, g, b, m_pickerAlpha);
+  char text[16];
+  std::snprintf(text, sizeof(text), "#%02X%02X%02X", color.r, color.g, color.b);
+  std::string shown(text);
+  if (m_pickerChannels.size() == 4) {
+    std::snprintf(text, sizeof(text), "%02X", color.a);
+    shown += text;
+  }
+  const bool editing = m_edit.active() && m_editKey == "picker.hex";
+  GuiToolStyle::textField(
+    m_visual,
+    GuiToolRect{ hex.x, hex.y, hex.w - hex.h - 4.0f, hex.h },
+    shown,
+    editing ? &m_edit : nullptr,
+    editing && m_invalid,
+    false,
+    false,
+    GuiToolStyle::kSmallFontSize);
+  m_visual.addFilledRect(
+    hex.x + hex.w - hex.h, hex.y, hex.h, hex.h, toBytes(r, g, b, 1.0f));
+  m_visual.addOutlineRect(
+    hex.x + hex.w - hex.h, hex.y, hex.h, hex.h, GuiToolPalette::border, 1.0f);
+}
+
+bool
+EditorInspector::pickForTesting(float hue,
+                                float saturation,
+                                float value,
+                                float alpha,
+                                EditorDocument* document,
+                                const EditorSelection* selection)
+{
+  if (!m_pickerOpen || document == nullptr || selection == nullptr) {
+    return false;
+  }
+  m_pickerHue = hue;
+  m_pickerSaturation = saturation;
+  m_pickerValue = value;
+  m_pickerAlpha = alpha;
+  return applyPicker(*document, *selection);
+}
+
 bool
 EditorInspector::AppendCommands(Renderer* renderer)
 {

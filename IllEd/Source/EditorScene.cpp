@@ -561,6 +561,16 @@ EditorScene::registerCommands()
     "scene_frame",
     "Frame the selection (or the whole scene)");
   ic->commandRegistry->RegisterCommand(
+    "scene_field",
+    [this](const std::vector<std::string>& args) {
+      if (!args.empty() && m_inspector) {
+        m_inspector->activateField(args.front(), &m_document, &m_selection);
+      }
+    },
+    "scene_field <inspector key>",
+    "Activate an inspector field as a click would (a swatch opens its "
+    "picker)");
+  ic->commandRegistry->RegisterCommand(
     "scene_play",
     [this](const std::vector<std::string>&) {
       handleCommand(EditorCommand::PlayScene);
@@ -581,6 +591,7 @@ EditorScene::unregisterCommands()
                             "scene_undo",
                             "scene_redo",
                             "scene_frame",
+                            "scene_field",
                             "scene_play" }) {
     ic->commandRegistry->UnregisterCommand(name);
   }

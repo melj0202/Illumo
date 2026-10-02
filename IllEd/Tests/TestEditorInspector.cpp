@@ -2,6 +2,7 @@
 #include "PanelTestHelpers.h"
 #include <Illumo/Content/IlscCodec.h>
 #include <Illumo/Services/InputManager.h>
+#include <Illumo/Testing/TestAccess.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -530,9 +531,214 @@ testInspectorSceneAssetsSection()
   return counters.failures;
 }
 
+// Arithmetic and relative edits, Ctrl+wheel steps, folding and the
+// right-click menu (reset, copy and paste, remove).
+static int
+testInspectorTweaks()
+{
+  TestCounters counters;
+  HeadlessRenderFixture fixture(1280, 720);
+  EditorInspector inspector(&fixture.window, &fixture.renderer);
+  inspector.setPlacement(panelArea(1040.0f, 300.0f, 240.0f, 400.0f));
+  InputManager input(nullptr);
+  EditorDocument document;
+  EditorSelection selection;
+  const std::string a = cube(document, Vector3(1.0f, 0.0f, 0.0f));
+  const std::string b = cube(document, Vector3(3.0f, 0.0f, 0.0f));
+  selection.set(a);
+  inspector.update(&input, &document, &selection, 0.016f);
+  const std::function<float()> x = [&]() {
+    return document.findNode(a)->transform.position.x;
+  };
+  inspector.activateField("position.x", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "2*(3+1)");
+  testTrue(counters, x() == 8.0f, "typed arithmetic is evaluated");
+  inspector.activateField("position.x", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "+=2");
+  inspector.activateField("position.x", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "*=0.5");
+  testTrue(counters, x() == 5.0f, "relative edits apply to the value");
+  inspector.activateField("position.x", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "/=0");
+  testTrue(counters,
+           inspector.invalidInput() && x() == 5.0f,
+           "a division by zero is refused");
+  input.getKeyQueue().push({ KeyCode::Escape, InputAction::Press, 0 });
+  inspector.update(&input, &document, &selection, 0.016f);
+  selection.set(std::vector<std::string>{ b, a });
+  inspector.activateField("position.x", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "-=1");
+  testTrue(counters,
+           x() == 4.0f && document.findNode(b)->transform.position.x == 2.0f,
+           "a relative edit moves each selected node from its own value");
+
+  // Ctrl+wheel over a number steps it by ten scrub steps.
+  selection.set(a);
+  inspector.update(&input, &document, &selection, 0.016f);
+  const InspectorField* field = inspector.field("position.y");
+  fixture.window.mouseX = field->x + field->width * 0.5f;
+  fixture.window.mouseY = field->y + 6.0f;
+  inspector.update(&input, &document, &selection, 0.016f);
+  InputManagerTestAccess::setModifierFlags(input, 0x2);
+  *input.getMouseScrollOffset() = 2.0;
+  const size_t commands = document.history().size();
+  inspector.update(&input, &document, &selection, 0.016f);
+  InputManagerTestAccess::setModifierFlags(input, 0);
+  testTrue(counters,
+           std::fabs(document.findNode(a)->transform.position.y - 1.0f) <
+               1.0e-4f &&
+             document.history().size() == commands + 1,
+           "Ctrl+wheel steps the number under the pointer");
+
+  // Folding a section hides its fields until unfolded.
+  inspector.toggleSectionForTesting("Transform");
+  inspector.update(&input, &document, &selection, 0.016f);
+  testTrue(counters,
+           inspector.sectionFolded("Transform") &&
+             inspector.field("position.x")->hidden &&
+             !inspector.field("primitive.shape")->hidden,
+           "a folded section hides only its own fields");
+  inspector.toggleSectionForTesting("Transform");
+  inspector.update(&input, &document, &selection, 0.016f);
+  testTrue(counters,
+           !inspector.field("position.x")->hidden,
+           "unfolding shows them again");
+
+  // The right-click menu.
+  testTrue(
+    counters,
+    inspector.openMenuForTesting("position.x", {}, &document, &selection) &&
+      inspector.menuLabelsForTesting() ==
+        std::vector<std::string>{ "Reset Position",
+                                  "Reset Transform",
+                                  "Copy Transform",
+                                  "Paste Transform Values" },
+    "a field's menu resets its row or its section");
+  inspector.chooseMenuForTesting("Reset Position", &document, &selection);
+  testTrue(counters,
+           document.findNode(a)->transform.position == Vector3(0.0f),
+           "Reset Position zeroes the row");
+  document.setColor(a, ColorRgba{ 10, 20, 30, 255 });
+  inspector.openMenuForTesting({}, "Primitive", &document, &selection);
+  inspector.chooseMenuForTesting("Copy Primitive", &document, &selection);
+  selection.set(b);
+  inspector.openMenuForTesting({}, "Primitive", &document, &selection);
+  inspector.chooseMenuForTesting(
+    "Paste Primitive Values", &document, &selection);
+  const SceneComponent* pasted =
+    document.findNode(b)->find(SceneComponentType::Primitive);
+  testTrue(counters,
+           std::get<ScenePrimitive>(pasted->value).color.r == 10,
+           "copied component values paste onto another node");
+  inspector.openMenuForTesting({}, "Primitive", &document, &selection);
+  inspector.chooseMenuForTesting("Reset Primitive", &document, &selection);
+  const SceneComponent* reset =
+    document.findNode(b)->find(SceneComponentType::Primitive);
+  testTrue(counters,
+           std::get<ScenePrimitive>(reset->value).color.r ==
+               ScenePrimitive{}.color.r &&
+             std::get<ScenePrimitive>(reset->value).shape ==
+               ScenePrimitiveShape::Cube,
+           "Reset keeps the shape and restores the defaults");
+  inspector.openMenuForTesting({}, "Primitive", &document, &selection);
+  inspector.chooseMenuForTesting("Remove Primitive", &document, &selection);
+  testTrue(counters,
+           document.findNode(b)->find(SceneComponentType::Primitive) == nullptr,
+           "Remove drops the component");
+  return counters.failures;
+}
+
+// Color rows carry a swatch that opens a picker; picking writes the row's
+// channels (bytes or 0-1 floats) as one command per open picker.
+static int
+testInspectorColorPicker()
+{
+  TestCounters counters;
+  HeadlessRenderFixture fixture(1280, 720);
+  EditorInspector inspector(&fixture.window, &fixture.renderer);
+  inspector.setPlacement(panelArea(1040.0f, 100.0f, 240.0f, 600.0f));
+  InputManager input(nullptr);
+  EditorDocument document;
+  EditorSelection selection;
+  const std::string id = cube(document);
+  selection.set(id);
+  inspector.update(&input, &document, &selection, 0.016f);
+  const InspectorField* swatch = inspector.field("swatch:primitive.color.r");
+  testTrue(counters,
+           swatch != nullptr && swatch->kind == InspectorFieldKind::Swatch &&
+             swatch->channels.size() == 4,
+           "a color row starts with a swatch for its channels");
+  inspector.activateField("swatch:primitive.color.r", &document, &selection);
+  testTrue(counters, inspector.pickerOpen(), "clicking the swatch opens it");
+  const size_t commands = document.history().size();
+  inspector.pickForTesting(0.0f, 1.0f, 1.0f, 0.5f, &document, &selection);
+  inspector.pickForTesting(0.0f, 1.0f, 0.5f, 0.5f, &document, &selection);
+  const ColorRgba color =
+    std::get<ScenePrimitive>(
+      document.findNode(id)->find(SceneComponentType::Primitive)->value)
+      .color;
+  testTrue(counters,
+           color.r == 128 && color.g == 0 && color.b == 0 && color.a == 128 &&
+             document.history().size() == commands + 1,
+           "picking writes the color, one command per open picker");
+  testTrue(
+    counters,
+    inspector.typeHexForTesting("#00FF00FF", &document, &selection) &&
+      std::get<ScenePrimitive>(
+        document.findNode(id)->find(SceneComponentType::Primitive)->value)
+          .color.g == 255,
+    "a hex color applies");
+  testTrue(counters,
+           !inspector.typeHexForTesting("#12345", &document, &selection),
+           "a malformed hex color is refused");
+  inspector.update(&input, &document, &selection, 0.016f);
+  testTrue(counters,
+           inspector.field("swatch:primitive.color.r")->swatch.g == 255,
+           "the swatch shows the new color");
+
+  // Clicking outside the picker closes it.
+  const InspectorField* name = inspector.field("name");
+  fixture.window.mouseX = name->x + 4.0f;
+  fixture.window.mouseY = name->y + 4.0f;
+  inspector.update(&input, &document, &selection, 0.016f);
+  InputManagerTestAccess::setAction(
+    input, KeyCode::MouseLeft, InputAction::Press);
+  inspector.update(&input, &document, &selection, 0.016f);
+  InputManagerTestAccess::setAction(
+    input, KeyCode::MouseLeft, InputAction::Release);
+  inspector.update(&input, &document, &selection, 0.016f);
+  testTrue(counters, !inspector.pickerOpen(), "a press elsewhere closes it");
+
+  // Light colors are 0-1 floats.
+  SceneNode light;
+  light.name = "Lamp";
+  SceneComponent lamp;
+  lamp.value = SceneLight{};
+  light.components.push_back(lamp);
+  const std::string lightId = document.createNode(light, {});
+  selection.set(lightId);
+  inspector.update(&input, &document, &selection, 0.016f);
+  inspector.activateField("swatch:light.color.r", &document, &selection);
+  inspector.pickForTesting(
+    1.0f / 3.0f, 1.0f, 1.0f, 1.0f, &document, &selection);
+  const Vector3 lit =
+    std::get<SceneLight>(
+      document.findNode(lightId)->find(SceneComponentType::Light)->value)
+      .color;
+  testTrue(counters,
+           std::fabs(lit.x) < 1.0e-3f && std::fabs(lit.y - 1.0f) < 1.0e-3f &&
+             std::fabs(lit.z) < 1.0e-3f,
+           "float channels take 0-1 values");
+  return counters.failures;
+}
+
 void
 registerEditorInspectorTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllEd.Inspector.ColorPicker",
+               []() { return testInspectorColorPicker(); });
+  registry.add("IllEd.Inspector.Tweaks",
+               []() { return testInspectorTweaks(); });
   registry.add("IllEd.Inspector.SpriteSourceTagsAndAssets",
                []() { return testInspectorSpriteSourceTagsAndAssets(); });
   registry.add("IllEd.Inspector.SceneAssetsSection",

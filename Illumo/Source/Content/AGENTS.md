@@ -15,7 +15,7 @@ D-E24 and D-E26.
 - The guest mirror `IllumoGuestContent` (`IllumoGuest/CMakeLists.txt`) builds
   the serial-safe subset: `VirtualPath`, `PackageManifest`, `SceneDocument`,
   `IlscCodec`, `SceneAssetRefs`, `SceneInstance`, `ScenePrimitiveMeshes`,
-  `BehaviourSchema`, `SceneBehaviours`, `ScenePlay`.
+  `BehaviourSchema`, `SceneBehaviours`, `ScenePlay`, `SceneExtensionList`.
   `PackageArchive`, `VirtualFileSystem`, `VfsAssetSource`, `VfsConsole`,
   `VfsTreeSource` and `PackageMounts` are host-only. Keep a new source in the
   right list.
@@ -49,6 +49,10 @@ D-E24 and D-E26.
   a world. `update()` sends only changed transforms and visibility.
 - Loads collect references (`collectSceneFetches`), make them readable, then
   instantiate: `IAssetSource` reads stay synchronous.
+- Editor hooks never touch the document: `setViewHidden` changes only the
+  graph's visibility (`graphVisible` = document flag and not view-hidden;
+  every graph visibility write goes through it), and `pickRay`'s skip set
+  lets a ray pass through nodes. Loading or clearing empties the view set.
 - Scene behaviours (`docs/scene-behaviours-design.md`): `SceneInstance`
   reports node and component changes to one `ISceneContentObserver`;
   observers only record what changed and never edit the scene from the

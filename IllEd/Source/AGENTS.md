@@ -60,7 +60,20 @@ oracle suite.
 - The inspector validates nothing itself: it applies an edit and lets
   `SceneInstance` refuse it (the field stays invalid). Asset-table edits go
   through `EditorDocument::setAssets` as settings commands; asset fields are
-  keyed `asset.<property>:<asset id>`.
+  keyed `asset.<property>:<asset id>`. Number text is evaluated by an
+  iterative shunting-yard loop (no recursion) and may be relative (`+=`);
+  `applyNumberWith` applies a function of each target's value. Color rows
+  start with a `Swatch` field (key `swatch:<first channel key>`) laid out in
+  the label column; its picker writes the channels with one merge key per
+  open picker. Rows carry a `group` for the right-click menu; folded
+  sections hide their fields (`InspectorField::hidden`) but `field()` still
+  finds them.
+- Locks live in the `illed.view` scene extension (`EditorDocument::
+  setLocked`, a settings command; read through `SceneExtensionList`) and
+  feed `pickRay`'s skip set and box selection. Isolation is
+  `SceneInstance::setViewHidden`, view state that is never an edit. The
+  viewport context menu is an `EditorToolbar` popup; its Create items place
+  at the clicked point (`EditorScene::createAtContextPoint`).
 - Scene behaviours (D-E35): `EditorBehaviours` reads every
   `behaviours.json` under `/apps/<id>` (installed apps; IllEd's manifest sets
   `launchApps`, so the runtime mounts them), `/packages/<id>` and `/project`

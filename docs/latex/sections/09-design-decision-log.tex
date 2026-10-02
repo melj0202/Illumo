@@ -3689,6 +3689,29 @@ object.\\
 \textbf{Extends:} D-E22, D-E23
 \end{decisionbox}
 
+\subsection*{D-E37 --- Editor data beside the scene format}
+\begin{decisionbox}[title={D-E37 \quad 2026-10-01}]
+\textbf{Decision:} IllEd's third editing wave
+(\pathref{docs/illed-editing-wave3-plan.md}) keeps \texttt{.ilsc} at 2.0.
+Editor data that should be saved with a scene but is not part of the strict
+\texttt{editor} block, starting with node locks, rides in the IllEd-owned
+\texttt{illed.view} extension through \symbolref{SceneExtensionList}.
+View-only state that must never be saved, the isolation of a selection, goes
+through \texttt{SceneInstance::setViewHidden}, which hides nodes in the graph
+while their document \texttt{visible} and the revision stay unchanged; picking
+takes a skip set for locked nodes.\\
+\textbf{Why:} Owner request for more ways to edit, tweak and interact. Locks
+are worth keeping between sessions, but adding keys to the strict editor block
+is a format change; namespaced extensions are already preserved verbatim
+(D-E19). Isolation saved by accident would hide nodes in every game.\\
+\textbf{Consequences:} Changing a lock is an undoable settings command and
+dirties the document; isolation is not and does not. Other programs ignore
+\texttt{illed.view}. The context menu, hover, Alt-drag copies, Drop to Floor,
+nudges, grouping, typed arithmetic, field menus, folding and the color picker
+are IllEd-local.\\
+\textbf{Extends:} D-E19, D-E25
+\end{decisionbox}
+
 \subsection*{D-F2 --- Calendar build versions}
 \begin{decisionbox}[title={D-F2 \quad 2026-09-25}]
 \textbf{Decision:} A build's version is \texttt{vYY.MM\_B}, for example
