@@ -145,6 +145,7 @@ add_library(Illumo STATIC
   Source/Rendering/RenderWindow.cpp
   Source/Rendering/ShaderPreprocessor.cpp
   Source/Rendering/SplashText.cpp
+  Source/Rendering/WindowIcon.cpp
   Source/Rendering/Primitives/MeshVisual.cpp
   Source/Rendering/Primitives/SkyboxVisual.cpp
   Source/Rendering/Primitives/GameVisual.cpp
@@ -356,6 +357,7 @@ if(BUILD_TESTING)
     Tests/TestGuiPanelDock.cpp
     Tests/TestGuiTextEdit.cpp
     Tests/TestGuiEngineBrand.cpp
+    Tests/TestWindowIcon.cpp
     Tests/TestFont.cpp
     Tests/TestFrameCapture.cpp
     Tests/Content/TestIlscCodec.cpp

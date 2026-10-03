@@ -1713,7 +1713,10 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   `engine.ilpk` and each application as `apps/<name>.ilpk`; the runtime
   installs the engine package as `DefaultAssetSource()` before the engine
   starts, so host shaders, fonts and images read from it, and mounts it at
-  `/engine`. Loose development folders win over archives. File protocol
+  `/engine`. Loose development folders win over archives. An application
+  package may carry `app.ico` at its root; `RuntimeShell` decodes it
+  (`WindowIcon`) and gives the window that icon in place of the engine's
+  (D-E39). File protocol
   v2 adds the `Mounted` area, `List`, `Stat`, `Import` and `Pack`, 1 MiB
   mounted blocks and 16 guest tasks; `ProjectFiles` (bit 9) gates writes,
   Import and Pack and is offered only with a project. The host `vfs` command
@@ -2221,6 +2224,7 @@ disabled.
 | **D-E36** | Launching installed apps (2026-10-01): `Launch` capability (bit 13) and `GuestService::LaunchApp` (19) start one installed app in its own process with a handed-over document (`Start`/`Stop`/`Status`). Offered only to an app whose manifest sets `app.launchApps` (IllEd) and never for `--capture`/`--bench-*`; the runtime then mounts every installed app read-only at `/apps/<id>`. `RuntimeAppLauncher` runs `IllumoRuntime --app <id> --open <file>` with the parent's `--mount`/`--project` as one `ChildProcess` (a kill-on-close job object on Windows). IllEd's Play (Ctrl+P) launches the scene's game from the `illumo.play` extension (`ScenePlay`) or its behaviours. |
 | **D-E37** | IllEd editing wave 3 (2026-10-01, `docs/illed-editing-wave3-plan.md`): editor-only scene data rides in an IllEd-owned extension instead of the strict `editor` block (locks in `illed.view`, through `SceneExtensionList`), so the format stays at 2.0; view-only state that must not save (isolation) goes through `SceneInstance::setViewHidden`, which changes the graph and never the document or its revision; picking takes a skip set. Viewport context menu, hover, Alt-drag copies, Drop to Floor, nudges, grouping, typed arithmetic, field menus, folding and a color picker are IllEd-local. |
 | **D-E38** | A distribution (`python build.py dist`) ships the engine's `Assets/` and `Shader/` as `engine.ilpk` and each application as `apps/<name>.ilpk`; the runtime installs `EnginePackageSource` as `DefaultAssetSource()` before the engine starts and mounts the archive at `/engine`. Loose development folders win. |
+| **D-E39** | An application package's root `app.ico` replaces the engine's window icon (title bar, taskbar, Alt+Tab): `RuntimeApplication` reads it through `/app`, `RuntimeShell::start` decodes it with `WindowIcon` (PNG and 32-bit bitmap entries) and calls `IRenderWindow::setIcon` (`glfwSetWindowIcon`). A missing or unusable file leaves the engine icon; the executable's own Explorer icon stays Illumo's. CSim ships its brand kit's `csim.ico` this way. |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
 | **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and topology persistence (current sparse save v4; D-GC4). |

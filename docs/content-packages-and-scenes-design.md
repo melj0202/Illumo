@@ -294,6 +294,11 @@ byte-identical.
   `illumo.json` and for `*.ilpk` files.
 - `--mount <dir|.ilpk>` (repeatable) adds packages; `--project <dir>` mounts a
   writable loose package at `/project`. A missing path fails startup.
+- An application package may hold `app.ico` (at most 1 MiB) at its root. The
+  runtime reads it through `/app/app.ico` and shows it as the window's icon
+  instead of the engine's (D-E39). A package without one, or whose file has no
+  usable image, keeps the engine icon. Entries may be PNG or uncompressed
+  32-bit bitmaps; the system picks the best size for each use.
 - Staging (`illumo_stage_app`) emits `illumo.json` instead of `app.json`, keeps
   loose directories for development, and adds an optional `.ilpk` target.
   (As built, the `.ilpk` output is the separate `IllumoDistribution` target,

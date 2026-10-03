@@ -65,6 +65,14 @@ public:
     systemCursorHidden = hidden;
   }
   bool systemCursorHidden = false;
+  // Records the last icon request, for host display tests.
+  void setIcon(const std::vector<WindowIconImage>& images) override
+  {
+    icon = images;
+    iconCalls += 1;
+  }
+  std::vector<WindowIconImage> icon;
+  int iconCalls = 0;
   // The framebuffer's multisample count; -1 (unknown) by default.
   int getMsaaSamples() const override { return msaaSamples; }
   int msaaSamples = -1;

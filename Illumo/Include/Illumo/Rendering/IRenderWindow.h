@@ -1,8 +1,10 @@
 #pragma once
 
+#include <Illumo/Rendering/WindowIcon.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <array>
 #include <string>
+#include <vector>
 
 struct GLFWwindow;
 
@@ -61,6 +63,14 @@ public:
   // Hosts that learn the product name after creation (a package runtime)
   // retitle the window. Windows without a title bar ignore it.
   virtual void setTitle(const std::string& title) { (void)title; }
+  // The same hosts replace the window's icon (title bar, taskbar, Alt+Tab)
+  // with the application's, offering candidate sizes of which the system
+  // picks the best fit. An empty list restores the engine's own icon. Windows
+  // without an icon ignore it.
+  virtual void setIcon(const std::vector<WindowIconImage>& images)
+  {
+    (void)images;
+  }
   // Products that draw their own (software) pointer hide the system cursor
   // while it is over the window's content area. Windows without a system
   // cursor ignore it.

@@ -33,6 +33,10 @@ struct RuntimeShellOptions
   // The window title and the application's name in logs and results.
   std::string title;
   std::string application;
+  // The bytes of the package's app.ico, shown as the window's icon in place
+  // of the engine's (D-E39). Empty keeps the engine icon, as does a file with
+  // no usable image.
+  std::vector<std::uint8_t> appIcon;
   // --capture: the new PNG written from this frame, counted from the end of
   // the script. Empty for an ordinary run.
   std::filesystem::path capture;

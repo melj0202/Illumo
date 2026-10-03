@@ -8,6 +8,7 @@
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Wasm/RuntimeShell.h>
 #include <Illumo/Wasm/WasmProgram.h>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -215,9 +216,87 @@ testRuntimeShellSplash()
   return counters.failures == 0;
 }
 
+// A one-image .ico holding a 1x1 opaque red bitmap.
+static std::vector<std::uint8_t>
+oneRedPixelIcon()
+{
+  static const std::uint8_t kBytes[] = {
+    0,  0, 1,   0,   1,  0,                    // icon directory, one entry
+    1,  1, 0,   0,   1,  0, 32, 0,             // 1x1, 32 bits
+    48, 0, 0,   0,   22, 0, 0,  0,             // 48 bytes at offset 22
+    40, 0, 0,   0,   1,  0, 0,  0, 2, 0, 0, 0, // header: width, doubled height
+    1,  0, 32,  0,   0,  0, 0,  0, 0, 0, 0, 0, // planes, bits, BI_RGB, size
+    0,  0, 0,   0,   0,  0, 0,  0, 0, 0, 0, 0,
+    0,  0, 0,   0,   // resolution, palettes
+    0,  0, 255, 255, // the pixel: BGRA red
+    0,  0, 0,   0    // the AND mask row
+  };
+  return std::vector<std::uint8_t>(std::begin(kBytes), std::end(kBytes));
+}
+
+// The package's app.ico replaces the engine's window icon (D-E39); without a
+// usable one the window keeps the engine icon.
+static bool
+testRuntimeShellIcon()
+{
+  TestCounters counters;
+  testSection("RuntimeShell: an app.ico replaces the engine's window icon");
+  const std::filesystem::path environment =
+    std::filesystem::temp_directory_path() / "illumo-runtime-icon.json";
+  std::error_code error;
+  std::filesystem::remove(environment, error);
+  {
+    IllumoConfig config;
+    config.applicationName = "IconTest";
+    config.environmentPath = environment.string();
+    Illumo host(config);
+    MockBackend* backend = nullptr;
+    setHeadlessFactories(host, &backend);
+    testTrue(counters, host.initialize(), "engine initializes");
+    NullRenderWindow* window =
+      static_cast<NullRenderWindow*>(host.context().window);
+    RuntimeShellOptions options;
+    options.title = "Icon test";
+    options.application = "paddle";
+    const std::vector<std::vector<std::uint8_t>> icons = { {},
+                                                           { 1, 2, 3, 4 },
+                                                           oneRedPixelIcon() };
+    for (std::size_t index = 0; index < icons.size(); ++index) {
+      options.appIcon = icons[index];
+      RuntimeShell shell(
+        host,
+        nullptr,
+        std::make_unique<WasmProgram>(readGuest(ILLUMO_PADDLE_GUEST)),
+        options);
+      const int before = window->iconCalls;
+      testTrue(counters, shell.start(), "the program starts");
+      if (index < 2) {
+        testTrue(counters,
+                 window->iconCalls == before,
+                 index == 0 ? "no app.ico leaves the engine icon"
+                            : "an unusable app.ico leaves the engine icon");
+      } else {
+        testTrue(counters,
+                 window->iconCalls == before + 1 && window->icon.size() == 1 &&
+                   window->icon[0].width == 1 && window->icon[0].height == 1 &&
+                   window->icon[0].rgba ==
+                     std::vector<std::uint8_t>{ 255, 0, 0, 255 },
+                 "a usable app.ico becomes the window icon");
+      }
+      shell.stop();
+    }
+    host.shutdown();
+  }
+  std::filesystem::remove(environment, error);
+  return counters.failures == 0;
+}
+
 bool
 runRuntimeShellTest(const std::string& name)
 {
+  if (name == "RuntimeShellIcon") {
+    return testRuntimeShellIcon();
+  }
   if (name == "RuntimeShell") {
     return testRuntimeShell();
   }

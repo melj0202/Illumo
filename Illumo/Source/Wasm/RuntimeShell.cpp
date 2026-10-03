@@ -11,6 +11,7 @@
 #include <Illumo/Gui/GuiEngineBrand.h>
 #include <Illumo/Rendering/FrameCapture.h>
 #include <Illumo/Rendering/Renderer.h>
+#include <Illumo/Rendering/WindowIcon.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
@@ -118,6 +119,17 @@ RuntimeShell::start()
   ic = &m_illumo.context();
   if (ic->window != nullptr && !m_options.title.empty()) {
     ic->window->setTitle(m_options.title);
+  }
+  if (ic->window != nullptr && !m_options.appIcon.empty()) {
+    const std::vector<WindowIconImage> icon =
+      WindowIcon::decode(m_options.appIcon);
+    if (icon.empty()) {
+      Logger::LogWarning("The " + m_options.application +
+                         " package's app.ico holds no usable image; keeping "
+                         "the engine icon");
+    } else {
+      ic->window->setIcon(icon);
+    }
   }
   // The bench reports the host loop's phases too.
   if (m_options.bench.frames != 0 && ic->frameProfiler != nullptr) {

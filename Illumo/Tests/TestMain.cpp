@@ -52,6 +52,8 @@ registerGuiPanelDockTests(IllumoTestRegistry& registry);
 void
 registerGuiEngineBrandTests(IllumoTestRegistry& registry);
 void
+registerWindowIconTests(IllumoTestRegistry& registry);
+void
 registerMeshLoaderTests(IllumoTestRegistry& registry);
 void
 registerShaderPreprocessorTests(IllumoTestRegistry& registry);
@@ -133,6 +135,7 @@ createRegistry()
   registerGuiDropdownListTests(registry);
   registerGuiPanelDockTests(registry);
   registerGuiEngineBrandTests(registry);
+  registerWindowIconTests(registry);
   registerShaderPreprocessorTests(registry);
   registerFontTests(registry);
   registerAudioTests(registry);

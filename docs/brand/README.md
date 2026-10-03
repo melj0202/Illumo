@@ -32,6 +32,12 @@ and Alt+Tab for every app window, detached panels included. The `.ico` holds
 `icon/png/illumo-icon-{32,48,64,128,256}.png`. After changing those PNGs, run
 `python tools/make_brand_assets.py` from the repository root.
 
+**CSim kit:** `csim/` holds CSim's own brand (the Menu glider mark, lockups,
+wordmark and app icon; see `csim/README.md`). The game package stages
+`csim/ico/csim.ico` as its root `app.ico`, which `IllumoRuntime` shows as the
+window icon instead of `IllumoRuntime.ico` (D-E39). Any application package
+can do the same by putting an `app.ico` at its root.
+
 **Engine splash and badge:** `tools/make_brand_assets.py` also writes
 `Illumo/Assets/Branding/illumo-splash.png` (the neon logo) and
 `illumo-badge.png` (the flat wordmark), cropped and pre-sized because guest

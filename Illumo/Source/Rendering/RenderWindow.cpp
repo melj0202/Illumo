@@ -320,6 +320,31 @@ RenderWindow::setTitle(const std::string& title)
 }
 
 void
+RenderWindow::setIcon(const std::vector<WindowIconImage>& images)
+{
+  if (window == nullptr || m_captureOnly) {
+    return;
+  }
+  if (images.empty()) {
+    // GLFW reverts to the window class icon, the GLFW_ICON resource.
+    glfwSetWindowIcon(window, 0, nullptr);
+    return;
+  }
+  std::vector<GLFWimage> candidates;
+  candidates.reserve(images.size());
+  for (const WindowIconImage& image : images) {
+    GLFWimage candidate;
+    candidate.width = image.width;
+    candidate.height = image.height;
+    // GLFW only reads the pixels.
+    candidate.pixels = const_cast<unsigned char*>(image.rgba.data());
+    candidates.push_back(candidate);
+  }
+  glfwSetWindowIcon(
+    window, static_cast<int>(candidates.size()), candidates.data());
+}
+
+void
 RenderWindow::setSystemCursorHidden(bool hidden)
 {
   // Hidden applies only over the content area, so the title bar, other

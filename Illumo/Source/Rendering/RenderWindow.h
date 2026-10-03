@@ -44,6 +44,7 @@ public:
   void requestClose() override;
   void cancelCloseRequest() override;
   void setTitle(const std::string& title) override;
+  void setIcon(const std::vector<WindowIconImage>& images) override;
   void setSystemCursorHidden(bool hidden) override;
   // Hidden capture windows report unknown: they never show a product's MSAA.
   int getMsaaSamples() const override

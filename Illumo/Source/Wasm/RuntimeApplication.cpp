@@ -5,6 +5,7 @@
 #include <Illumo/Engine/Illumo.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiEngineBrand.h>
+#include <Illumo/Rendering/WindowIcon.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/RuntimeAppLauncher.h>
@@ -153,19 +154,29 @@ manifestCeilings()
 
 // A module named by the launched package, read through its /app view (a
 // directory or an .ilpk).
-static std::vector<std::byte>
-readPackageModule(const VirtualFileSystem& vfs, const std::string& member)
+static std::vector<uint8_t>
+readPackageFile(const VirtualFileSystem& vfs,
+                const std::string& member,
+                std::uint64_t maximumBytes)
 {
-  ILLUMO_PROFILE_ZONE("Runtime.readPackageModule");
   const std::string path = "/app/" + member;
   VfsStat stat;
   std::string error;
   std::vector<uint8_t> data;
   if (!vfs.stat(path, stat, error) || stat.kind != VfsKind::File ||
-      stat.size == 0 || stat.size > 64u * 1024u * 1024u ||
+      stat.size == 0 || stat.size > maximumBytes ||
       !vfs.read(path, data, error)) {
     return {};
   }
+  return data;
+}
+
+static std::vector<std::byte>
+readPackageModule(const VirtualFileSystem& vfs, const std::string& member)
+{
+  ILLUMO_PROFILE_ZONE("Runtime.readPackageModule");
+  const std::vector<uint8_t> data =
+    readPackageFile(vfs, member, 64u * 1024u * 1024u);
   std::vector<std::byte> bytes(data.size());
   std::memcpy(bytes.data(), data.data(), data.size());
   return bytes;
@@ -320,6 +331,9 @@ prepareShell(Illumo& illumo)
   }
   std::vector<std::byte> game;
   std::vector<std::byte> worker;
+  // The package's app.ico, when it has one; the window shows it instead of
+  // the engine's icon.
+  std::vector<uint8_t> appIcon;
   bool workerRequested = !workerPath.empty();
   // An application with launchApps: the installed applications it may start
   // and the package options each launch repeats.
@@ -471,6 +485,7 @@ prepareShell(Illumo& illumo)
                       " installed applications mounted at /apps");
     }
     game = readPackageModule(*vfs, manifest.app.module);
+    appIcon = readPackageFile(*vfs, "app.ico", WindowIcon::kMaximumBytes);
     if (!workerRequested && !manifest.app.worker.empty()) {
       workerRequested = true;
       worker = readPackageModule(*vfs, manifest.app.worker);
@@ -681,6 +696,7 @@ prepareShell(Illumo& illumo)
   guest->setRestartAllowed(capture.empty() && bench.frames == 0);
   RuntimeShellOptions options;
   options.title = std::move(title);
+  options.appIcon = std::move(appIcon);
   options.application = std::move(application);
   options.capture = std::move(capture);
   options.captureFrame = captureFrame;

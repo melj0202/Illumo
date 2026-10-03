@@ -3744,6 +3744,28 @@ preloads \texttt{/engine/Skybox} instead of shipping its own copy.\\
 \textbf{Refines:} D-E20, D-E21
 \end{decisionbox}
 
+\subsection*{D-E39 --- An application's own window icon}
+\begin{decisionbox}[title={D-E39 \quad 2026-10-02}]
+\textbf{Decision:} An application package may carry \texttt{app.ico} at its
+root. \texttt{RuntimeApplication} reads it through \texttt{/app} (at most
+1~MiB) and \texttt{RuntimeShell::start}, which already retitles the window,
+decodes it with \texttt{WindowIcon} (PNG entries and uncompressed 32-bit
+bitmap entries) and calls the new \texttt{IRenderWindow::setIcon}, which
+\texttt{RenderWindow} forwards to \texttt{glfwSetWindowIcon}. The system picks
+the best of the offered sizes for the title bar, taskbar and Alt+Tab. A
+package without the file, or whose file has no usable image (which is logged),
+keeps the engine icon, and so does a capture window.\\
+\textbf{Why:} Owner request: the runtime's \texttt{GLFW\_ICON} resource gave
+every application the Illumo icon, and CSim should show its own.\\
+\textbf{Consequences:} The resource is still the executable's icon in Explorer
+and the default for every window; only the running window changes, after the
+program has loaded, so the engine icon shows for the moment before. Detached
+panel windows keep the engine icon. Packing needs nothing new, as every file of
+the package directory goes into the \texttt{.ilpk}. CSim stages
+\path{docs/brand/csim/ico/csim.ico} as its \texttt{app.ico}.\\
+\textbf{Extends:} D-UI14, D-E38
+\end{decisionbox}
+
 \subsection*{D-F2 --- Calendar build versions}
 \begin{decisionbox}[title={D-F2 \quad 2026-09-25}]
 \textbf{Decision:} A build's version is \texttt{vYY.MM\_B}, for example
