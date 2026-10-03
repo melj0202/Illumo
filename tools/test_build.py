@@ -735,12 +735,34 @@ class ToolboxTests(unittest.TestCase):
 
     def test_all_progress_actions_record_effective_identity(self):
         state = build.DashboardState()
-        for action in ("build", "build_app", "test", "coverage", "tidy", "docs"):
+        for action in ("build", "build_app", "dist", "test", "coverage", "tidy", "docs"):
             command = [sys.executable, str(build.__file__), *build.dashboard_action_arguments(state, action)]
             record = build.new_run_record(state, action, command)
             expected = "Debug" if action in ("coverage", "tidy") else "Release"
             self.assertEqual(record["identity"]["configuration"], expected)
         self.assertEqual(build.new_run_record(state, "coverage", [sys.executable, str(build.__file__), "coverage"])["settings"]["generator"], "Ninja")
+
+    def test_distribution_apps_are_validated_and_normalised(self):
+        known = tuple(build.AppPackage(name, name + ".wasm") for name in ("game", "illed", "meshviewer"))
+        with patch.object(build, "installed_apps", return_value=known):
+            self.assertEqual(build.distribution_app_names(None), ())
+            self.assertEqual(build.distribution_app_names(["game,illed", "illed", " meshviewer "]),
+                             ("game", "illed", "meshviewer"))
+            with self.assertRaisesRegex(build.BuildError, "no-such"):
+                build.distribution_app_names(["game", "no-such"])
+        args = build.create_parser().parse_args(["dist", "--apps", "game,illed"])
+        self.assertEqual(args.apps, ["game,illed"])
+        self.assertIsNone(build.create_parser().parse_args(["dist"]).apps)
+
+    def test_dashboard_distribution_ships_the_picked_apps(self):
+        state = build.DashboardState(applications=("game", "illed", "meshviewer"))
+        self.assertNotIn("--apps", build.dashboard_action_arguments(state, "dist"))
+        state.distribution_apps = ("game", "illed", "meshviewer")
+        self.assertNotIn("--apps", build.dashboard_action_arguments(state, "dist"))
+        state.distribution_apps = ("illed", "game")
+        arguments = build.dashboard_action_arguments(state, "dist")
+        self.assertEqual(arguments[arguments.index("--apps") + 1], "illed,game")
+        build.create_parser().parse_args(arguments)
 
     def test_inventory_preserves_ctest_properties(self):
         properties = [{"name": "WORKING_DIRECTORY", "value": "isolated"},

@@ -52,3 +52,10 @@ Host code reads engine files through `DefaultAssetSource()`, which the runtime
 points at the package before the engine starts (`EnginePackageSource`), so
 shaders, fonts and the splash load from it under their usual `Assets/` and
 `Shader/` names. `Illumo.Dist.Assemble` assembles one under `Testing/dist`.
+`-DAPPS=<a;b>` (or `ILLUMO_DIST_APPS=a,b`, which `python build.py dist --apps`
+sets) packs only those applications; an unstaged name fails
+(`Illumo.Dist.SelectedApps`, `Illumo.Dist.UnknownApp`). On Windows the script
+also writes `<title>.lnk` for every packed application beside
+`IllumoRuntime.exe`, plus `<title>.ico` when the app has an `app.ico`, through
+`cmake/IllumoShortcut.ps1` (`IShellLink`; a `.lnk` can carry `--app <name>` and
+an icon, a link cannot). A failure there only warns.

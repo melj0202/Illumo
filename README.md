@@ -303,7 +303,14 @@ Those loose folders are for development. `python build.py dist` (the
 `wasmtime.dll`, `envvars.json`, the notices and `licenses/`, the engine's
 shaders, fonts and images packed as `engine.ilpk`, and every application packed
 as `apps/<name>.ilpk` (D-E38). A loose `Assets/` beside the runtime wins over
-`engine.ilpk`, as a loose `apps/<name>/` wins over `apps/<name>.ilpk`.
+`engine.ilpk`, as a loose `apps/<name>/` wins over `apps/<name>.ilpk`. `python build.py dist --apps game,illed`
+ships only the apps you name (default: every staged one; an unknown name is an
+error), and the dashboard's **Assemble distribution** (`e`) opens a picker where
+Enter toggles each app. On Windows every shipped app also gets a shortcut beside
+the runtime, named after its title (`CSim.lnk`, `IllEd.lnk`, ...), that runs
+`IllumoRuntime.exe --app <name>`; an app with an `app.ico` gets that icon as a
+loose `<title>.ico` beside it. Shortcut targets are stored relative, so the
+folder can be moved or zipped. Linux has no equivalent yet.
 
 Windows (VS generator): `build-workspace/Release/` for `build.py`, or
 `build/Release/` for `-B build`. Linux (Ninja): `build-linux/<CONFIG>/`.
@@ -641,14 +648,16 @@ override. Use the arrow keys to choose `Release`, `Debug`, `RelWithDebInfo`, or
 `MinSizeRel`, cycle the **Application** setting through the installed apps
 (IllumoGame / IllEd / Mesh Viewer), toggle documentation, Tracy and the WASM
 runtime, select build parallelism, and run a focused action: **Play**,
-**Build everything**, **Build runtime and apps**, **Run headless tests**,
+**Build everything**, **Build runtime and apps**, **Assemble distribution**
+(`python build.py dist`: `engine.ilpk` and `apps/<name>.ilpk` in
+`<build>/dist/<config>`), **Run headless tests**,
 **Run existing build**, and the tools below. **Play** builds `IllumoRuntime`
 (which stages every package) and runs the selected app. The header line
 reports which apps are staged in the selected tree, whether the WASM
 toolchain is missing, and how many stale pre-WASM outputs remain; the line
 above it shows the Git branch, commit and working-tree state. Each action has
 a one-letter hotkey shown beside it (`p` Play, `b` Build everything, `a`
-runtime and apps, `t` tests, `r` Run existing build, `s` statistics, `o`
+runtime and apps, `e` distribution, `t` tests, `r` Run existing build, `s` statistics, `o`
 Development Tools, `d` docs, `c` coverage, `i` clang-tidy); `/` opens a
 command palette that fuzzy-matches every action, tool, profile and setting
 value (`/ cfg deb` Enter selects Debug), `.` repeats the

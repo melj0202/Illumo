@@ -229,6 +229,32 @@ if(BUILD_TESTING)
       -P "${CMAKE_SOURCE_DIR}/cmake/IllumoDistribution.cmake")
   set_tests_properties(Illumo.Dist.Assemble PROPERTIES
     LABELS "Illumo;IllumoWorkspace" TIMEOUT 120)
+  # A chosen subset ships only those applications; an unstaged name fails.
+  foreach(_case SelectedApps:illed UnknownApp:no-such-app)
+    string(REPLACE ":" ";" _parts "${_case}")
+    list(GET _parts 0 _case_name)
+    list(GET _parts 1 _case_apps)
+    add_test(NAME Illumo.Dist.${_case_name}
+      COMMAND ${CMAKE_COMMAND}
+        "-DRUNTIME_DIR=$<TARGET_FILE_DIR:IllumoRuntime>"
+        "-DOUT_DIR=${CMAKE_BINARY_DIR}/Testing/dist-${_case_name}"
+        "-DPACK=$<TARGET_FILE:IllumoPack>"
+        "-DENGINE_ASSETS=${CMAKE_SOURCE_DIR}/Illumo/Assets"
+        "-DENGINE_SHADERS=${CMAKE_SOURCE_DIR}/Illumo/Shader"
+        "-DENGINE_MANIFEST=${CMAKE_SOURCE_DIR}/Illumo/EnginePackage/illumo.json"
+        "-DVERSION_CMAKE=${ILLUMO_VERSION_CMAKE}"
+        "-DSCRATCH=${CMAKE_BINARY_DIR}/Testing/dist-staging-${_case_name}"
+        "-DAPPS=${_case_apps}"
+        -P "${CMAKE_SOURCE_DIR}/cmake/IllumoDistribution.cmake")
+    set_tests_properties(Illumo.Dist.${_case_name} PROPERTIES
+      LABELS "Illumo;IllumoWorkspace" TIMEOUT 120)
+  endforeach()
+  # The status line names every packed application: only IllEd.
+  set_tests_properties(Illumo.Dist.SelectedApps PROPERTIES
+    PASS_REGULAR_EXPRESSION "apps illed"
+    FAIL_REGULAR_EXPRESSION "apps [^\n]*(game|meshviewer|playground)")
+  set_tests_properties(Illumo.Dist.UnknownApp PROPERTIES
+    PASS_REGULAR_EXPRESSION "'no-such-app' is not a staged application")
 endif()
 
 if(BUILD_TESTING)

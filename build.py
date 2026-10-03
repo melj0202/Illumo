@@ -61,6 +61,8 @@ WASM_RUNTIME_APPLICATION = "IllumoRuntime"
 # Installed applications live in <runtime dir>/apps/<name>/ with illumo.json.
 APPS_DIRECTORY = "apps"
 DEFAULT_APP = "game"
+# The applications `dist --apps` ships reach cmake/IllumoDistribution.cmake here.
+DISTRIBUTION_APPS_VARIABLE = "ILLUMO_DIST_APPS"
 APP_LABELS = {"game": "IllumoGame", "illed": "IllEd", "meshviewer": "Mesh Viewer",
               "playground": "Playground"}
 # Native programs from before the WASM cutover; nothing builds or launches
@@ -259,6 +261,7 @@ DASHBOARD_ITEMS = (
     ("action", "Play", "play"),
     ("action", "Build everything", "build"),
     ("action", "Build runtime and apps", "build_app"),
+    ("action", "Assemble distribution", "dist"),
     ("action", "Run headless tests", "test"),
     ("action", "Run existing build", "launch"),
     ("action", "Repository statistics", "stats"),
@@ -272,6 +275,7 @@ DASHBOARD_DESCRIPTIONS = {
     "play": "build, then run the selected app",
     "build": "applications, tests, and optional PDFs",
     "build_app": "IllumoRuntime with every app package",
+    "dist": "engine.ilpk, the apps you pick and their shortcuts",
     "test": "all discovered test runners",
     "launch": "skip configure and build",
     "stats": "Git state, files, and first-party LOC",
@@ -284,7 +288,7 @@ DASHBOARD_DESCRIPTIONS = {
 }
 # Single-key shortcuts; h/j/k/l and q stay navigation and quit.
 DASHBOARD_HOTKEYS = {
-    "play": "p", "build": "b", "build_app": "a", "test": "t", "launch": "r",
+    "play": "p", "build": "b", "build_app": "a", "dist": "e", "test": "t", "launch": "r",
     "stats": "s", "tools": "o", "docs": "d", "coverage": "c", "tidy": "i",
     "quit": "q",
 }
@@ -306,7 +310,7 @@ ACTION_TITLES = {
     "watch": "Watch and rebuild",
 }
 # Actions that stream through the live progress view and leave a run record.
-PROGRESS_ACTIONS = ("build", "build_app", "test", "coverage", "tidy", "docs", "wasm_tools")
+PROGRESS_ACTIONS = ("build", "build_app", "dist", "test", "coverage", "tidy", "docs", "wasm_tools")
 
 
 class BuildError(RuntimeError):
@@ -564,6 +568,8 @@ class DashboardState:
     status: str = "Ready"
     status_kind: str = "normal"
     applications: tuple[str, ...] = field(default_factory=tuple)
+    # The apps "Assemble distribution" ships; None means every installed one.
+    distribution_apps: tuple[str, ...] | None = None
     profile_name: str | None = None
     profile_settings: dict = field(default_factory=dict)
     overrides: dict = field(default_factory=dict)
@@ -1151,7 +1157,7 @@ def dashboard_run_badge(
     if not state.history or action not in PROGRESS_ACTIONS:
         return None
     identity = None
-    if action in ("build", "build_app", "test"):
+    if action in ("build", "build_app", "dist", "test"):
         try:
             identity = build_identity(dashboard_settings(state))
         except (BuildError, OSError):
@@ -1291,7 +1297,7 @@ def render_dashboard(
                 segments += [(" " * gap, ""), *suffix]
                 previous_x = prefix_width + gap + 2
         else:
-            if key in ("play", "launch", "build_app") and not state.wasm_enabled:
+            if key in ("play", "launch", "build_app", "dist") and not state.wasm_enabled:
                 description = "needs the WASM runtime setting"
             elif key == "play":
                 description = f"build, then run {state.application_label}"
@@ -1579,6 +1585,11 @@ def dashboard_action_arguments(
             "--target",
             WASM_RUNTIME_APPLICATION,
         ]
+    if action == "dist":
+        chosen = state.distribution_apps
+        subset = chosen is not None and set(chosen) != set(state.applications)
+        return ["dist", *dashboard_common_arguments(state),
+                *(["--apps", ",".join(chosen)] if subset and chosen else [])]
     if action == "test":
         return ["test", *dashboard_common_arguments(state)]
     if action == "launch":
@@ -2404,6 +2415,8 @@ def execute_dashboard_action(
 ) -> None:
     if action == "tools":
         run_development_tools(state, terminal)
+        return
+    if action == "dist" and not run_distribution_picker(state, terminal):
         return
     if action == "test":
         execute_toolbox_run(state, terminal, None, True)
@@ -3326,6 +3339,41 @@ def run_profile_picker(state: DashboardState, terminal: DashboardTerminal) -> No
                 message = f"Saved current settings as {name}."
         except BuildError as error:
             message = str(error)
+
+
+def run_distribution_picker(state: DashboardState, terminal: DashboardTerminal) -> bool:
+    """Choose which apps the distribution ships; True to assemble, False to go back.
+
+    The choice is kept for the session, so the next distribution starts from it.
+    Every app is selected the first time.
+    """
+    chosen = list(state.distribution_apps if state.distribution_apps is not None
+                  else state.applications)
+    view, message = ToolboxView(), "Enter toggles an app. Each ships as apps/<name>.ilpk with a shortcut."
+    while True:
+        rows = [action_row("back", "Back"), action_row("assemble", "Assemble distribution")]
+        for name in state.applications:
+            mark = "[x]" if name in chosen else "[ ]"
+            rows.append(ToolboxRow(
+                f"toggle:{name}", f"{mark} {APP_LABELS.get(name, name)} ({name})",
+                (f"{'Ships' if name in chosen else 'Left out'}: apps/{name}.ilpk",),
+                action=True, tone="ok" if name in chosen else "dim"))
+        action = choose_toolbox("Distribution apps", rows, view, terminal, message)
+        if action == "back":
+            return False
+        if action == "assemble":
+            if not chosen:
+                message = "Select at least one app."
+                continue
+            state.distribution_apps = tuple(name for name in state.applications if name in chosen)
+            return True
+        if action.startswith("toggle:"):
+            name = action.removeprefix("toggle:")
+            if name in chosen:
+                chosen.remove(name)
+            else:
+                chosen.append(name)
+            message = ""
 
 
 def available_artifacts(settings: dict, history: list[dict]) -> list[tuple[str, Path]]:
@@ -5038,7 +5086,14 @@ def create_parser(
         "dist",
         parents=[common],
         help="build and assemble a distribution: the runtime with engine.ilpk "
-        "and apps/<name>.ilpk in <build>/dist/<config>",
+        "and apps/<name>.ilpk in <build>/dist/<config>, with a shortcut per app "
+        "on Windows",
+    ).add_argument(
+        "--apps",
+        nargs="+",
+        metavar="NAME",
+        help="ship only these applications (space or comma separated, e.g. "
+        "game,illed); default: every staged application",
     )
 
     test_parser = subparsers.add_parser(
@@ -5609,6 +5664,28 @@ def run_build(arguments: argparse.Namespace) -> None:
     print_build_summary(arguments, "Build succeeded", started)
 
 
+def distribution_app_names(requested: Sequence[str] | None) -> tuple[str, ...]:
+    """The applications `dist --apps` names, validated; empty means all of them.
+
+    Names may be space or comma separated. Each must be one the runtime build
+    stages (an unknown one would silently ship a distribution without it).
+    """
+    names: list[str] = []
+    for item in requested or ():
+        for name in item.split(","):
+            name = name.strip()
+            if name and name not in names:
+                names.append(name)
+    known = tuple(app.name for app in installed_apps())
+    unknown = [name for name in names if known and name not in known]
+    if unknown:
+        raise BuildError(
+            f"Unknown application(s) for --apps: {', '.join(unknown)} "
+            f"(available: {', '.join(known)})"
+        )
+    return tuple(names)
+
+
 def run_distribution(arguments: argparse.Namespace) -> None:
     """Build the selected configuration and assemble its distribution (D-E38).
 
@@ -5616,10 +5693,25 @@ def run_distribution(arguments: argparse.Namespace) -> None:
     the runtime with engine.ilpk and apps/<name>.ilpk, no loose assets.
     """
     started = time.monotonic()
+    chosen = distribution_app_names(arguments.apps)
     runner = CommandRunner(arguments.dry_run)
     cmake = configure(arguments, runner)
     runner.run(build_command(arguments, cmake))
-    runner.run(build_command(arguments, cmake, "IllumoDistribution"))
+    # The distribution script reads its selection from the environment, which
+    # the build tool passes on to it; no selection ships every app.
+    previous = os.environ.get(DISTRIBUTION_APPS_VARIABLE)
+    if chosen:
+        os.environ[DISTRIBUTION_APPS_VARIABLE] = ",".join(chosen)
+        print(f"Distribution apps: {', '.join(chosen)}", flush=True)
+    else:
+        os.environ.pop(DISTRIBUTION_APPS_VARIABLE, None)
+    try:
+        runner.run(build_command(arguments, cmake, "IllumoDistribution"))
+    finally:
+        if previous is None:
+            os.environ.pop(DISTRIBUTION_APPS_VARIABLE, None)
+        else:
+            os.environ[DISTRIBUTION_APPS_VARIABLE] = previous
     build_directory = resolve_build_directory(arguments.build_dir)
     print_build_summary(arguments, "Distribution assembled", started)
     print(f"Distribution: {build_directory / 'dist' / arguments.config}")
