@@ -420,10 +420,14 @@ program, so console keys come first, and dispatches after it, so it draws on
 top (D-B1, D-E9). Start runs the program first, then the overlay: a program
 that fails to start fails the launch, and an overlay that fails to start is
 dropped. Stop runs the overlay, then the program. Startup failures are
-logged. An interactive launch then plays the engine splash
-(`GuiEngineSplash`, D-UI14): the program is started but neither updated nor
-drawn until the splash ends or a key or click skips it, so no program
-triggers or waits for it; capture and benchmark runs have no splash.
+logged. An interactive launch plays the engine splash (`GuiEngineSplash`,
+D-UI14): it begins first, the program's modules compile into the
+compiled-code cache behind it (`WasmProgram::prepare`, D-E40), and the program
+starts between frames once its module is ready, the last splash frame holding
+if the compile outlasts the splash. The program is neither updated nor drawn
+until the splash ends or a key or click skips it, so no program triggers or
+waits for it; capture and benchmark runs have no splash and start the program
+directly.
 
 **Guest program.** A product derives from `GuestProgram`
 (`IllumoGuest/Include/IllumoGuest/Program.h`, in `IllumoGuestContent`). It
@@ -687,7 +691,14 @@ multi-state byte values. Finite topology is centered on the origin in whole
 chunks, wraps both axes during reads, writes, and neighbor evaluation, and
 rejects mixed zero/positive dimensions. Presentation clips to the centered
 canonical rectangle and leaves camera space outside it background-colored;
-only neighbor evaluation wraps across the rectangle's opposite edges.
+only neighbor evaluation wraps across the rectangle's opposite edges. Tori
+advance Moore-count rules on the same changed-chunk frontier, complete halo,
+worker-pool and memo paths as the infinite canvas: a canonical chunk's
+neighbour wraps by at most one period (`neighborChunk`), each of a target's
+nine halo chunks resolves on its own, and the target address set absorbs the
+duplicates of a small torus, so even a 1x1 torus is exact. Tori skip the
+cell-candidate paths; the per-cell toroidal path remains the test reference
+(D-P35).
 
 Negative chunk coordinates use centralized floor division/modulo. Chunk output
 is sorted by `(chunkY, chunkX)` for deterministic saves and tests. The view
@@ -906,7 +917,11 @@ neither count nor accept births. The correctness-first sparse evaluator
 expands each occupied chunk by the necessary chunk radius, copies each target
 chunk plus its margin into a canonical halo window once, counts the state named
 by `RuleSet::getExtendedCountedState` (state 0 for Larger than Life), and
-commits through the existing transactional output/change journal. It does not
+commits through the existing transactional output/change journal. When every
+state counts the same state and each shape row is one contiguous run (Larger
+than Life), it counts from row prefix sums of the window, one subtraction per
+shape row; cell-dependent counted states (long-range cyclic) keep the per-tap
+loop (D-P36). It does not
 enter the radius-one candidate, halo, or memo fast paths (D-GC6), but its
 target chunks share the worker pool (D-GC10). Shipped parameters match Golly's documented Bosco/Bugs,
 Bugsmovie, and Globe examples.
@@ -950,8 +965,10 @@ clip(level + delta, 0, n-1) rounded to nearest, matching Lenia's P-quantized
 update. Growth that would raise empty space at zero potential is rejected so
 the infinite canvas stays sparse. The sparse evaluator expands source
 chunks by one chunk, reads each target through a radius-R halo window of
-levels, and publishes through the same transactional journal as the other
-correctness kernels; lanes partition it like any radius-16 rule. Species
+levels, adds each tap's weight times 16 contiguous levels into a row of sums
+(a 32-bit accumulator when the plan proves the largest potential fits, else
+64-bit; D-P36), and publishes through the same transactional journal as the
+other correctness kernels; lanes partition it like any radius-16 rule. Species
 starters use `lenia_rle` (Lenia's RLE, values 0..255 scaled onto levels);
 parameters and cells come from Chan's MIT-licensed `animals.json` (D-GC9).
 
@@ -1627,6 +1644,17 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   instrumentation and are bounded by their per-call deadline; mods stay
   fuel-metered. `--fuel n` forces metering for one launch.
 
+- **Compiled code** (D-E40): `WasmModuleCache`, carried by
+  `WasmLimits::compiledCode`, keeps the isolated compiler's artifacts keyed by
+  the module's SHA-256 and the engine options mask. Every store of a launch
+  (guest, mod, each lane) shares it, so concurrent loads of one module compile
+  once; the runtime stores entries in `cache/wasm` beside itself (header with
+  the Wasmtime version, module digest and artifact checksum; `AtomicFile`
+  writes; newest 16 kept). A damaged or stale entry is a miss, an entry
+  Wasmtime refuses is discarded and rebuilt once, and an unwritable directory
+  keeps the cache in memory. A cached artifact skips the compiler and its
+  limits; the directory is trusted like the runtime beside it.
+
 - **Host** (`Illumo/Source/Wasm`): `WasmProgram`, the runtime's one program
   (D-E31), run by `RuntimeShell` (§5.3, §5.4), snapshots input, pumps
   generic services (textures, fonts, files, dialogs, clipboard, display and
@@ -2182,6 +2210,8 @@ disabled.
 | **D-P31** | Probe duplicate candidate enrollments before growth checks and construct sparse results directly in recycled nodes. | 2026-08-16 |
 | **D-P32** | Default to configurable synchronized presentation and distinguish paced swap cadence from CPU submissions. | 2026-08-16 |
 | **D-P34** | Pace frames on a high-resolution waitable timer (sleep to 1 ms before the deadline, then spin) instead of 1 ms `sleep_for` steps that depend on the process timer resolution. | 2026-09-28 |
+| **D-P35** | Finite tori advance Moore-count rules on the frontier, complete halo, worker-pool and memo paths with wrapped neighbour chunks (`neighborChunk`); the per-cell toroidal path remains the test reference. | 2026-10-03 |
+| **D-P36** | Larger-than-Life counts from row prefix sums over contiguous shape rows; Lenia accumulates taps over contiguous target rows with a proven 32-bit or 64-bit exact accumulator. | 2026-10-03 |
 
 ### 6.4 Engine shape (D-E\*, D-C\*, D-F\*)
 
@@ -2225,6 +2255,7 @@ disabled.
 | **D-E37** | IllEd editing wave 3 (2026-10-01, `docs/illed-editing-wave3-plan.md`): editor-only scene data rides in an IllEd-owned extension instead of the strict `editor` block (locks in `illed.view`, through `SceneExtensionList`), so the format stays at 2.0; view-only state that must not save (isolation) goes through `SceneInstance::setViewHidden`, which changes the graph and never the document or its revision; picking takes a skip set. Viewport context menu, hover, Alt-drag copies, Drop to Floor, nudges, grouping, typed arithmetic, field menus, folding and a color picker are IllEd-local. |
 | **D-E38** | A distribution (`python build.py dist`) ships the engine's `Assets/` and `Shader/` as `engine.ilpk` and each application as `apps/<name>.ilpk`; the runtime installs `EnginePackageSource` as `DefaultAssetSource()` before the engine starts and mounts the archive at `/engine`. Loose development folders win. |
 | **D-E39** | An application package's root `app.ico` replaces the engine's window icon (title bar, taskbar, Alt+Tab): `RuntimeApplication` reads it through `/app`, `RuntimeShell::start` decodes it with `WindowIcon` (PNG and 32-bit bitmap entries) and calls `IRenderWindow::setIcon` (`glfwSetWindowIcon`). A missing or unusable file leaves the engine icon; the executable's own Explorer icon stays Illumo's. CSim ships its brand kit's `csim.ico` this way. |
+| **D-E40** | `WasmModuleCache` keeps compiled guest code keyed by module SHA-256 and engine options: shared by every store of a launch (one compile for all lanes) and stored in `cache/wasm` beside the runtime (checksummed, written atomically, newest 16 kept, damaged or refused entries rebuilt). Interactive launches compile behind the splash (`WasmProgram::prepare`) and start the program once its module is ready. |
 | **D-C1** | Canvas dual role intentional until scale forces split. |
 | **D-C2** | **Refines D-C1:** extract `CellGrid` domain; `Canvas` extends it for view/GPU. |
 | **D-C6** | Configurable infinite or finite toroidal sparse topology, Release F1 configuration, and topology persistence (current sparse save v4; D-GC4). |

@@ -51,8 +51,11 @@ struct RuntimeShellOptions
 // the engine's input and hotkeys, the debug overlay (debug-tool builds), the
 // program, then render, where the program dispatches before the overlay. The
 // shell also owns the --capture and --bench-frames runs, and the engine
-// splash: every app opens behind it, started but neither updated nor drawn
-// until the splash ends, so no program triggers or waits for it.
+// splash: every app opens behind it, neither updated nor drawn until the
+// splash ends, so no program triggers or waits for it. The program's modules
+// compile into the cache while the splash plays and it starts, between
+// frames, once its module is ready; the last splash frame holds if the
+// compile outlasts the splash.
 class RuntimeShell
 {
 public:
@@ -67,8 +70,9 @@ public:
   RuntimeShell(RuntimeShell&&) = delete;
   RuntimeShell& operator=(RuntimeShell&&) = delete;
 
-  // Starts the program, then the debug overlay. A program that fails to
-  // start is reported (to a capture or benchmark caller too) and stopped.
+  // Starts the program, then the debug overlay; with a splash, begins it and
+  // defers the program to frame(). A program that fails to start is
+  // reported (to a capture or benchmark caller too) and stopped.
   bool start();
   void frame(double dt);
   // True once the window asked to close and the program agreed, or a capture
@@ -86,6 +90,9 @@ public:
   WasmProgram& program() { return *m_program; }
 
 private:
+  // Starts the program and, in debug-tool builds, the overlay. A failure is
+  // reported (capture/bench JSON, exit code) and leaves the shell stopped.
+  bool startProgram();
   void updateSplash(double dt);
   void endSplash();
   void updateProgram(double dt);
@@ -113,6 +120,8 @@ private:
   std::unique_ptr<GuiEngineSplash> m_splash;
   RuntimeShellOptions m_options;
   bool m_started = false;
+  // The splash is up and the program waits for its compiled module.
+  bool m_programPending = false;
   int m_exitCode = 0;
   std::uint64_t m_frames = 0;
   bool m_hookInstalled = false;

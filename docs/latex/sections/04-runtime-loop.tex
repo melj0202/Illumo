@@ -140,11 +140,16 @@ then the program. Whoever owns a program or a \symbolref{SceneDirector}
 destroys it before \texttt{Illumo::shutdown}, because scene content holds
 engine assets.
 
-An interactive launch then plays the engine splash, \texttt{GuiEngineSplash}
+An interactive launch plays the engine splash, \texttt{GuiEngineSplash}
 (D-UI14): the neon Illumo logo lights, holds and fades over the brand's dark
-ground. The program is already started but is neither updated nor drawn until
-the splash's last frame has shown, so its first scene enters afterwards and no
-program triggers or waits for the splash. Any key except Grave, or a fresh
+ground. The splash begins first while \texttt{WasmProgram::prepare} compiles
+the program's modules into the compiled-code cache on a thread (D-E40); the
+program starts between frames once its module is ready, and the last splash
+frame holds if the compile outlasts the splash. The program is neither updated
+nor drawn until the splash's last frame has shown, so its first scene enters
+afterwards and no program triggers or waits for the splash. A later launch
+finds the compiled code in \pathref{cache/wasm} beside the runtime and skips
+the compiler. Any key except Grave, or a fresh
 click, skips it; the console stays usable, and a close during the splash ends
 the run without asking the program. Capture and benchmark runs have no splash.
 

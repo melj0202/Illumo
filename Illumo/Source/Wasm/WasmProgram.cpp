@@ -111,7 +111,8 @@ WasmProgram::WasmProgram(std::vector<std::byte> module,
                          std::vector<std::byte> mod,
                          std::vector<std::byte> worker,
                          WasmFileRoots files)
-  : m_module(std::move(module))
+  : m_limits(limits)
+  , m_module(std::move(module))
   , m_startup(std::move(startup))
   , m_modModule(std::move(mod))
   , m_workerModule(std::move(worker))
@@ -126,6 +127,39 @@ WasmProgram::setWorkerLimits(const WasmLimits& limits, std::uint32_t lanes)
 {
   m_workerLimits = limits;
   m_workerLanes = lanes == 0u ? 1u : lanes;
+}
+
+void
+WasmProgram::prepare()
+{
+  if (m_preparing.joinable()) {
+    return;
+  }
+  if (m_limits.compiledCode == nullptr) {
+    m_mainPrepared.store(true);
+    return;
+  }
+  // The thread compiles its own copies: start() may consume the members.
+  m_preparing = std::jthread([guest = m_module,
+                              worker = m_workerModule,
+                              guestLimits = m_limits,
+                              workerLimits = m_workerLimits,
+                              prepared = &m_mainPrepared]() {
+    ILLUMO_PROFILE_THREAD("Wasm prepare");
+    std::string ignored;
+    // A failure is reported by the load that follows.
+    WasmInstance::prepare(guest, guestLimits, ignored);
+    prepared->store(true);
+    if (!worker.empty() && workerLimits.compiledCode != nullptr) {
+      WasmInstance::prepare(worker, workerLimits, ignored);
+    }
+  });
+}
+
+bool
+WasmProgram::prepared() const
+{
+  return m_mainPrepared.load();
 }
 
 bool
@@ -283,6 +317,7 @@ WasmProgram::start(IllumoContext& host)
     modLimits.meterFuel = true;
     modLimits.fuelPerCall = 1000000;
     modLimits.deadlineMilliseconds = 25;
+    modLimits.compiledCode = m_limits.compiledCode;
     m_mod = std::make_unique<WasmGuest>(modLimits, 65536 + 256);
     if (!m_mod->start(m_modModule,
                       GuestRole::Mod,

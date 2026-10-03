@@ -1,7 +1,9 @@
 #include "WasmCompiler.h"
 #include "WasmEngineConfig.h"
 #include "WasmProfile.h"
+#include <Illumo/Foundation/Profile.h>
 #include <Illumo/Wasm/WasmInstance.h>
+#include <Illumo/Wasm/WasmModuleCache.h>
 
 #include <wasmtime.h>
 
@@ -293,6 +295,38 @@ WasmInstance::WasmInstance(WasmLimits limits)
 {
 }
 
+bool
+WasmInstance::prepare(std::span<const std::byte> module,
+                      const WasmLimits& limits,
+                      std::string& error)
+{
+  ILLUMO_PROFILE_ZONE("WasmInstance.prepare");
+  if (limits.compiledCode == nullptr || module.empty() ||
+      module.size() > limits.moduleBytes) {
+    error = "Nothing to prepare";
+    return false;
+  }
+  const std::uint32_t optionsMask =
+    encodeWasmEngineOptions(hostEngineOptions(limits));
+  WasmModuleCache::Artifact artifact;
+  WasmModuleCache::Source source = WasmModuleCache::Source::Compiled;
+  return limits.compiledCode->acquire(
+    module,
+    optionsMask,
+    [&module, &limits, optionsMask](std::vector<std::byte>& output,
+                                    std::string& reason) {
+      return compileWasmIsolated(module,
+                                 limits.compilerMemoryBytes,
+                                 limits.compilerDeadlineMilliseconds,
+                                 optionsMask,
+                                 output,
+                                 reason);
+    },
+    artifact,
+    source,
+    error);
+}
+
 WasmInstance::~WasmInstance() = default;
 
 bool
@@ -310,15 +344,33 @@ WasmInstance::load(std::span<const std::byte> bytes)
     return state.fail("Invalid guest module size or execution limits");
   }
   const WasmEngineOptions options = hostEngineOptions(state.limits);
-  std::vector<std::byte> compiled;
+  const std::uint32_t optionsMask = encodeWasmEngineOptions(options);
+  const WasmModuleCache::Compiler compile =
+    [&bytes, &state, optionsMask](std::vector<std::byte>& artifact,
+                                  std::string& error) {
+      return compileWasmIsolated(bytes,
+                                 state.limits.compilerMemoryBytes,
+                                 state.limits.compilerDeadlineMilliseconds,
+                                 optionsMask,
+                                 artifact,
+                                 error);
+    };
+  WasmModuleCache* cache = state.limits.compiledCode.get();
+  WasmModuleCache::Artifact compiled;
+  WasmModuleCache::Source source = WasmModuleCache::Source::Compiled;
   std::string compileError;
-  if (!compileWasmIsolated(bytes,
-                           state.limits.compilerMemoryBytes,
-                           state.limits.compilerDeadlineMilliseconds,
-                           encodeWasmEngineOptions(options),
-                           compiled,
-                           compileError)) {
-    return state.fail(std::move(compileError));
+  if (cache != nullptr) {
+    if (!cache->acquire(
+          bytes, optionsMask, compile, compiled, source, compileError)) {
+      return state.fail(std::move(compileError));
+    }
+  } else {
+    std::vector<std::byte> artifact;
+    if (!compile(artifact, compileError)) {
+      return state.fail(std::move(compileError));
+    }
+    compiled =
+      std::make_shared<const std::vector<std::byte>>(std::move(artifact));
   }
   state.engine = createWasmEngine(options);
   if (state.engine == nullptr) {
@@ -339,11 +391,27 @@ WasmInstance::load(std::span<const std::byte> bytes)
     }
   });
   wasmtime_module_t* module = nullptr;
-  if (!state.check(wasmtime_module_deserialize(
-        state.engine,
-        reinterpret_cast<const std::uint8_t*>(compiled.data()),
-        compiled.size(),
-        &module))) {
+  wasmtime_error_t* refused = wasmtime_module_deserialize(
+    state.engine,
+    reinterpret_cast<const std::uint8_t*>(compiled->data()),
+    compiled->size(),
+    &module);
+  if (refused != nullptr && cache != nullptr &&
+      source != WasmModuleCache::Source::Compiled) {
+    // A stored artifact this engine refuses is forgotten and rebuilt once.
+    wasmtime_error_delete(refused);
+    cache->discard(bytes, optionsMask);
+    if (!cache->acquire(
+          bytes, optionsMask, compile, compiled, source, compileError)) {
+      return state.fail(std::move(compileError));
+    }
+    refused = wasmtime_module_deserialize(
+      state.engine,
+      reinterpret_cast<const std::uint8_t*>(compiled->data()),
+      compiled->size(),
+      &module);
+  }
+  if (!state.check(refused)) {
     return false;
   }
   wasmtime_linker_t* linker = wasmtime_linker_new(state.engine);

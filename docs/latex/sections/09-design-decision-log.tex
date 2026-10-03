@@ -1575,6 +1575,55 @@ the change, are outside the pacer.\\
 \textbf{Refines:} D-P32 paced presentation.
 \end{decisionbox}
 
+\subsection*{D-P35 --- Finite tori on the halo paths}
+\begin{decisionbox}[title={D-P35 \quad 2026-10-03}]
+\textbf{Decision:} A finite torus advances Moore-count rules through the
+infinite canvas's changed-chunk frontier, complete halo evaluation, worker pool
+and chunk memo. Torus extents are whole chunks, so wrapping is a chunk-address
+step: \texttt{SparseCellGrid::neighborChunk} wraps a canonical chunk's
+neighbour by at most one period, and target enrollment and the nine halo
+lookups use it. Each halo position resolves on its own and the target address
+set absorbs duplicates, so a 1x1 torus (a chunk that neighbours itself) is
+exact. Tori skip the cell-candidate paths, whose sources link to targets by
+address. The per-cell toroidal path remains as the reference behind
+\texttt{setCellCandidateOverrideForTesting(1)}.\\
+\textbf{Why:} The 2026-10-03 performance sweep found tori bypassing every
+optimized path: each generation enrolled candidates with one hash probe per
+neighbour contribution, serially, and a settled torus still paid a full
+generation.\\
+\textbf{Consequences:} A 512x512 torus Life soup steps in 0.60\,ms instead of
+6.8\,ms (native Release), faster than the same soup on the infinite canvas
+(1.2\,ms, candidate path), and a settled torus evaluates no chunks.
+\texttt{IllumoGame.WorldTopology.HaloParity} compares every shipped Moore-count
+rule against the reference on six torus sizes from 1x1 to 9x7, with edits,
+pooled and serial evaluation, dual-grid stepping and a forced memo.\\
+\textbf{Refines:} D-P33; the finite topology of D-GC4.
+\end{decisionbox}
+
+\subsection*{D-P36 --- Extended and weighted kernels by rows}
+\begin{decisionbox}[title={D-P36 \quad 2026-10-03}]
+\textbf{Decision:} When every state counts the same state (Larger than Life)
+and each row of the neighbourhood shape is one contiguous run, the
+extended-range kernel builds row prefix sums of counted cells over the target's
+halo window and counts each cell with one subtraction per shape row; the
+centre is subtracted when the rule excludes it. Long-range cyclic rules, whose
+counted state depends on the cell, keep the per-tap loop. The weighted
+(Lenia) kernel loops over taps outside and over each 16-cell target row inside,
+reading contiguous levels; its accumulator is 32-bit when the plan proves
+the sum of the weights times the largest level fits, and 64-bit otherwise.\\
+\textbf{Why:} The sweep found both kernels testing or gathering every tap per
+cell: 120--440 compares for the shipped Larger-than-Life radii and 530--700
+gathered 64-bit multiply-adds for Lenia.\\
+\textbf{Consequences:} Results are unchanged bit for bit. On a 192x192 soup
+(native Release, one worker) Bugsmovie steps in 0.66 instead of 8.1\,ms, Bosco
+in 0.67 instead of 3.4\,ms and Orbium in 5.8 instead of 17.8\,ms; the row loops
+vectorize with the guests' SIMD128. \texttt{IllumoGame.Rules.ExtendedKernelExactness}
+checks every shipped extended-range rule and 48 synthetic shape, radius and
+centre combinations against the dense reference, and both accumulator widths
+against direct per-cell evaluation.\\
+\textbf{Refines:} D-GC6, D-GC9, D-GC10.
+\end{decisionbox}
+
 %----------------------------------------------------------------------------
 \subsection*{D-C6 --- Configurable infinite or finite toroidal world}
 \begin{decisionbox}[title={D-C6 \quad 2026-08-17}]
@@ -3764,6 +3813,38 @@ panel windows keep the engine icon. Packing needs nothing new, as every file of
 the package directory goes into the \texttt{.ilpk}. CSim stages
 \path{docs/brand/csim/ico/csim.ico} as its \texttt{app.ico}.\\
 \textbf{Extends:} D-UI14, D-E38
+\end{decisionbox}
+
+\subsection*{D-E40 --- Compiled guest code is cached}
+\begin{decisionbox}[title={D-E40 \quad 2026-10-03}]
+\textbf{Decision:} \symbolref{WasmModuleCache} keeps the isolated compiler's
+artifacts. \texttt{WasmLimits::compiledCode} carries it to every store of a
+launch: the guest, its mod and each simulation lane. A module is keyed by its
+SHA-256 (Foundation \texttt{Sha256}) and the engine options; concurrent
+requests share one compile. The runtime gives it \pathref{cache/wasm} beside
+itself, where an entry (magic, format, options, Wasmtime version, module
+digest, artifact size and checksum, artifact) is written through
+\texttt{AtomicFile} and the newest 16 are kept; an entry that is damaged,
+stale or refused by Wasmtime is rebuilt, and an unwritable directory leaves
+the cache in memory. Interactive launches compile behind the splash:
+\texttt{RuntimeShell} begins it, \texttt{WasmProgram::prepare} compiles the
+guest and worker modules on a thread, and the program starts between frames
+once its module is ready (the last splash frame holds if the compile outlasts
+it).\\
+\textbf{Why:} The 2026-10-03 performance sweep found every launch running a
+full Cranelift compile before the splash, and each of up to eight lanes
+compiling the same worker module in its own process.\\
+\textbf{Consequences:} A two-frame game benchmark launch took about 1.7\,s;
+it takes 1.2\,s on a cold cache (one worker compile instead of eight) and
+0.78\,s warm. Child processes started through the launcher share the
+directory. A cached artifact skips the compiler and its limits; it is reused
+only for byte-identical modules under identical options, and the directory
+is trusted like the runtime beside it. Artifacts stay in memory for the
+launch (about 11\,MB for the game and its worker). Native callers that pass
+no cache compile as before. \texttt{Illumo.Wasm.ModuleCache} and
+\texttt{Illumo.Wasm.RuntimeShellSplash} cover sharing, reuse, damage, refusal,
+pruning and the deferred start.\\
+\textbf{Refines:} D-E15 engine modes, D-E31 runtime shell, D-UI14 splash.
 \end{decisionbox}
 
 \subsection*{D-F2 --- Calendar build versions}

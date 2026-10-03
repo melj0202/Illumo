@@ -9,6 +9,8 @@
 #include <Illumo/Wasm/WasmGuest.h>
 #include <Illumo/Wasm/WasmPanelWindows.h>
 #include <Illumo/Wasm/WasmRenderServices.h>
+#include <atomic>
+#include <thread>
 
 // Rolling host-side timings of one Update: each guest exchange plus frame
 // acceptance. Diagnostics only; read through stats() or `wasm_stats`.
@@ -72,6 +74,13 @@ public:
   // Off by default (tests, capture, benchmarks): the request then only
   // closes.
   void setRestartAllowed(bool allowed) { m_restartAllowed = allowed; }
+  // Compiles the guest and worker modules into the compiled-code cache on a
+  // worker thread, so the caller can animate (the splash) meanwhile; start()
+  // then loads without compiling. Call after setWorkerLimits. prepared() is
+  // true once the guest module is ready (at once without a cache); start()
+  // is correct either way.
+  void prepare();
+  bool prepared() const;
   // False when the services are incomplete or the guest fails to start;
   // error() says why.
   bool start(IllumoContext& context);
@@ -94,6 +103,8 @@ private:
   WasmFrameStats m_stats;
   WasmLimits m_workerLimits = WasmGameServices::defaultWorkerLimits();
   std::uint32_t m_workerLanes = 1u;
+  // The guest's limits; their compiled-code cache is shared with the mod.
+  WasmLimits m_limits;
   std::vector<std::byte> m_module;
   std::vector<std::byte> m_startup;
   std::vector<std::byte> m_modModule;
@@ -120,4 +131,8 @@ private:
   std::vector<std::byte> m_modReply;
   std::string m_error;
   std::string m_modError;
+  // prepare(): set once the guest module is compiled into the cache. Last,
+  // so the compiling thread is joined before anything else is destroyed.
+  std::atomic<bool> m_mainPrepared{ false };
+  std::jthread m_preparing;
 };

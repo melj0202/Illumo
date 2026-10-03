@@ -252,7 +252,8 @@ public:
   static void setWorkerOverrideForTesting(int workers);
   static int getWorkerOverrideForTesting();
   // Test-only override: -1 forces full chunks, 0 selects adaptively, and 1
-  // forces cell candidates.
+  // forces cell candidates. A finite torus always evaluates full chunks
+  // except under 1, which selects its cell-candidate reference path.
   static void setCellCandidateOverrideForTesting(int mode);
   static int getCellCandidateOverrideForTesting();
   static void setChunkNodeReuseOverrideForTesting(bool enabled);
@@ -411,6 +412,14 @@ private:
     ExtendedRange,
     WeightedKernel
   };
+  // One row of an extended-range shape: offsets firstX..lastX at offsetY,
+  // centre included.
+  struct ExtendedSpan
+  {
+    int offsetY = 0;
+    int firstX = 0;
+    int lastX = 0;
+  };
   struct IsolatedKernelPlan
   {
     IsolatedKernel kind = IsolatedKernel::StateHistogram;
@@ -420,11 +429,26 @@ private:
     std::vector<std::ptrdiff_t> offsets;
     std::vector<std::uint32_t> weights;
     std::array<std::uint32_t, 256> levels{};
+    // Extended range: when every state counts the same state and each shape
+    // row is contiguous, counts come from row prefix sums over these spans.
+    bool prefixCounts = false;
+    bool includeCenter = false;
+    unsigned char countedState = 0u;
+    std::vector<ExtendedSpan> spans;
+    // Weighted kernel: tap offsets in window coordinates, and whether the
+    // largest possible potential fits a 32-bit accumulator.
+    std::vector<int> tapX;
+    std::vector<int> tapY;
+    bool narrowPotential = false;
   };
   struct IsolatedKernelScratch
   {
     std::vector<unsigned char> window;
     std::vector<std::uint32_t> levels;
+    // Extended range: per window row, counted cells left of each column.
+    std::vector<std::uint16_t> rowPrefix;
+    std::array<std::uint32_t, kChunkCellCount> narrowSums{};
+    std::array<std::uint64_t, kChunkCellCount> wideSums{};
   };
 
   static constexpr std::size_t kParallelTargetThreshold = 32u;
@@ -634,7 +658,13 @@ private:
                              const ChunkAddress& target,
                              int radius,
                              std::vector<unsigned char>* window);
+  // Reference torus generation by per-cell candidate enrollment; production
+  // tori use the halo paths with wrapped neighbour chunks instead.
   bool advanceToroidal(const RuleSet& ruleSet);
+  // The chunk one step away from a canonical chunk, wrapped on a torus.
+  ChunkAddress neighborChunk(const ChunkAddress& canonical,
+                             int offsetX,
+                             int offsetY) const;
   bool advanceElementarySpaceTime(const RuleSet& ruleSet);
   bool advanceElementaryFromRow(
     const RuleSet& ruleSet,

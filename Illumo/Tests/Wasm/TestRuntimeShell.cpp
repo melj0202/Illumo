@@ -7,7 +7,9 @@
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Wasm/RuntimeShell.h>
+#include <Illumo/Wasm/WasmModuleCache.h>
 #include <Illumo/Wasm/WasmProgram.h>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -15,6 +17,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 static std::vector<std::byte>
@@ -161,8 +164,11 @@ testRuntimeShellSplash()
       testTrue(counters,
                shell.start() && shell.splashing(),
                "an interactive launch opens on the splash");
+      // Without a cache the module is ready at once: the first frame starts
+      // the program (whose start runs its first update).
+      shell.frame(1.0 / 60.0);
       const std::uint64_t started = shell.program().stats().updates;
-      for (int frame = 0; frame < 30; ++frame) {
+      for (int frame = 1; frame < 30; ++frame) {
         shell.frame(1.0 / 60.0);
       }
       testTrue(counters,
@@ -181,6 +187,43 @@ testRuntimeShellSplash()
                  shell.program().stats().updates == started + 2 &&
                  shell.program().error().empty(),
                "the program runs from the frame after the splash");
+      shell.stop();
+    }
+    {
+      // With a compiled-code cache the module compiles while the splash
+      // plays, and the program starts between frames once it is ready.
+      WasmLimits limits;
+      limits.compiledCode = std::make_shared<WasmModuleCache>();
+      RuntimeShell shell(
+        host,
+        nullptr,
+        std::make_unique<WasmProgram>(
+          readGuest(ILLUMO_PADDLE_GUEST), std::vector<std::byte>{}, limits),
+        options);
+      const bool deferred = shell.start() && shell.splashing() &&
+                            shell.program().frameCounters() == nullptr;
+      const std::chrono::steady_clock::time_point deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(30);
+      while (shell.program().frameCounters() == nullptr &&
+             std::chrono::steady_clock::now() < deadline) {
+        shell.frame(1.0 / 60.0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      // Started (its start ran the first update) but held by the splash.
+      const bool startedDuringSplash =
+        shell.program().frameCounters() != nullptr && shell.splashing() &&
+        shell.program().stats().updates == 1u;
+      host.context().inputManager->getKeyQueue().push(
+        { KeyCode::Space, InputAction::Press, 0 });
+      for (int frame = 0; frame < 4; ++frame) {
+        shell.frame(1.0 / 60.0);
+      }
+      testTrue(counters,
+               deferred && startedDuringSplash && !shell.splashing() &&
+                 shell.program().stats().updates > 1u &&
+                 shell.program().error().empty() &&
+                 limits.compiledCode->counters().compiles == 1u,
+               "the program compiles behind the splash and starts after it");
       shell.stop();
     }
     {

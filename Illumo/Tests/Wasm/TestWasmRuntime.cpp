@@ -1,5 +1,6 @@
 #include <Illumo/Wasm/WasmGuest.h>
 #include <Illumo/Wasm/WasmInstance.h>
+#include <Illumo/Wasm/WasmModuleCache.h>
 #include <Illumo/Wasm/WasmResourceTable.h>
 #include <Illumo/Wasm/WasmWorker.h>
 #include <IllumoGuest/Wire.h>
@@ -14,9 +15,11 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -99,6 +102,189 @@ deserializes(const std::vector<std::byte>& bytes,
   }
   wasm_engine_delete(engine);
   return accepted;
+}
+
+// Loads bytes into a fresh instance that shares cache, and checks it runs.
+static bool
+loadsThrough(const std::vector<std::byte>& bytes,
+             const std::shared_ptr<WasmModuleCache>& cache,
+             bool meterFuel = true,
+             std::uint32_t compilerDeadline = 30000u)
+{
+  WasmLimits limits;
+  limits.meterFuel = meterFuel;
+  limits.compilerDeadlineMilliseconds = compilerDeadline;
+  limits.compiledCode = cache;
+  WasmInstance instance(limits);
+  std::int32_t abi = 0;
+  return require(instance.load(bytes) &&
+                   instance.call("illumo_guest_describe", {}, abi),
+                 "Module loads through the compiled-code cache",
+                 &instance);
+}
+
+static std::size_t
+cacheFileCount(const std::filesystem::path& directory)
+{
+  std::size_t count = 0u;
+  std::error_code error;
+  for (std::filesystem::directory_iterator it(directory, error);
+       !error && it != std::filesystem::directory_iterator();
+       it.increment(error)) {
+    count += it->path().extension() == ".cwasm" ? 1u : 0u;
+  }
+  return count;
+}
+
+static bool
+moduleCache(const std::vector<std::byte>& bytes)
+{
+  const std::filesystem::path directory =
+    std::filesystem::temp_directory_path() /
+    ("illumo-module-cache-" +
+     std::to_string(
+       std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::error_code cleared;
+  std::filesystem::remove_all(directory, cleared);
+
+  // Lanes: concurrent loads of one module compile it once.
+  std::shared_ptr<WasmModuleCache> first =
+    std::make_shared<WasmModuleCache>(directory);
+  std::array<bool, 4> loaded{};
+  {
+    std::array<std::jthread, 4> lanes;
+    for (std::size_t lane = 0u; lane < lanes.size(); ++lane) {
+      lanes[lane] = std::jthread([&bytes, &first, &loaded, lane]() {
+        loaded[lane] = loadsThrough(bytes, first);
+      });
+    }
+  }
+  const WasmModuleCache::Counters shared = first->counters();
+  if (!require(loaded[0] && loaded[1] && loaded[2] && loaded[3] &&
+                 shared.compiles == 1u && shared.memoryHits == 3u &&
+                 shared.diskWrites == 1u && cacheFileCount(directory) == 1u,
+               "Concurrent loads share one compile and one stored entry")) {
+    return false;
+  }
+
+  // A later launch reads the stored artifact, skipping the compiler (and its
+  // limits).
+  std::shared_ptr<WasmModuleCache> relaunch =
+    std::make_shared<WasmModuleCache>(directory);
+  if (!require(loadsThrough(bytes, relaunch, true, 1u) &&
+                 relaunch->counters().diskHits == 1u &&
+                 relaunch->counters().compiles == 0u,
+               "A later launch loads the stored artifact without compiling")) {
+    return false;
+  }
+
+  // Other engine options are another entry.
+  if (!require(loadsThrough(bytes, relaunch, false) &&
+                 relaunch->counters().compiles == 1u &&
+                 cacheFileCount(directory) == 2u,
+               "Engine options key separate artifacts")) {
+    return false;
+  }
+
+  // A damaged entry is a miss and is rewritten.
+  std::filesystem::path entry;
+  for (std::filesystem::directory_iterator it(directory, cleared);
+       !cleared && it != std::filesystem::directory_iterator();
+       it.increment(cleared)) {
+    if (it->path().filename().string().ends_with(
+          "-" + std::to_string(wasmHostEngineOptions(true)) + ".cwasm")) {
+      entry = it->path();
+    }
+  }
+  {
+    // Invert one byte in the middle of the stored artifact.
+    const std::streamoff middle = static_cast<std::streamoff>(
+      std::filesystem::file_size(entry, cleared) / 2u);
+    std::fstream damage(entry, std::ios::binary | std::ios::in | std::ios::out);
+    damage.seekg(middle);
+    const int original = damage.get();
+    damage.seekp(middle);
+    damage.put(static_cast<char>(original ^ 0xff));
+  }
+  std::shared_ptr<WasmModuleCache> damaged =
+    std::make_shared<WasmModuleCache>(directory);
+  std::shared_ptr<WasmModuleCache> repaired =
+    std::make_shared<WasmModuleCache>(directory);
+  if (!require(
+        loadsThrough(bytes, damaged) && damaged->counters().diskRejects == 1u &&
+          damaged->counters().compiles == 1u && loadsThrough(bytes, repaired) &&
+          repaired->counters().diskHits == 1u,
+        "A damaged entry recompiles and is rewritten")) {
+    return false;
+  }
+
+  // An intact entry the engine refuses is discarded and rebuilt once.
+  std::shared_ptr<WasmModuleCache> poisoner =
+    std::make_shared<WasmModuleCache>(directory);
+  WasmModuleCache::Artifact poison;
+  WasmModuleCache::Source source = WasmModuleCache::Source::Compiled;
+  std::string error;
+  poisoner->discard(bytes, wasmHostEngineOptions(true));
+  const bool poisoned = poisoner->acquire(
+    bytes,
+    wasmHostEngineOptions(true),
+    [](std::vector<std::byte>& artifact, std::string&) {
+      artifact.assign(4096u, std::byte{ 0x42 });
+      return true;
+    },
+    poison,
+    source,
+    error);
+  std::shared_ptr<WasmModuleCache> refused =
+    std::make_shared<WasmModuleCache>(directory);
+  if (!require(poisoned && loadsThrough(bytes, refused) &&
+                 refused->counters().diskHits == 1u &&
+                 refused->counters().compiles == 1u,
+               "A stored artifact the engine refuses is rebuilt")) {
+    return false;
+  }
+
+  // A failed compile is reported to every waiter and not remembered.
+  std::shared_ptr<WasmModuleCache> memoryOnly =
+    std::make_shared<WasmModuleCache>();
+  WasmModuleCache::Artifact artifact;
+  const bool failed = memoryOnly->acquire(
+    bytes,
+    7u,
+    [](std::vector<std::byte>&, std::string& reason) {
+      reason = "refused";
+      return false;
+    },
+    artifact,
+    source,
+    error);
+  if (!require(!failed && error == "refused" &&
+                 memoryOnly->acquire(
+                   bytes,
+                   7u,
+                   [](std::vector<std::byte>& output, std::string&) {
+                     output.assign(16u, std::byte{ 1 });
+                     return true;
+                   },
+                   artifact,
+                   source,
+                   error) &&
+                 source == WasmModuleCache::Source::Compiled &&
+                 memoryOnly->directory().empty(),
+               "Compile failures are not remembered")) {
+    return false;
+  }
+
+  // The directory keeps only the newest entries.
+  std::shared_ptr<WasmModuleCache> pruned =
+    std::make_shared<WasmModuleCache>(directory, 1u);
+  const bool prunedLoad = loadsThrough(bytes, pruned, true);
+  pruned->discard(bytes, wasmHostEngineOptions(true));
+  const bool rewritten = loadsThrough(bytes, pruned, true);
+  const std::size_t remaining = cacheFileCount(directory);
+  std::filesystem::remove_all(directory, cleared);
+  return require(prunedLoad && rewritten && remaining == 1u,
+                 "Writing an entry prunes the directory to its limit");
 }
 
 static bool
@@ -259,6 +445,9 @@ run(const std::string& name, const std::vector<std::byte>& bytes)
 {
   if (name == "EngineModes") {
     return engineModes(bytes);
+  }
+  if (name == "ModuleCache") {
+    return moduleCache(bytes);
   }
   if (name == "Resources") {
     WasmResourceTable<int, GuestResourceKind::Texture> first(1, 1);
@@ -586,11 +775,11 @@ run(const std::string& name, const std::vector<std::byte>& bytes)
 int
 main(int argc, char** argv)
 {
-  constexpr std::array<const char*, 15> kCases{
-    "Compatibility", "Isolation",      "Fuel",          "Epoch",
-    "Memory",        "DeniedImports",  "InvalidModule", "Worker",
-    "Wire",          "CompilerLimits", "Lifecycle",     "Protocol",
-    "Resources",     "EngineModes",    "ProfileImports"
+  constexpr std::array<const char*, 16> kCases{
+    "Compatibility", "Isolation",      "Fuel",           "Epoch",
+    "Memory",        "DeniedImports",  "InvalidModule",  "Worker",
+    "Wire",          "CompilerLimits", "Lifecycle",      "Protocol",
+    "Resources",     "EngineModes",    "ProfileImports", "ModuleCache"
   };
   if (argc == 2 && std::string(argv[1]) == "--list") {
     for (const char* name : kCases) {

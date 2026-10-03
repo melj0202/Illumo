@@ -110,6 +110,7 @@ add_library(Illumo STATIC
   Source/Audio/AudioDecoder.cpp
   Source/Audio/AudioDevice.cpp
   Source/Foundation/MacroDefs.cpp
+  Source/Foundation/Sha256.cpp
   Source/Scene/SceneGraph.cpp
   Source/Scene/SceneGraphCompile.cpp
   Source/Scene/SceneGraphDrawable.cpp

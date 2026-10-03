@@ -7,6 +7,8 @@
 #include <string>
 #include <string_view>
 
+class WasmModuleCache;
+
 struct WasmLimits
 {
   std::uint64_t memoryBytes = 64u * 1024u * 1024u;
@@ -20,6 +22,9 @@ struct WasmLimits
   std::uint32_t tableElements = 65536u;
   std::uint64_t compilerMemoryBytes = 1024u * 1024u * 1024u;
   std::uint32_t compilerDeadlineMilliseconds = 30000u;
+  // Compiled code shared between stores and launches. Null compiles on every
+  // load; a cached artifact skips the compiler and its limits.
+  std::shared_ptr<WasmModuleCache> compiledCode;
 };
 
 // The engine options mask (see WasmEngineConfig.h) this host uses for a store
@@ -49,6 +54,12 @@ public:
   WasmInstance(WasmInstance&&) = delete;
   WasmInstance& operator=(WasmInstance&&) = delete;
 
+  // Compiles module into limits.compiledCode without creating a store, on
+  // any thread, so a later load finds it there. False without a cache or
+  // when compiling fails (load then reports the failure itself).
+  static bool prepare(std::span<const std::byte> module,
+                      const WasmLimits& limits,
+                      std::string& error);
   bool load(std::span<const std::byte> module);
   bool call(std::string_view name,
             std::span<const std::int32_t> arguments,

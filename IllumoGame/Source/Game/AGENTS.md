@@ -70,6 +70,11 @@ halo depth, block limits or `SparseCellGrid::applyChunkPatches` only with
 - Finite topology is configured in whole chunks. Positive width and height
   wrap both axes; `0 x 0` selects the infinite canvas. Mixed zero/positive
   dimensions are invalid, and topology changes start a fresh world.
+- Tori run the frontier, complete halo, pool and memo paths with neighbour
+  chunks from `neighborChunk` (D-P35). Keep them off cell-candidate scratch,
+  whose sources link to targets by address and alias on a small torus; the
+  per-cell toroidal path is only the reference that
+  `IllumoGame.WorldTopology.HaloParity` compares against.
 - Preserve deterministic transitions across direct, candidate, halo, frontier,
   serial, and worker-pool paths. Counting-dense target centers skip
   neighbor-count scratch preparation and evaluate as halo.
@@ -86,7 +91,11 @@ halo depth, block limits or `SparseCellGrid::applyChunkPatches` only with
   halo windows only, and the change journal and inactive-map publication run
   serially in target order. Never write shared grid state from a pool job.
   `IllumoGame.Rules.WorkerPoolParity` must stay green. Directional neighbors
-  are ordered north, east, south, west.
+  are ordered north, east, south, west. Extended-range row prefix counts
+  apply only when every state counts one state and each shape row is
+  contiguous, and the Lenia narrow accumulator only when the plan proves the
+  largest potential fits (D-P36); `IllumoGame.Rules.ExtendedKernelExactness`
+  must stay green.
 - Worker pools are grid-owned implementation details. Bound work, join before
   destruction, and do not expose partially written state to the frame thread.
 - `CanvasView` is a bounded world-space view over the sparse domain. It owns a

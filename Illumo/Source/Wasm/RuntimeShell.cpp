@@ -135,6 +135,35 @@ RuntimeShell::start()
   if (m_options.bench.frames != 0 && ic->frameProfiler != nullptr) {
     ic->frameProfiler->setEnabled(true);
   }
+  if (!m_options.splashImage.empty()) {
+    m_splash = std::make_unique<GuiEngineSplash>();
+    const bool reducedMotion =
+      ic->envVars != nullptr &&
+      ic->envVars->getVar("reducedUiMotion").valueAsBool;
+    if (!m_splash->begin(ic->window,
+                         ic->renderer,
+                         ic->assetManager,
+                         m_options.splashImage.string(),
+                         ic->inputManager,
+                         reducedMotion)) {
+      m_splash.reset();
+    }
+  }
+  if (m_splash != nullptr) {
+    // The splash animates while the program's modules compile into the
+    // cache; frame() starts the program once its module is ready.
+    m_program->prepare();
+    m_programPending = true;
+    m_started = true;
+    return true;
+  }
+  return startProgram();
+}
+
+bool
+RuntimeShell::startProgram()
+{
+  m_programPending = false;
   bool started = false;
   {
     ILLUMO_PROFILE_ZONE("RuntimeShell.startProgram");
@@ -151,6 +180,8 @@ RuntimeShell::start()
       reportBench("The package failed to start: " + m_program->error());
     }
     m_program->stop();
+    m_splash.reset();
+    m_started = false;
     return false;
   }
   m_started = true;
@@ -163,20 +194,6 @@ RuntimeShell::start()
     m_overlay.reset();
   }
 #endif
-  if (!m_options.splashImage.empty()) {
-    m_splash = std::make_unique<GuiEngineSplash>();
-    const bool reducedMotion =
-      ic->envVars != nullptr &&
-      ic->envVars->getVar("reducedUiMotion").valueAsBool;
-    if (!m_splash->begin(ic->window,
-                         ic->renderer,
-                         ic->assetManager,
-                         m_options.splashImage.string(),
-                         ic->inputManager,
-                         reducedMotion)) {
-      m_splash.reset();
-    }
-  }
   return true;
 }
 
@@ -184,6 +201,13 @@ void
 RuntimeShell::frame(double dt)
 {
   if (!m_started) {
+    return;
+  }
+  // Between frames, as before the loop: a failed start closes the runtime.
+  if (m_programPending && m_program->prepared() && !startProgram()) {
+    if (ic->window != nullptr) {
+      ic->window->requestClose();
+    }
     return;
   }
   FrameProfiler& profiler = m_illumo.frameProfiler();
@@ -317,6 +341,10 @@ RuntimeShell::updateSplash(double dt)
 {
   ILLUMO_PROFILE_ZONE("RuntimeShell.updateSplash");
   if (m_splash->finished()) {
+    if (m_programPending) {
+      // Its last frame stays up until the program's module is compiled.
+      return;
+    }
     endSplash();
     updateProgram(dt);
     return;

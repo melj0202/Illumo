@@ -214,8 +214,9 @@ Canvas truth (verify here before trusting older notes):
   Status derives achieved TPS from published completions and reports rolling
   generation latency. The default `0 x 0` topology is infinite and
   non-toroidal; positive chunk width and height select a finite torus with
-  canonical wrapped cells. Mixed zero/positive axes are invalid. The grid's
-  revision changes only when cell contents actually change.
+  canonical wrapped cells, stepped on the same frontier and halo paths with
+  wrapped neighbour chunks (D-P35). Mixed zero/positive axes are invalid. The
+  grid's revision changes only when cell contents actually change.
 - Production presentation: `CanvasView` separates visible diagnostics from a
   globally aligned cache padded by two 16-cell chunks on every side. Camera
   motion inside it changes only the MVP. Aligned origin shifts copy retained
@@ -467,7 +468,10 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
   the ABI, which carries only copied envelopes, services and frames. Package
   manifests request budgets; the runtime grants at most its ceilings, and
   launch options are never persisted. Frame schema changes, new capabilities
-  or new imports require decoder/deny tests with the change.
+  or new imports require decoder/deny tests with the change. Compiled guest
+  code is reused (`WasmModuleCache`, `cache/wasm` beside the runtime, D-E40)
+  only for a byte-identical module under the same engine options and
+  Wasmtime version.
 - `IllumoContext` is a non-owning pointer bag frozen after engine startup;
   the one exception is `fileTree`, which the program owning a file tree (the
   WASM host) publishes when it starts and withdraws when it stops.

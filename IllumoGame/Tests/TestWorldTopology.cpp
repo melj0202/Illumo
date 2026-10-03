@@ -1,6 +1,8 @@
 #include "Game/CanvasView.h"
+#include "Game/RuleCatalogLoader.h"
 #include "Game/SparseCellGrid.h"
 #include "Rulesets/LifeLikeRuleSet.h"
+#include "Rulesets/RuleSetRegistry.h"
 #include "Rulesets/WireworldRuleSet.h"
 #include "TestHarness.h"
 #include <Illumo/Rendering/Camera.h>
@@ -9,6 +11,8 @@
 #include <Illumo/Testing/TestRegistry.h>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <memory>
 #include <vector>
 
 static TestCounters g;
@@ -315,6 +319,219 @@ testFiniteSparseMicroBench()
     "finite and infinite paths stay identical away from seams");
 }
 
+// Seeds the same soup into both grids: every cell of the torus at roughly
+// the given density (out of 256), in the rule's states.
+static void
+seedTorusSoup(SparseCellGrid* first,
+              SparseCellGrid* second,
+              std::int64_t chunkWidth,
+              std::int64_t chunkHeight,
+              unsigned int stateCount,
+              unsigned int density,
+              std::uint32_t seed)
+{
+  const std::int64_t width = chunkWidth * SparseCellGrid::kChunkDim;
+  const std::int64_t height = chunkHeight * SparseCellGrid::kChunkDim;
+  const std::int64_t minimumX = -(chunkWidth / 2) * SparseCellGrid::kChunkDim;
+  const std::int64_t minimumY = -(chunkHeight / 2) * SparseCellGrid::kChunkDim;
+  for (std::int64_t y = minimumY; y < minimumY + height; ++y) {
+    for (std::int64_t x = minimumX; x < minimumX + width; ++x) {
+      seed = seed * 1664525u + 1013904223u;
+      if ((seed >> 24) >= density) {
+        continue;
+      }
+      const unsigned char state =
+        static_cast<unsigned char>((seed >> 8) % stateCount);
+      first->setCell(CellAddress{ x, y }, state);
+      second->setCell(CellAddress{ x, y }, state);
+    }
+  }
+}
+
+// Production tori run the halo paths with wrapped neighbour chunks (frontier,
+// complete, worker pool, chunk memo); they must stay byte-identical to the
+// per-cell reference path on every size, including tori whose chunks
+// neighbour themselves, for every shipped Moore-count rule.
+static void
+testToroidalHaloMatchesReference()
+{
+  testSection("SparseCellGrid: toroidal halo paths match the reference");
+  RuleSetRegistry registry;
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "catalog loads for toroidal parity");
+  struct TorusSize
+  {
+    std::int64_t width;
+    std::int64_t height;
+  };
+  const TorusSize sizes[] = { { 1, 1 }, { 1, 3 }, { 2, 2 },
+                              { 3, 2 }, { 5, 4 }, { 9, 7 } };
+  std::size_t ruleCount = 0u;
+  bool identical = true;
+  bool haloOnly = true;
+  bool haloUsed = false;
+  for (const RuleSetDefinition& definition : registry.getDefinitions()) {
+    std::unique_ptr<RuleSet> rule = registry.createRuleSet(definition.id);
+    if (rule == nullptr ||
+        rule->getNeighborhoodKind() != RuleSet::NeighborhoodKind::MooreCount) {
+      continue;
+    }
+    ruleCount += 1u;
+    std::uint32_t seed = 2463534242u;
+    for (const TorusSize& size : sizes) {
+      for (unsigned int density : { 40u, 110u }) {
+        seed = seed * 69069u + 1u;
+        SparseCellGrid reference(size.width, size.height);
+        SparseCellGrid production(size.width, size.height);
+        SparseCellGrid spare(size.width, size.height);
+        seedTorusSoup(&reference,
+                      &production,
+                      size.width,
+                      size.height,
+                      rule->getStateCount(),
+                      density,
+                      seed);
+        bool advanced = true;
+        for (int generation = 0; generation < 16 && identical; ++generation) {
+          if (generation == 8) {
+            // Edits while running feed the frontier journal.
+            const CellAddress edits[] = { { 0, 0 }, { 15, 15 }, { -1, 3 } };
+            for (const CellAddress& edit : edits) {
+              const unsigned char state = static_cast<unsigned char>(
+                (seed + static_cast<std::uint32_t>(edit.x)) %
+                rule->getStateCount());
+              reference.setCell(edit, state);
+              production.setCell(edit, state);
+            }
+          }
+          SparseCellGrid::setCellCandidateOverrideForTesting(1);
+          advanced = advanced && reference.advance(*rule);
+          SparseCellGrid::setCellCandidateOverrideForTesting(0);
+          // Alternate serial and pooled evaluation, and dual-grid stepping.
+          SparseCellGrid::setWorkerOverrideForTesting(generation % 2 == 0 ? 1
+                                                                          : 4);
+          advanced = advanced && spare.advanceFrom(production, *rule) &&
+                     production.advance(*rule);
+          SparseCellGrid::setWorkerOverrideForTesting(0);
+          const SparseAdvanceStats& productionStats =
+            production.getLastAdvanceStats();
+          haloOnly = haloOnly && !productionStats.usedCellCandidates;
+          haloUsed = haloUsed || productionStats.haloTargetCount != 0u;
+          if (!advanced ||
+              !sameRecords(reference.collectChunkRecords(),
+                           production.collectChunkRecords()) ||
+              !sameRecords(production.collectChunkRecords(),
+                           spare.collectChunkRecords())) {
+            std::printf("Toroidal mismatch: rule=%s size=%lldx%lld density=%u "
+                        "generation=%d\n",
+                        definition.id.c_str(),
+                        static_cast<long long>(size.width),
+                        static_cast<long long>(size.height),
+                        density,
+                        generation);
+            identical = false;
+          }
+        }
+      }
+    }
+  }
+  SparseCellGrid::setCellCandidateOverrideForTesting(0);
+  SparseCellGrid::setWorkerOverrideForTesting(0);
+  testTrue(g,
+           ruleCount > 0u && identical,
+           "every Moore-count rule matches the reference on every torus size");
+  testTrue(g,
+           haloOnly && haloUsed,
+           "production tori evaluate halo chunks, never cell candidates");
+
+  // A forced chunk memo on a torus large enough to probe it.
+  LifeLikeRuleSet life("GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
+  SparseCellGrid reference(12, 12);
+  SparseCellGrid memoized(12, 12);
+  seedTorusSoup(&reference, &memoized, 12, 12, 2u, 90u, 99991u);
+  bool memoIdentical = true;
+  bool probed = false;
+  SparseCellGrid::setChunkMemoOverrideForTesting(1);
+  for (int generation = 0; generation < 12; ++generation) {
+    SparseCellGrid::setCellCandidateOverrideForTesting(1);
+    memoIdentical = memoIdentical && reference.advance(life);
+    SparseCellGrid::setCellCandidateOverrideForTesting(0);
+    memoIdentical = memoIdentical && memoized.advance(life) &&
+                    sameRecords(reference.collectChunkRecords(),
+                                memoized.collectChunkRecords());
+    probed = probed || memoized.getLastAdvanceStats().memoProbeCount != 0u;
+  }
+  SparseCellGrid::setChunkMemoOverrideForTesting(0);
+  SparseCellGrid::setCellCandidateOverrideForTesting(0);
+  testTrue(g,
+           memoIdentical && probed,
+           "memoized toroidal halo targets match the reference");
+
+  // A settled torus, with a block straddling every seam, evaluates nothing
+  // once its frontier drains.
+  SparseCellGrid settled(2, 2);
+  for (const CellAddress& cell : { CellAddress{ 15, 15 },
+                                   CellAddress{ -16, 15 },
+                                   CellAddress{ 15, -16 },
+                                   CellAddress{ -16, -16 },
+                                   CellAddress{ 3, 3 },
+                                   CellAddress{ 4, 3 },
+                                   CellAddress{ 3, 4 },
+                                   CellAddress{ 4, 4 } }) {
+    settled.setCell(cell, 0u);
+  }
+  bool settledAdvanced = settled.advance(life) && settled.advance(life);
+  const std::uint64_t settledRevision = settled.getRevision();
+  settledAdvanced = settledAdvanced && settled.advance(life);
+  const SparseAdvanceStats& stats = settled.getLastAdvanceStats();
+  testTrue(g,
+           settledAdvanced && stats.usedChangedFrontier &&
+             stats.targetChunkCount == 0u &&
+             settled.getRevision() == settledRevision,
+           "a settled torus evaluates no chunks");
+}
+
+// Informational: a dense torus soup on the reference per-cell path against
+// the production halo path, plus the same soup on the infinite canvas.
+static void
+testToroidalSoupBench()
+{
+  testSection("SparseCellGrid: dense torus soup benchmark");
+  LifeLikeRuleSet life("GAME_OF_LIFE", 1u << 3, (1u << 2) | (1u << 3));
+  SparseCellGrid reference(32, 32);
+  SparseCellGrid production(32, 32);
+  seedTorusSoup(&reference, &production, 32, 32, 2u, 90u, 4242u);
+  SparseCellGrid infinite;
+  seedTorusSoup(&infinite, &infinite, 32, 32, 2u, 90u, 4242u);
+  const int generations = 10;
+  double milliseconds[3] = { 0.0, 0.0, 0.0 };
+  bool advanced = true;
+  SparseCellGrid* grids[3] = { &reference, &production, &infinite };
+  for (int pass = 0; pass < 3; ++pass) {
+    SparseCellGrid::setCellCandidateOverrideForTesting(pass == 0 ? 1 : 0);
+    const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+    for (int generation = 0; generation < generations; ++generation) {
+      advanced = advanced && grids[pass]->advance(life);
+    }
+    milliseconds[pass] = std::chrono::duration<double, std::milli>(
+                           std::chrono::steady_clock::now() - start)
+                           .count() /
+                         generations;
+  }
+  SparseCellGrid::setCellCandidateOverrideForTesting(0);
+  std::printf("BENCH: 512x512 torus Life soup: %.3f ms/gen reference, %.3f "
+              "ms/gen production, %.3f ms/gen same soup infinite\n",
+              milliseconds[0],
+              milliseconds[1],
+              milliseconds[2]);
+  testTrue(g,
+           advanced && sameRecords(reference.collectChunkRecords(),
+                                   production.collectChunkRecords()),
+           "the benchmark soups stay identical");
+}
+
 static int
 runWorldTopologyCase(void (*testFunction)())
 {
@@ -338,6 +555,11 @@ registerWorldTopologyTests(IllumoTestRegistry& registry)
   registry.add("IllumoGame.WorldTopology.BoundedPresentation", []() {
     return runWorldTopologyCase(testFinitePresentationLeavesAliasesBlank);
   });
+  registry.add("IllumoGame.WorldTopology.HaloParity", []() {
+    return runWorldTopologyCase(testToroidalHaloMatchesReference);
+  });
+  registry.add("IllumoGame.WorldTopology.SoupBench",
+               []() { return runWorldTopologyCase(testToroidalSoupBench); });
   registry.add("IllumoGame.WorldTopology.MicroBench", []() {
     return runWorldTopologyCase(testFiniteSparseMicroBench);
   });

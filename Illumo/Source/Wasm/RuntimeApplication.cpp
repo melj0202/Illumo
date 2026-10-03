@@ -10,6 +10,7 @@
 #include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/RuntimeAppLauncher.h>
 #include <Illumo/Wasm/RuntimeShell.h>
+#include <Illumo/Wasm/WasmModuleCache.h>
 #include <Illumo/Wasm/WasmProgram.h>
 #include <IllumoGuest/Dialog.h>
 #include <algorithm>
@@ -653,6 +654,17 @@ prepareShell(Illumo& illumo)
                     " frames after " + std::to_string(bench.warmup) +
                     " warm-up frames");
   }
+  // Compiled code is kept beside the runtime so later launches, child
+  // processes and every lane reuse one compile; an unwritable directory
+  // leaves the cache in memory for this launch.
+  std::shared_ptr<WasmModuleCache> compiledCode =
+    std::make_shared<WasmModuleCache>(runtimeDirectory() / "cache" / "wasm");
+  if (compiledCode->directory().empty()) {
+    Logger::LogWarning("Compiled WASM code is not cached between launches: "
+                       "cannot create the cache directory");
+  }
+  limits.compiledCode = compiledCode;
+  workerLimits.compiledCode = compiledCode;
   std::unique_ptr<WasmProgram> guest =
     std::make_unique<WasmProgram>(std::move(game),
                                   std::move(startup),

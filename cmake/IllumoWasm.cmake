@@ -38,6 +38,7 @@ set_target_properties(IllumoWasmtime PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${_wasmtime}/include")
 add_library(IllumoWasmRuntime STATIC
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmInstance.cpp"
+  "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmModuleCache.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmGuest.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmWorker.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmProfile.cpp"

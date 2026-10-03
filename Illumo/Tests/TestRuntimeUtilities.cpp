@@ -3,6 +3,7 @@
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Engine/PresentationTiming.h>
 #include <Illumo/Foundation/ParseNumber.h>
+#include <Illumo/Foundation/Sha256.h>
 #include <Illumo/Platform/SystemInfo.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/SplashText.h>
@@ -17,7 +18,9 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -27,6 +30,61 @@
 #include <map>
 
 static TestCounters g;
+
+static std::string
+hexDigest(const Sha256::Digest& digest)
+{
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string text;
+  for (std::uint8_t byte : digest) {
+    text.push_back(kHex[byte >> 4u]);
+    text.push_back(kHex[byte & 15u]);
+  }
+  return text;
+}
+
+static Sha256::Digest
+digestText(std::string_view text)
+{
+  return Sha256::digest(std::as_bytes(std::span(text.data(), text.size())));
+}
+
+// FIPS 180-4 known answers, plus incremental feeding across block edges.
+static void
+testSha256Vectors()
+{
+  testSection("Sha256: known answers and incremental input");
+  testTrue(g,
+           hexDigest(digestText("")) ==
+             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+           "empty input");
+  testTrue(g,
+           hexDigest(digestText("abc")) ==
+             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+           "one block");
+  const std::string twoBlocks =
+    "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+  testTrue(g,
+           hexDigest(digestText(twoBlocks)) ==
+             "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+           "padding spills into a second block");
+  const std::string million(1000000u, 'a');
+  Sha256 pieces;
+  std::size_t offset = 0u;
+  std::size_t step = 1u;
+  while (offset < million.size()) {
+    const std::size_t taken = std::min(step, million.size() - offset);
+    pieces.update(std::as_bytes(std::span(million.data() + offset, taken)));
+    offset += taken;
+    step = step * 3u % 211u + 1u;
+  }
+  const std::string expected =
+    "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0";
+  testTrue(g,
+           hexDigest(digestText(million)) == expected &&
+             hexDigest(pieces.finish()) == expected,
+           "one million bytes, whole and in uneven pieces");
+}
 
 static FrameProfiler::TimePoint
 profilerTime(int milliseconds)
@@ -1435,4 +1493,6 @@ registerRuntimeUtilityTests(IllumoTestRegistry& registry)
   registry.add("Illumo.SplashText.FadeCompletion", []() {
     return runRuntimeUtilityCase(testSplashFadeCompletion);
   });
+  registry.add("Illumo.Foundation.Sha256",
+               []() { return runRuntimeUtilityCase(testSha256Vectors); });
 }

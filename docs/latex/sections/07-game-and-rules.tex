@@ -430,10 +430,15 @@ schema.
         Aggregate inactive statistics reset once before recycling. Sparse
         candidate results construct directly in acquired node storage, while
         dense halo results retain their complete-array bulk copy. Empty
-        space is implicit. Infinite mode is non-toroidal. Finite mode enrolls
-        canonical wrapped neighbors through the same transition table, so
-        horizontal, vertical, and corner seams are exact for binary and
-        multi-state rules. The revision changes only when cell contents differ.
+        space is implicit. Infinite mode is non-toroidal. Finite mode runs the
+        same frontier, complete halo, worker-pool and memo paths with wrapped
+        neighbor chunks: a canonical chunk's neighbor wraps by at most one
+        period, each of a target's nine halo chunks resolves on its own, and
+        the target set absorbs a small torus's duplicates, so horizontal,
+        vertical, and corner seams are exact for binary and multi-state rules
+        even on a 1$\times$1 torus. Tori skip the cell-candidate paths; the
+        per-cell toroidal path remains the test reference (D-P35). The
+        revision changes only when cell contents differ.
   \item Publication: a persistent \symbolref{SimulationRunner} exclusively
         mutates the spare grid while the main thread reads the published grid.
         A completion publishes at a frame boundary. Incremental completions
@@ -718,10 +723,15 @@ transactional output and change journal. The optimized count-table paths remain
 unchanged. Dense compatibility evaluation uses the same histogram contract.
 Colorized-Life shares that histogram kernel. Larger-than-Life uses a separate
 extended-range kernel and the same transactional result/change-journal
-machinery. Hodgepodge and dominance share the histogram kernel; Turmites,
-HPP, rule tables, and sandpiles share the direction-preserving kernel.
-Lenia uses its own weighted-kernel path: a radius-$R$ halo window of levels
-per target chunk and the same transactional publication.
+machinery; because every state counts state 0 and each shape row is a
+contiguous run, it counts from row prefix sums of the halo window, one
+subtraction per shape row, while long-range cyclic rules, whose counted state
+depends on the cell, keep the per-tap loop (D-P36). Hodgepodge and dominance
+share the histogram kernel; Turmites, HPP, rule tables, and sandpiles share the
+direction-preserving kernel. Lenia uses its own weighted-kernel path: a
+radius-$R$ halo window of levels per target chunk, taps accumulated over
+contiguous 16-cell target rows in an exact 32-bit or 64-bit sum chosen per
+rule (D-P36), and the same transactional publication.
 
 These four models share one chunk-parallel driver (D-GC10). Target discovery
 is serial; every target chunk is then evaluated independently from a

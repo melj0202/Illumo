@@ -543,37 +543,31 @@ SparseCellGrid::enrollAffectedTargets(const ChunkAddress& source,
                      (countedChanged[3] & kChunkRightEdgeMask) != 0u;
   const bool top = (countedChanged[0] & kChunkTopRowMask) != 0u;
   const bool bottom = (countedChanged[3] & kChunkBottomRowMask) != 0u;
+  // Neighbours wrap on a torus; the address set absorbs a small torus where
+  // several directions name the same chunk.
   if (left) {
-    insertAddressSet(
-      ChunkAddress{ source.x - 1, source.y }, targets, index, generation);
+    insertAddressSet(neighborChunk(source, -1, 0), targets, index, generation);
   }
   if (right) {
-    insertAddressSet(
-      ChunkAddress{ source.x + 1, source.y }, targets, index, generation);
+    insertAddressSet(neighborChunk(source, 1, 0), targets, index, generation);
   }
   if (top) {
-    insertAddressSet(
-      ChunkAddress{ source.x, source.y - 1 }, targets, index, generation);
+    insertAddressSet(neighborChunk(source, 0, -1), targets, index, generation);
   }
   if (bottom) {
-    insertAddressSet(
-      ChunkAddress{ source.x, source.y + 1 }, targets, index, generation);
+    insertAddressSet(neighborChunk(source, 0, 1), targets, index, generation);
   }
   if ((countedChanged[0] & 1u) != 0u) {
-    insertAddressSet(
-      ChunkAddress{ source.x - 1, source.y - 1 }, targets, index, generation);
+    insertAddressSet(neighborChunk(source, -1, -1), targets, index, generation);
   }
   if ((countedChanged[0] & (static_cast<std::uint64_t>(1u) << 15u)) != 0u) {
-    insertAddressSet(
-      ChunkAddress{ source.x + 1, source.y - 1 }, targets, index, generation);
+    insertAddressSet(neighborChunk(source, 1, -1), targets, index, generation);
   }
   if ((countedChanged[3] & (static_cast<std::uint64_t>(1u) << 48u)) != 0u) {
-    insertAddressSet(
-      ChunkAddress{ source.x - 1, source.y + 1 }, targets, index, generation);
+    insertAddressSet(neighborChunk(source, -1, 1), targets, index, generation);
   }
   if ((countedChanged[3] & (static_cast<std::uint64_t>(1u) << 63u)) != 0u) {
-    insertAddressSet(
-      ChunkAddress{ source.x + 1, source.y + 1 }, targets, index, generation);
+    insertAddressSet(neighborChunk(source, 1, 1), targets, index, generation);
   }
 }
 
@@ -706,7 +700,9 @@ SparseCellGrid::estimateCompleteAdvanceWork() const
   const SparseCellGrid& source = generationSource();
   const std::size_t chunkBookkeeping =
     saturatingMultiply(source.chunks.size(), 2u);
-  if (source.m_chunkStatistics.candidatePreferredChunkCount == 0u) {
+  // Tori evaluate every complete target as a full halo chunk.
+  if (source.m_chunkStatistics.candidatePreferredChunkCount == 0u ||
+      source.isToroidal()) {
     return saturatingAdd(
       chunkBookkeeping,
       saturatingMultiply(source.chunks.size(), kChunkCellCount));
@@ -953,6 +949,33 @@ SparseCellGrid::canonicalizeChunk(const ChunkAddress& address) const
                   floorModulo(minimumY, m_worldChunkHeight),
                 m_worldChunkHeight);
   return ChunkAddress{ minimumX + xOffset, minimumY + yOffset };
+}
+
+ChunkAddress
+SparseCellGrid::neighborChunk(const ChunkAddress& canonical,
+                              int offsetX,
+                              int offsetY) const
+{
+  ChunkAddress result{ canonical.x + offsetX, canonical.y + offsetY };
+  if (!isToroidal()) {
+    return result;
+  }
+  // A canonical chunk lies from minimum up to but excluding minimum + extent
+  // on each axis, so a one-chunk step wraps by at most one period (a 1x1
+  // torus neighbours itself).
+  const std::int64_t minimumX = -(m_worldChunkWidth / 2);
+  const std::int64_t minimumY = -(m_worldChunkHeight / 2);
+  if (result.x < minimumX) {
+    result.x += m_worldChunkWidth;
+  } else if (result.x >= minimumX + m_worldChunkWidth) {
+    result.x -= m_worldChunkWidth;
+  }
+  if (result.y < minimumY) {
+    result.y += m_worldChunkHeight;
+  } else if (result.y >= minimumY + m_worldChunkHeight) {
+    result.y -= m_worldChunkHeight;
+  }
+  return result;
 }
 
 void
@@ -3076,8 +3099,10 @@ SparseCellGrid::evaluateTargetChunk(const ChunkAddress& target,
   const ChunkData* neighborhood[3][3];
   for (int neighborY = -1; neighborY <= 1; ++neighborY) {
     for (int neighborX = -1; neighborX <= 1; ++neighborX) {
-      const ChunkAddress neighborAddress{ target.x + neighborX,
-                                          target.y + neighborY };
+      // Each of the nine positions resolves on its own, so a small torus may
+      // see one chunk in several of them.
+      const ChunkAddress neighborAddress =
+        neighborChunk(target, neighborX, neighborY);
       const ChunkMap::const_iterator found = sourceChunks.find(neighborAddress);
       neighborhood[neighborY + 1][neighborX + 1] =
         found == sourceChunks.end() ? nullptr : &found->second;
@@ -4408,12 +4433,120 @@ SparseCellGrid::evaluateIsolatedTarget(const IsolatedKernelPlan& plan,
   fillHaloWindow(*plan.source, result->address, radius, &scratch->window);
   const unsigned char* window = scratch->window.data();
   if (plan.kind == IsolatedKernel::WeightedKernel) {
-    // Levels are looked up once per window cell so the tap loop is a plain
-    // dot product; the integer sum is exact on every path and platform.
+    // Levels are looked up once per window cell. Each tap then adds its
+    // weight times 16 contiguous levels into one row of sums, which the
+    // compiler vectorizes; the integer sum is exact on every path and
+    // platform (the plan proves the narrow accumulator cannot overflow).
     scratch->levels.resize(scratch->window.size());
     for (std::size_t index = 0u; index < scratch->window.size(); ++index) {
       scratch->levels[index] = plan.levels[window[index]];
     }
+    const std::uint32_t* levels = scratch->levels.data();
+    if (plan.narrowPotential) {
+      std::uint32_t* sums = scratch->narrowSums.data();
+      scratch->narrowSums.fill(0u);
+      for (std::size_t tap = 0u; tap < plan.weights.size(); ++tap) {
+        const std::uint32_t weight = plan.weights[tap];
+        const std::uint32_t* origin =
+          levels + static_cast<std::ptrdiff_t>(radius + plan.tapY[tap]) * row +
+          radius + plan.tapX[tap];
+        for (int localY = 0; localY < kChunkDim; ++localY) {
+          const std::uint32_t* sourceRow = origin + localY * row;
+          std::uint32_t* sumRow = sums + localY * kChunkDim;
+          for (int localX = 0; localX < kChunkDim; ++localX) {
+            sumRow[localX] += weight * sourceRow[localX];
+          }
+        }
+      }
+    } else {
+      std::uint64_t* sums = scratch->wideSums.data();
+      scratch->wideSums.fill(0u);
+      for (std::size_t tap = 0u; tap < plan.weights.size(); ++tap) {
+        const std::uint64_t weight = plan.weights[tap];
+        const std::uint32_t* origin =
+          levels + static_cast<std::ptrdiff_t>(radius + plan.tapY[tap]) * row +
+          radius + plan.tapX[tap];
+        for (int localY = 0; localY < kChunkDim; ++localY) {
+          const std::uint32_t* sourceRow = origin + localY * row;
+          std::uint64_t* sumRow = sums + localY * kChunkDim;
+          for (int localX = 0; localX < kChunkDim; ++localX) {
+            sumRow[localX] += weight * sourceRow[localX];
+          }
+        }
+      }
+    }
+    for (int localY = 0; localY < kChunkDim; ++localY) {
+      for (int localX = 0; localX < kChunkDim; ++localX) {
+        const std::size_t cellIndex =
+          static_cast<std::size_t>(localY * kChunkDim + localX);
+        const unsigned char current =
+          window[static_cast<std::ptrdiff_t>(localY + radius) * row + localX +
+                 radius];
+        const std::uint64_t weightedSum = plan.narrowPotential
+                                            ? scratch->narrowSums[cellIndex]
+                                            : scratch->wideSums[cellIndex];
+        storeKernelResultCell(
+          result,
+          cellIndex,
+          current,
+          ruleSet.nextStateFromPotential(current, weightedSum));
+      }
+    }
+    return;
+  }
+
+  if (plan.kind == IsolatedKernel::ExtendedRange && plan.prefixCounts) {
+    // Row prefix sums of counted cells: the count over one shape row is then
+    // one subtraction, accumulated span by span over 16 contiguous cells.
+    const std::ptrdiff_t stride = side + 1;
+    scratch->rowPrefix.resize(static_cast<std::size_t>(side) *
+                              static_cast<std::size_t>(stride));
+    std::uint16_t* prefix = scratch->rowPrefix.data();
+    for (int windowY = 0; windowY < side; ++windowY) {
+      const unsigned char* cells = window + windowY * row;
+      std::uint16_t* prefixRow = prefix + windowY * stride;
+      std::uint16_t running = 0u;
+      prefixRow[0] = 0u;
+      for (int windowX = 0; windowX < side; ++windowX) {
+        running = static_cast<std::uint16_t>(
+          running + (cells[windowX] == plan.countedState ? 1u : 0u));
+        prefixRow[windowX + 1] = running;
+      }
+    }
+    std::uint32_t* counts = scratch->narrowSums.data();
+    scratch->narrowSums.fill(0u);
+    for (const ExtendedSpan& span : plan.spans) {
+      for (int localY = 0; localY < kChunkDim; ++localY) {
+        const std::uint16_t* prefixRow =
+          prefix + (localY + radius + span.offsetY) * stride + radius;
+        const std::uint16_t* right = prefixRow + span.lastX + 1;
+        const std::uint16_t* left = prefixRow + span.firstX;
+        std::uint32_t* countRow = counts + localY * kChunkDim;
+        for (int localX = 0; localX < kChunkDim; ++localX) {
+          countRow[localX] += static_cast<std::uint32_t>(right[localX]) -
+                              static_cast<std::uint32_t>(left[localX]);
+        }
+      }
+    }
+    for (int localY = 0; localY < kChunkDim; ++localY) {
+      for (int localX = 0; localX < kChunkDim; ++localX) {
+        const std::size_t cellIndex =
+          static_cast<std::size_t>(localY * kChunkDim + localX);
+        const unsigned char current =
+          window[static_cast<std::ptrdiff_t>(localY + radius) * row + localX +
+                 radius];
+        // The spans include the centre; exclude it when the rule does.
+        const unsigned int aliveCount =
+          counts[cellIndex] -
+          (!plan.includeCenter && current == plan.countedState ? 1u : 0u);
+        storeKernelResultCell(
+          result,
+          cellIndex,
+          current,
+          ruleSet.nextStateFromExtendedCount(current, aliveCount));
+      }
+    }
+    return;
   }
 
   for (int localY = 0; localY < kChunkDim; ++localY) {
@@ -4439,7 +4572,9 @@ SparseCellGrid::evaluateIsolatedTarget(const IsolatedKernelPlan& plan,
           center[-row], center[1], center[row], center[-1]
         };
         next = ruleSet.nextStateFromDirectionalNeighborhood(current, neighbors);
-      } else if (plan.kind == IsolatedKernel::ExtendedRange) {
+      } else {
+        // Extended range with a cell-dependent counted state (long-range
+        // cyclic rules, small radii) or a shape the spans cannot describe.
         const unsigned char countedState =
           ruleSet.getExtendedCountedState(current);
         unsigned int aliveCount = 0u;
@@ -4447,15 +4582,6 @@ SparseCellGrid::evaluateIsolatedTarget(const IsolatedKernelPlan& plan,
           aliveCount += center[offset] == countedState ? 1u : 0u;
         }
         next = ruleSet.nextStateFromExtendedCount(current, aliveCount);
-      } else {
-        const std::uint32_t* levels =
-          scratch->levels.data() + static_cast<std::size_t>(centerIndex);
-        std::uint64_t weightedSum = 0u;
-        for (std::size_t tap = 0u; tap < plan.offsets.size(); ++tap) {
-          weightedSum += static_cast<std::uint64_t>(plan.weights[tap]) *
-                         levels[plan.offsets[tap]];
-        }
-        next = ruleSet.nextStateFromPotential(current, weightedSum);
       }
       storeKernelResultCell(
         result,
@@ -4508,16 +4634,60 @@ SparseCellGrid::advanceIsolatedKernel(const RuleSet& ruleSet,
       }
     }
     workPerCell = std::max<std::size_t>(1u, plan.offsets.size());
+    // Prefix counting needs one counted state for every cell and a shape
+    // whose rows are contiguous runs (the centre is always inside it).
+    plan.includeCenter = includeCenter;
+    plan.countedState = ruleSet.getExtendedCountedState(0u);
+    plan.prefixCounts = true;
+    for (unsigned int state = 1u; state < 256u && plan.prefixCounts; ++state) {
+      plan.prefixCounts =
+        ruleSet.getExtendedCountedState(static_cast<unsigned char>(state)) ==
+        plan.countedState;
+    }
+    for (int neighborY = -plan.radius;
+         neighborY <= plan.radius && plan.prefixCounts;
+         ++neighborY) {
+      int firstX = plan.radius + 1;
+      int lastX = -plan.radius - 1;
+      int members = 0;
+      for (int neighborX = -plan.radius; neighborX <= plan.radius;
+           ++neighborX) {
+        if (RuleSet::extendedNeighborhoodContains(
+              shape, plan.radius, neighborX, neighborY)) {
+          firstX = std::min(firstX, neighborX);
+          lastX = std::max(lastX, neighborX);
+          members += 1;
+        }
+      }
+      if (members == 0) {
+        continue;
+      }
+      plan.prefixCounts = members == lastX - firstX + 1;
+      plan.spans.push_back(ExtendedSpan{ neighborY, firstX, lastX });
+    }
+    if (plan.prefixCounts) {
+      workPerCell = std::max<std::size_t>(1u, plan.spans.size());
+    }
   } else if (kind == IsolatedKernel::WeightedKernel) {
+    std::uint64_t weightTotal = 0u;
     for (const RuleSet::KernelTap& tap : ruleSet.getKernelTaps()) {
       plan.offsets.push_back(static_cast<std::ptrdiff_t>(tap.offsetY) * side +
                              tap.offsetX);
       plan.weights.push_back(tap.weight);
+      plan.tapX.push_back(tap.offsetX);
+      plan.tapY.push_back(tap.offsetY);
+      weightTotal += tap.weight;
     }
+    std::uint32_t maximumLevel = 0u;
     for (std::size_t state = 0u; state < plan.levels.size(); ++state) {
       plan.levels[state] =
         ruleSet.getKernelLevel(static_cast<unsigned char>(state));
+      maximumLevel = std::max(maximumLevel, plan.levels[state]);
     }
+    // Every partial sum is at most weightTotal * maximumLevel.
+    plan.narrowPotential =
+      weightTotal == 0u ||
+      (weightTotal <= UINT32_MAX && maximumLevel <= UINT32_MAX / weightTotal);
     workPerCell = std::max<std::size_t>(1u, plan.offsets.size());
   }
 
@@ -4560,6 +4730,10 @@ SparseCellGrid::advanceIsolatedKernel(const RuleSet& ruleSet,
     if (kind == IsolatedKernel::WeightedKernel) {
       scratch.levels.reserve(static_cast<std::size_t>(side) *
                              static_cast<std::size_t>(side));
+    }
+    if (plan.prefixCounts) {
+      scratch.rowPrefix.reserve(static_cast<std::size_t>(side) *
+                                static_cast<std::size_t>(side + 1));
     }
   }
 
@@ -4817,7 +4991,12 @@ SparseCellGrid::advanceImpl(const RuleSet& ruleSet, bool allowFrontier)
     m_backgroundTransitionsStayBinary &&
     sourceStatistics.activeCellCount == sourceStatistics.countedCellCount;
 
-  if (source.isToroidal()) {
+  // A torus takes the halo paths, whose neighbour chunks wrap; candidate
+  // scratch links sources to targets by address, which a small torus
+  // aliases, so it stays on the infinite canvas. Forcing cell candidates
+  // selects the reference toroidal path.
+  const bool toroidal = source.isToroidal();
+  if (toroidal && cellCandidateOverride > 0) {
     return advanceToroidal(ruleSet);
   }
 
@@ -4833,7 +5012,7 @@ SparseCellGrid::advanceImpl(const RuleSet& ruleSet, bool allowFrontier)
       millisecondsSince(discoveryStart);
     std::size_t frontierEvaluationWork = 0u;
     bool useCandidateScratch =
-      sourceStatistics.candidatePreferredChunkCount != 0u;
+      !toroidal && sourceStatistics.candidatePreferredChunkCount != 0u;
     if (useCandidateScratch && !frontierPrefersCandidateScratch()) {
       useCandidateScratch = false;
     }
@@ -4857,10 +5036,10 @@ SparseCellGrid::advanceImpl(const RuleSet& ruleSet, bool allowFrontier)
     }
   }
 
-  if (cellCandidateOverride > 0) {
+  if (!toroidal && cellCandidateOverride > 0) {
     return advanceCellCandidates(ruleSet, false);
   }
-  if (cellCandidateOverride == 0 &&
+  if (!toroidal && cellCandidateOverride == 0 &&
       sourceStatistics.candidatePreferredChunkCount != 0u) {
     return advanceCellCandidates(ruleSet, true);
   }

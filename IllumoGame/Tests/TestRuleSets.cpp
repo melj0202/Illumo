@@ -2887,7 +2887,8 @@ testEveryFamilyWorkerPoolParity()
   }
 
   // Informational: one worker against the automatic pool on dense soups.
-  for (const char* id : { "LENIA_ORBIUM", "BOSCO", "QUADLIFE", "HPP_GAS" }) {
+  for (const char* id :
+       { "LENIA_ORBIUM", "BOSCO", "BUGSMOVIE", "QUADLIFE", "HPP_GAS" }) {
     std::unique_ptr<RuleSet> rule = registry.createRuleSet(id);
     if (rule == nullptr) {
       continue;
@@ -2931,6 +2932,181 @@ testEveryFamilyWorkerPoolParity()
   }
 }
 
+// A weighted-kernel rule whose potentials need more than 32 bits, so the
+// sparse grid must take its wide accumulator; the next state depends on bits
+// above 2^32.
+class WideKernelRuleSet : public RuleSet
+{
+public:
+  WideKernelRuleSet()
+  {
+    for (int offsetY = -3; offsetY <= 3; ++offsetY) {
+      for (int offsetX = -3; offsetX <= 3; ++offsetX) {
+        if (offsetX * offsetX + offsetY * offsetY <= 9) {
+          m_taps.push_back(KernelTap{
+            offsetX,
+            offsetY,
+            4000000000u -
+              static_cast<std::uint32_t>((offsetY + 3) * 7 + offsetX + 3) });
+        }
+      }
+    }
+  }
+  unsigned int getStateCount() const override { return 4u; }
+  NeighborhoodKind getNeighborhoodKind() const override
+  {
+    return NeighborhoodKind::WeightedKernel;
+  }
+  const std::vector<KernelTap>& getKernelTaps() const override
+  {
+    return m_taps;
+  }
+  std::uint32_t getKernelLevel(unsigned char state) const override
+  {
+    return state == 1u ? 0u : (state == 0u ? 3u : state - 1u);
+  }
+  unsigned char nextStateFromPotential(unsigned char cell,
+                                       std::uint64_t weightedSum) const override
+  {
+    (void)cell;
+    return weightedSum == 0u
+             ? static_cast<unsigned char>(1u)
+             : static_cast<unsigned char>((weightedSum >> 33u) % 4u);
+  }
+
+private:
+  std::vector<KernelTap> m_taps;
+};
+
+// Extended-range counts come from row prefix sums and weighted-kernel sums
+// from tap-outer rows; both must equal direct per-cell evaluation exactly
+// for every shape, radius, centre policy and accumulator width.
+static void
+testExtendedKernelExactness()
+{
+  testSection("SparseCellGrid: extended-range and weighted kernels are exact");
+  RuleSetRegistry registry;
+  testTrue(g,
+           RuleCatalogLoader::loadFromDefaultLocations(registry),
+           "catalog loads for kernel exactness");
+  bool shippedMatch = true;
+  std::size_t shippedCount = 0u;
+  for (const RuleSetDefinition& definition : registry.getDefinitions()) {
+    std::unique_ptr<RuleSet> rule = registry.createRuleSet(definition.id);
+    if (rule == nullptr || rule->getNeighborhoodKind() !=
+                             RuleSet::NeighborhoodKind::ExtendedRange) {
+      continue;
+    }
+    shippedCount += 1u;
+    const unsigned int states = rule->getStateCount();
+    if (!sparseTorusMatchesDense(*rule, parityPhaseSoup(states, 32, true), 4) ||
+        !sparseInfiniteMatchesDense(
+          *rule, parityPhaseSoup(states, 20, false), 4)) {
+      std::printf("Extended-range mismatch: %s\n", definition.id.c_str());
+      shippedMatch = false;
+    }
+  }
+  testTrue(g,
+           shippedCount > 0u && shippedMatch,
+           "every shipped extended-range rule matches the dense reference");
+
+  const RuleSetDefinition* bosco = registry.getRuleSetDefinition("BOSCO");
+  const RuleFamilyDefinition* twoState =
+    bosco != nullptr ? registry.getFamilyDefinition(bosco->familyId) : nullptr;
+  const RuleFamilyDefinition* trails =
+    registry.getFamilyDefinition("LTL_TRAILS_8");
+  bool syntheticMatch = twoState != nullptr && trails != nullptr;
+  std::size_t syntheticCount = 0u;
+  for (const RuleFamilyDefinition* family : { twoState, trails }) {
+    if (family == nullptr) {
+      continue;
+    }
+    RuleSetRegistry custom;
+    custom.registerFamily(*family);
+    for (RuleSet::ExtendedNeighborhoodShape shape :
+         { RuleSet::ExtendedNeighborhoodShape::Square,
+           RuleSet::ExtendedNeighborhoodShape::Circular,
+           RuleSet::ExtendedNeighborhoodShape::Diamond }) {
+      for (unsigned int radius : { 1u, 2u, 4u, 7u }) {
+        for (bool includeCenter : { false, true }) {
+          unsigned int size = 0u;
+          const int range = static_cast<int>(radius);
+          for (int offsetY = -range; offsetY <= range; ++offsetY) {
+            for (int offsetX = -range; offsetX <= range; ++offsetX) {
+              if ((includeCenter || offsetX != 0 || offsetY != 0) &&
+                  RuleSet::extendedNeighborhoodContains(
+                    shape, range, offsetX, offsetY)) {
+                size += 1u;
+              }
+            }
+          }
+          RuleSetDefinition definition;
+          definition.id = "EXACT_" + family->id + "_" +
+                          std::to_string(static_cast<int>(shape)) + "_" +
+                          std::to_string(radius) +
+                          (includeCenter ? "_C" : "_N");
+          definition.familyId = family->id;
+          definition.neighborhoodRadius = radius;
+          definition.extendedNeighborhoodShape = shape;
+          definition.includeCenter = includeCenter;
+          definition.birthMinimum = std::max(1u, size / 4u);
+          definition.birthMaximum =
+            std::max(definition.birthMinimum, size / 2u);
+          definition.survivalMinimum = std::max(1u, size / 5u);
+          definition.survivalMaximum =
+            std::max(definition.survivalMinimum, size * 2u / 3u);
+          std::unique_ptr<RuleSet> rule =
+            custom.registerRule(definition)
+              ? custom.createRuleSet(definition.id)
+              : nullptr;
+          if (rule == nullptr) {
+            std::printf("Synthetic rule rejected: %s\n", definition.id.c_str());
+            syntheticMatch = false;
+            continue;
+          }
+          syntheticCount += 1u;
+          const unsigned int states = rule->getStateCount();
+          if (!sparseTorusMatchesDense(
+                *rule, parityPhaseSoup(states, 32, true), 3) ||
+              !sparseInfiniteMatchesDense(
+                *rule, parityPhaseSoup(states, 24, false), 3)) {
+            std::printf("Extended-range mismatch: %s\n", definition.id.c_str());
+            syntheticMatch = false;
+          }
+        }
+      }
+    }
+  }
+  testTrue(g,
+           syntheticMatch && syntheticCount == 48u,
+           "every shape, radius and centre policy matches the dense reference");
+
+  // Both accumulator widths: shipped Lenia fits 32 bits, this rule does not.
+  const WideKernelRuleSet wide;
+  std::unique_ptr<RuleSet> orbium = registry.createRuleSet("LENIA_ORBIUM");
+  bool kernelsMatch = orbium != nullptr;
+  for (const RuleSet* rule : { static_cast<const RuleSet*>(&wide),
+                               static_cast<const RuleSet*>(orbium.get()) }) {
+    if (rule == nullptr) {
+      continue;
+    }
+    SparseCellGrid grid;
+    for (const RuleSeedCell& cell :
+         parityPhaseSoup(rule == &wide ? 4u : 256u, 20, false)) {
+      grid.setCell(CellAddress{ cell.x, cell.y }, cell.state);
+    }
+    for (int generation = 0; generation < 3 && kernelsMatch; ++generation) {
+      SparseCellGrid before;
+      before.copyStateFrom(grid);
+      kernelsMatch = grid.advance(*rule) &&
+                     leniaReferenceMatches(before, grid, *rule, -40, 40);
+    }
+  }
+  testTrue(g,
+           kernelsMatch,
+           "narrow and wide weighted-kernel sums match direct evaluation");
+}
+
 static int
 runRuleSetCase(void (*testFunction)())
 {
@@ -2963,6 +3139,8 @@ registerRuleSetTests(IllumoTestRegistry& registry)
                []() { return runRuleSetCase(testSandpileFamily); });
   registry.add("IllumoGame.Rules.LeniaFamily",
                []() { return runRuleSetCase(testLeniaFamily); });
+  registry.add("IllumoGame.Rules.ExtendedKernelExactness",
+               []() { return runRuleSetCase(testExtendedKernelExactness); });
   registry.add("IllumoGame.Rules.WorkerPoolParity", []() {
     return runRuleSetCase(testEveryFamilyWorkerPoolParity);
   });
