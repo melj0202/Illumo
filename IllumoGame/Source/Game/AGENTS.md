@@ -107,6 +107,11 @@ halo depth, block limits or `SparseCellGrid::applyChunkPatches` only with
   revisions that dirty a quarter of the cache resample the complete cache.
   Changed-bin marking stops once that threshold is reached. Overview resamples
   walk occupied cells and snap-convert the sampled RGB in one pass.
+  Exact-texel writes from held chunk cells (`writeExactChunk`) must produce
+  what `sampleGrid` would, and incremental overview footprints must visit
+  chunks in the same order as the occupied-chunk walk so accumulation stays
+  bit-identical; `IllumoGame.CanvasInf.IncrementalResampleParity` checks
+  both (D-P37).
 - A finite torus presents only its centered canonical rectangle. Cells outside
   that rectangle remain background-colored; wrapping is a simulation-domain
   rule and must not tile the finite world across the camera view.

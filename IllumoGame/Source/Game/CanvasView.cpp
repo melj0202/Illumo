@@ -1058,62 +1058,120 @@ CanvasView::resampleMarkedOverviewTexels(bool snap)
   const int fullRows = cacheCellHeight / cellsPerTexel;
   const float interiorInverse =
     1.0f / static_cast<float>(std::max(1, cellsPerTexel * cellsPerTexel));
-  grid->visitOccupiedChunksInBounds(
-    minimumChunk,
-    maximumChunk,
-    [this,
-     cacheMaximumX,
-     cacheMinimumY,
-     fullColumns,
-     fullRows,
-     interiorInverse,
-     &paletteOffset](const ChunkAddress& chunkAddress,
-                     const SparseCellGrid::ChunkCells& cells,
-                     const SparseChunkMask& occupied) {
-      for (std::size_t wordIndex = 0u; wordIndex < occupied.size();
-           ++wordIndex) {
-        std::uint64_t bits = occupied[wordIndex];
-        while (bits != 0u) {
-          const unsigned int bitOffset = std::countr_zero(bits);
-          const std::size_t cellIndex = wordIndex * 64u + bitOffset;
-          bits &= bits - 1u;
-          const std::int64_t cellX =
-            chunkAddress.x * SparseCellGrid::kChunkDim +
-            static_cast<std::int64_t>(cellIndex % SparseCellGrid::kChunkDim);
-          const std::int64_t cellY =
-            chunkAddress.y * SparseCellGrid::kChunkDim +
-            static_cast<std::int64_t>(cellIndex / SparseCellGrid::kChunkDim);
-          if (cellX < cacheFirstCell.x || cellX > cacheMaximumX ||
-              cellY < cacheMinimumY || cellY > cacheFirstCell.y) {
-            continue;
-          }
-          const int outputX =
-            static_cast<int>((cellX - cacheFirstCell.x) / cellsPerTexel);
-          const int outputY =
-            static_cast<int>((cacheFirstCell.y - cellY) / cellsPerTexel);
-          const int outputIndex = outputY * textureWidth + outputX;
-          if (changedSampleFlags[static_cast<std::size_t>(outputIndex)] == 0u) {
-            continue;
-          }
-          const unsigned char state = cells[cellIndex];
-          if (state == SparseCellGrid::BackgroundState) {
-            continue;
-          }
-          const float inverseSample =
-            (outputX < fullColumns && outputY < fullRows)
-              ? interiorInverse
-              : 1.0f / static_cast<float>(getSlotSampleCount(outputX, outputY));
-          const int base = outputIndex * 3;
-          const int paletteIndex = static_cast<int>(state) * 3;
-          sampledRgb[base + 0] +=
-            paletteOffset[paletteIndex + 0] * inverseSample;
-          sampledRgb[base + 1] +=
-            paletteOffset[paletteIndex + 1] * inverseSample;
-          sampledRgb[base + 2] +=
-            paletteOffset[paletteIndex + 2] * inverseSample;
+  // Adds one occupied cell to its texel when that texel is marked.
+  const auto accumulate = [this,
+                           cacheMaximumX,
+                           cacheMinimumY,
+                           fullColumns,
+                           fullRows,
+                           interiorInverse,
+                           &paletteOffset](const ChunkAddress& chunkAddress,
+                                           std::size_t cellIndex,
+                                           unsigned char state) {
+    const std::int64_t cellX =
+      chunkAddress.x * SparseCellGrid::kChunkDim +
+      static_cast<std::int64_t>(cellIndex % SparseCellGrid::kChunkDim);
+    const std::int64_t cellY =
+      chunkAddress.y * SparseCellGrid::kChunkDim +
+      static_cast<std::int64_t>(cellIndex / SparseCellGrid::kChunkDim);
+    if (cellX < cacheFirstCell.x || cellX > cacheMaximumX ||
+        cellY < cacheMinimumY || cellY > cacheFirstCell.y) {
+      return;
+    }
+    const int outputX =
+      static_cast<int>((cellX - cacheFirstCell.x) / cellsPerTexel);
+    const int outputY =
+      static_cast<int>((cacheFirstCell.y - cellY) / cellsPerTexel);
+    const int outputIndex = outputY * textureWidth + outputX;
+    if (changedSampleFlags[static_cast<std::size_t>(outputIndex)] == 0u) {
+      return;
+    }
+    const float inverseSample =
+      (outputX < fullColumns && outputY < fullRows)
+        ? interiorInverse
+        : 1.0f / static_cast<float>(getSlotSampleCount(outputX, outputY));
+    const int base = outputIndex * 3;
+    const int paletteIndex = static_cast<int>(state) * 3;
+    sampledRgb[base + 0] += paletteOffset[paletteIndex + 0] * inverseSample;
+    sampledRgb[base + 1] += paletteOffset[paletteIndex + 1] * inverseSample;
+    sampledRgb[base + 2] += paletteOffset[paletteIndex + 2] * inverseSample;
+  };
+
+  // Only chunks under the marked texels contribute. Collect them (sorted,
+  // unique) unless they reach half the chunks the cache spans: a broad change
+  // walks the occupied chunks over the cache instead.
+  const std::size_t spannedChunks =
+    static_cast<std::size_t>(maximumChunk.x - minimumChunk.x + 1) *
+    static_cast<std::size_t>(maximumChunk.y - minimumChunk.y + 1) / 2u;
+  overviewChunks.clear();
+  // Every marked texel lies over at least one chunk.
+  bool footprint = changedSampleTexels.size() <= spannedChunks;
+  for (int index : changedSampleTexels) {
+    if (!footprint) {
+      break;
+    }
+    const std::int64_t left =
+      cacheFirstCell.x +
+      static_cast<std::int64_t>((index % textureWidth) * cellsPerTexel);
+    const std::int64_t top =
+      cacheFirstCell.y -
+      static_cast<std::int64_t>((index / textureWidth) * cellsPerTexel);
+    const ChunkAddress first = SparseCellGrid::chunkAddressForCell(
+      CellAddress{ left, std::max(top - cellsPerTexel + 1, cacheMinimumY) });
+    const ChunkAddress last = SparseCellGrid::chunkAddressForCell(
+      CellAddress{ std::min(left + cellsPerTexel - 1, cacheMaximumX), top });
+    for (std::int64_t chunkY = first.y; chunkY <= last.y; ++chunkY) {
+      for (std::int64_t chunkX = first.x; chunkX <= last.x; ++chunkX) {
+        overviewChunks.push_back(ChunkAddress{ chunkX, chunkY });
+      }
+    }
+    if (overviewChunks.size() > spannedChunks) {
+      footprint = false;
+      break;
+    }
+  }
+  if (footprint) {
+    ILLUMO_PROFILE_ZONE("CanvasView.overviewFootprint");
+    std::sort(overviewChunks.begin(),
+              overviewChunks.end(),
+              [](const ChunkAddress& a, const ChunkAddress& b) {
+                return a.y != b.y ? a.y < b.y : a.x < b.x;
+              });
+    overviewChunks.erase(
+      std::unique(overviewChunks.begin(), overviewChunks.end()),
+      overviewChunks.end());
+    for (const ChunkAddress& chunkAddress : overviewChunks) {
+      const SparseCellGrid::ChunkCells* cells =
+        grid->findChunkCells(chunkAddress);
+      if (cells == nullptr) {
+        continue;
+      }
+      for (std::size_t cellIndex = 0u; cellIndex < cells->size(); ++cellIndex) {
+        const unsigned char state = (*cells)[cellIndex];
+        if (state != SparseCellGrid::BackgroundState) {
+          accumulate(chunkAddress, cellIndex, state);
         }
       }
-    });
+    }
+  } else {
+    grid->visitOccupiedChunksInBounds(
+      minimumChunk,
+      maximumChunk,
+      [&accumulate](const ChunkAddress& chunkAddress,
+                    const SparseCellGrid::ChunkCells& cells,
+                    const SparseChunkMask& occupied) {
+        for (std::size_t wordIndex = 0u; wordIndex < occupied.size();
+             ++wordIndex) {
+          std::uint64_t bits = occupied[wordIndex];
+          while (bits != 0u) {
+            const unsigned int bitOffset = std::countr_zero(bits);
+            const std::size_t cellIndex = wordIndex * 64u + bitOffset;
+            bits &= bits - 1u;
+            accumulate(chunkAddress, cellIndex, cells[cellIndex]);
+          }
+        }
+      });
+  }
 
   for (int index : changedSampleTexels) {
     const int base = index * 3;
@@ -1131,6 +1189,68 @@ CanvasView::resampleMarkedOverviewTexels(bool snap)
   changedSampleTexels.clear();
 }
 
+void
+CanvasView::writeExactTexel(int index, unsigned char state, bool snap)
+{
+  const int paletteIndex = static_cast<int>(state) * 3;
+  setTargetForSlot(index,
+                   static_cast<float>(paletteRgb[paletteIndex + 0]) / 255.0f,
+                   static_cast<float>(paletteRgb[paletteIndex + 1]) / 255.0f,
+                   static_cast<float>(paletteRgb[paletteIndex + 2]) / 255.0f,
+                   snap);
+  if (snap) {
+    writeTexel(index, index % textureWidth, index / textureWidth);
+  }
+}
+
+bool
+CanvasView::writeExactChunk(const ChunkAddress& address,
+                            const unsigned char* cells,
+                            const SparseChunkMask* changed,
+                            bool snap)
+{
+  const std::int64_t cacheMaximumX =
+    cacheFirstCell.x + static_cast<std::int64_t>(cacheCellWidth) - 1;
+  const std::int64_t cacheMinimumY =
+    cacheFirstCell.y - static_cast<std::int64_t>(cacheCellHeight) + 1;
+  const std::int64_t chunkMinimumX = address.x * SparseCellGrid::kChunkDim;
+  const std::int64_t chunkMinimumY = address.y * SparseCellGrid::kChunkDim;
+  const std::int64_t minimumX = std::max(chunkMinimumX, cacheFirstCell.x);
+  const std::int64_t maximumX =
+    std::min(chunkMinimumX + SparseCellGrid::kChunkDim - 1, cacheMaximumX);
+  const std::int64_t minimumY = std::max(chunkMinimumY, cacheMinimumY);
+  const std::int64_t maximumY =
+    std::min(chunkMinimumY + SparseCellGrid::kChunkDim - 1, cacheFirstCell.y);
+  if (minimumX > maximumX || minimumY > maximumY) {
+    return true;
+  }
+  const std::size_t cacheTexels = static_cast<std::size_t>(activeViewWidth) *
+                                  static_cast<std::size_t>(activeViewHeight);
+  for (std::int64_t cellY = minimumY; cellY <= maximumY; ++cellY) {
+    const int localY = static_cast<int>(cellY - chunkMinimumY);
+    const int outputY = static_cast<int>(cacheFirstCell.y - cellY);
+    for (std::int64_t cellX = minimumX; cellX <= maximumX; ++cellX) {
+      const int localX = static_cast<int>(cellX - chunkMinimumX);
+      const std::size_t cellIndex =
+        static_cast<std::size_t>(localY * SparseCellGrid::kChunkDim + localX);
+      if (changed != nullptr &&
+          ((*changed)[cellIndex / 64u] &
+           (static_cast<std::uint64_t>(1u) << (cellIndex % 64u))) == 0u) {
+        continue;
+      }
+      const unsigned char state =
+        cells == nullptr ? SparseCellGrid::BackgroundState : cells[cellIndex];
+      writeExactTexel(outputY * textureWidth +
+                        static_cast<int>(cellX - cacheFirstCell.x),
+                      state,
+                      snap);
+      lastSampledTexelCount += 1u;
+    }
+  }
+  // Past a quarter of the cache a complete resample is cheaper.
+  return lastSampledTexelCount * kDenseChangedSampleDivisor < cacheTexels;
+}
+
 bool
 CanvasView::sampleChangedChunks(std::uint64_t previousRevision)
 {
@@ -1145,6 +1265,24 @@ CanvasView::sampleChangedChunks(std::uint64_t previousRevision)
   lastSampledTexelCount = 0u;
   changedSampleTexels.clear();
   bool visited = false;
+  if (cellsPerTexel == 1) {
+    // One texel per cell: write each changed chunk's cells straight from the
+    // visited storage. A dense change stops early; the caller's complete
+    // refill then overwrites whatever was written.
+    ILLUMO_PROFILE_ZONE("CanvasView.writeChangedChunks");
+    const bool snap = shouldSnapSample();
+    bool sparse = true;
+    visited = grid->visitChangedChunksSince(
+      previousRevision,
+      [this, snap, &sparse](const ChunkAddress& address,
+                            const SparseCellGrid::ChunkCells* cells) {
+        if (sparse) {
+          sparse = writeExactChunk(
+            address, cells == nullptr ? nullptr : cells->data(), nullptr, snap);
+        }
+      });
+    return visited && sparse;
+  }
   {
     ILLUMO_PROFILE_ZONE("CanvasView.markChangedChunks");
     visited = grid->visitChangedChunksSince(
@@ -1182,6 +1320,23 @@ CanvasView::adoptGrid(SparseCellGrid* nextGrid,
   if (delta.fullReplacement || delta.fromRevision != lastGridRevision ||
       delta.toRevision != grid->getRevision()) {
     sampleGrid(cellsPerTexel > 1);
+  } else if (cellsPerTexel == 1 && !grid->isToroidal()) {
+    // One texel per cell: the delta carries every changed cell's new state.
+    ILLUMO_PROFILE_ZONE("CanvasView.writeChangedCells");
+    lastSampledTexelCount = 0u;
+    bool sparse = true;
+    for (const SparseChangedChunkRecord& record : delta.changedChunks) {
+      sparse = writeExactChunk(record.address,
+                               record.present ? record.cells.data() : nullptr,
+                               &record.stateChanged,
+                               snapChanged);
+      if (!sparse) {
+        break;
+      }
+    }
+    if (!sparse) {
+      sampleGrid(false);
+    }
   } else {
     changedSampleTexels.clear();
     {

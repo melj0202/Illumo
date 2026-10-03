@@ -67,11 +67,20 @@ SceneGraph::Impl::ensureQueryIndex()
   if (queryRevision == contentRevision) {
     return true;
   }
+  if (queryRevision != 0 && queryStructuralRevision == structuralRevision &&
+      queryRefits < kQueryRefitLimit &&
+      queryIndex.refit(worldBounds, boundsValid, effective)) {
+    queryRefits += 1;
+    queryRevision = contentRevision;
+    return true;
+  }
   queryRevision = 0;
   if (!queryIndex.build(worldBounds, boundsValid, effective)) {
     return false;
   }
   queryRevision = contentRevision;
+  queryStructuralRevision = structuralRevision;
+  queryRefits = 0;
   return true;
 }
 

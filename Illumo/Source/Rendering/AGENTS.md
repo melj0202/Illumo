@@ -82,6 +82,19 @@ types.
   later drawables expect it. Call `releaseResources()` before its renderer is
   destroyed. Its sky draws first and derives the rotation-only matrix from
   the frame's world view projection, so it needs no camera of its own.
+  Anything that changes what a bucket uploads must go through `touchBucket`
+  (and moves must set `movedFrame`), and anything that changes the camera or
+  shadow frustum must change Renderer's cull revisions; otherwise an
+  unchanged-looking bucket keeps its stale instance data (D-R39).
+- Uniform tokens carry `RenderCommand::uniformKey`; the push helpers set it
+  with `uniformKeyOf(name)`. It lives in former tail padding: keep
+  `sizeof(RenderCommand) <= 72` (`PublicHeaderSmoke`). Backends resolve through `UniformNameTable`, which
+  must keep comparing the full name and fall back to the derived key, because
+  tokens built by hand or replayed from the wire may carry a stale key (D-R37).
+- `IBackend::setGpuCacheDirectory` is called before `Initialize`. A cache key
+  must cover everything the cached output depends on; bump its format string
+  (`kGlslProgramCacheFormat`, `d3d12-dxbc-N`, `vulkan-pipelines-N`) when the
+  translation or serialized layout changes (D-R38).
 - `VisualStore` replays a visual's recording while its
   `GameVisual::FrameState` is unchanged, so the recording may depend only on
   that state. Nothing may destroy a store visual between `append` and

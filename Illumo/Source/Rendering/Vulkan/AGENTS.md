@@ -44,6 +44,11 @@ public headers, guests and products never see it.
   whose values persist like OpenGL program uniforms.
 - Updates are ordered with draws: an upload goes to the recording's upload
   command buffer until the resource is used in the main one, then inline.
+  `VulkanFrameStats::renderPassBreaks` counts inline breaks; the shipped apps
+  take none per frame apart from the game menu's blur-target transition.
+- Compiled programs and the pipeline cache persist through `GpuShaderCache`
+  (D-R38); refused pipeline-cache data must fall back to an empty cache, never
+  fail startup.
 - Resource destruction is deferred until the submissions using it completed.
 - Every wait on presentation is bounded; while the session is locked presents
   are skipped (`PlatformSessionLocked`), because the driver's present can stall

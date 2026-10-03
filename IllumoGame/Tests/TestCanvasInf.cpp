@@ -2199,6 +2199,145 @@ testSparseOverviewPublicationStaysIncremental()
            "incremental sparse publication matches a fresh overview refill");
 }
 
+// Incremental publication (generation deltas) and in-place revisions
+// (changed-chunk resamples) at one cell per texel and at a density overview
+// must match a fresh complete refill every generation; times the incremental
+// publications (informational).
+static void
+testIncrementalResampleMatchesRefill()
+{
+  testSection("CanvasView: incremental resamples match a complete refill");
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  LifeLikeRuleSet rules{};
+  for (float zoom : { 1.0f, 0.1f }) {
+    Camera camera(glm::vec2(0.0f, 0.0f), zoom, &env);
+    // A sparse soup: about one live cell in ten over a patch smaller than
+    // the view, so generations change a minority of the cache.
+    SparseCellGrid published;
+    SparseCellGrid inPlace;
+    std::uint32_t seed = 12345u;
+    const int radius = zoom >= 1.0f ? 120 : 600;
+    for (int y = -radius / 2; y < radius / 2; ++y) {
+      for (int x = -radius; x < radius; ++x) {
+        seed = seed * 1664525u + 1013904223u;
+        if ((seed >> 24) < 26u) {
+          published.setCell(CellAddress{ x, y }, 0);
+          inPlace.setCell(CellAddress{ x, y }, 0);
+        }
+      }
+    }
+    SparseCellGrid working;
+    SparseCellGrid* currentGrid = &published;
+    SparseCellGrid* nextGrid = &working;
+    CanvasView incremental(80, 60, currentGrid, &window, &camera, nullptr);
+    CanvasView revisions(80, 60, &inPlace, &window, &camera, nullptr);
+    incremental.setFadeSpeed(0.0f);
+    revisions.setFadeSpeed(0.0f);
+    incremental.rebuildTargetsFromGrid();
+    revisions.rebuildTargetsFromGrid();
+    RollingMetric publication;
+    bool advanced = true;
+    bool matched = true;
+    std::size_t refillsBefore = incremental.getCacheRefillCount();
+    for (int generation = 0; generation < 12; ++generation) {
+      advanced = nextGrid->advanceFrom(*currentGrid, rules) && advanced;
+      SparseGenerationDelta delta;
+      advanced = nextGrid->captureGenerationDelta(
+                   currentGrid->getRevision(), &delta, false) &&
+                 advanced;
+      const std::chrono::steady_clock::time_point start =
+        std::chrono::steady_clock::now();
+      incremental.adoptGrid(nextGrid, delta);
+      publication.add(std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - start)
+                        .count());
+      advanced = inPlace.advance(rules) && advanced;
+      revisions.rebuildTargetsFromGrid();
+      CanvasView reference(80, 60, nextGrid, &window, &camera, nullptr);
+      reference.setFadeSpeed(0.0f);
+      reference.rebuildTargetsFromGrid();
+      matched = matched &&
+                sameVisibleWorldTexels(
+                  incremental, reference, "incremental delta publication") &&
+                sameVisibleWorldTexels(
+                  revisions, reference, "in-place changed-chunk resample");
+      SparseCellGrid* priorGrid = currentGrid;
+      currentGrid = nextGrid;
+      nextGrid = priorGrid;
+    }
+    std::printf("BENCH: zoom %.1f sparse soup incremental publication "
+                "p50/max=%.3f/%.3f ms refills=%zu\n",
+                static_cast<double>(zoom),
+                publication.median(),
+                publication.maximum(),
+                incremental.getCacheRefillCount() - refillsBefore);
+    testTrue(g,
+             advanced && matched,
+             zoom >= 1.0f
+               ? "exact-cell deltas and revisions match a fresh refill"
+               : "overview deltas and revisions match a fresh refill");
+  }
+
+  // A settled overview (a block in every chunk across the view) with one
+  // small active patch: incremental resamples should touch only the patch.
+  Camera camera(glm::vec2(0.0f, 0.0f), 0.1f, &env);
+  SparseCellGrid published;
+  for (int chunkY = -30; chunkY < 30; ++chunkY) {
+    for (int chunkX = -50; chunkX < 50; ++chunkX) {
+      const std::int64_t x = chunkX * SparseCellGrid::kChunkDim + 4;
+      const std::int64_t y = chunkY * SparseCellGrid::kChunkDim + 4;
+      for (int offset = 0; offset < 4; ++offset) {
+        published.setCell(CellAddress{ x + offset % 2, y + offset / 2 }, 0);
+      }
+    }
+  }
+  std::uint32_t seed = 777u;
+  for (int y = 0; y < 48; ++y) {
+    for (int x = 0; x < 48; ++x) {
+      seed = seed * 1664525u + 1013904223u;
+      published.setCell(CellAddress{ x, y }, (seed >> 24) < 90u ? 0 : 1);
+    }
+  }
+  SparseCellGrid working;
+  SparseCellGrid* currentGrid = &published;
+  SparseCellGrid* nextGrid = &working;
+  CanvasView settled(80, 60, currentGrid, &window, &camera, nullptr);
+  settled.setFadeSpeed(0.0f);
+  settled.rebuildTargetsFromGrid();
+  RollingMetric publication;
+  bool advanced = true;
+  for (int generation = 0; generation < 40; ++generation) {
+    advanced = nextGrid->advanceFrom(*currentGrid, rules) && advanced;
+    SparseGenerationDelta delta;
+    advanced = nextGrid->captureGenerationDelta(
+                 currentGrid->getRevision(), &delta, false) &&
+               advanced;
+    const std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+    settled.adoptGrid(nextGrid, delta);
+    publication.add(std::chrono::duration<double, std::milli>(
+                      std::chrono::steady_clock::now() - start)
+                      .count());
+    SparseCellGrid* priorGrid = currentGrid;
+    currentGrid = nextGrid;
+    nextGrid = priorGrid;
+  }
+  CanvasView reference(80, 60, currentGrid, &window, &camera, nullptr);
+  reference.setFadeSpeed(0.0f);
+  reference.rebuildTargetsFromGrid();
+  std::printf("BENCH: zoom 0.1 settled world, active patch publication "
+              "p50/max=%.3f/%.3f ms\n",
+              publication.median(),
+              publication.maximum());
+  testTrue(g,
+           advanced && sameVisibleWorldTexels(
+                         settled, reference, "settled overview publication"),
+           "a settled overview with an active patch matches a fresh refill");
+}
+
 static void
 testCanvasViewUsesWorldCellQuad()
 {
@@ -3564,6 +3703,9 @@ registerCanvasInfTests(IllumoTestRegistry& registry)
   });
   registry.add("IllumoGame.CanvasInf.FrameLatencyBench", []() {
     return runCanvasInfCase(testPresentationFrameLatencyBench);
+  });
+  registry.add("IllumoGame.CanvasInf.IncrementalResampleParity", []() {
+    return runCanvasInfCase(testIncrementalResampleMatchesRefill);
   });
   registry.add("IllumoGame.CanvasInf.CursorCellAlignment",
                []() { return runCanvasInfCase(testCursorUsesCellBounds); });

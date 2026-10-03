@@ -1,8 +1,8 @@
 #include <Illumo/Rendering/AssetManager.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/RecordedCommandList.h>
 #include <Illumo/Rendering/RenderWorld.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <algorithm>
@@ -173,6 +173,115 @@ bucketsRecordOnce()
         : 0u;
   }
   ok = check(frameBlocks == 1, "The frame block is written once") && ok;
+  return ok ? 0 : 1;
+}
+
+// Instance buffers keep their contents, so an unchanged bucket skips its
+// records and upload; a move rewrites the bucket in its frame (previous
+// transform) and in the next (previous transform dropped), then stops.
+static int
+unchangedBucketsSkipUploads()
+{
+  WorldFixture fixture;
+  RenderWorld& world = fixture.world;
+  bool ok = check(world.createMaterial(1, RenderMaterialDesc{}) &&
+                    world.createInstance(10, fixture.instance(1, 0.0f)) &&
+                    world.createInstance(11, fixture.instance(1, 0.5f)) &&
+                    world.createMaterial(2, RenderMaterialDesc{}) &&
+                    world.createInstance(20, fixture.instance(2, -0.5f)),
+                  "Two buckets of instances are created");
+  // The instance-buffer writes the last frame submitted (the frame block
+  // excluded), with the first record's previous-model translation.
+  const auto instanceWrites = [&fixture](float* previousX) {
+    size_t writes = 0;
+    for (size_t index = 0;
+         index < fixture.render.mock.getLastNonEmptySubmittedCount();
+         ++index) {
+      const RenderCommand& command =
+        fixture.render.mock.getLastNonEmptySubmitted(index);
+      if (command.commandType == CommandType::WriteBuffer &&
+          command.writeBuffer.sizeBytes != sizeof(Renderer::FrameUniforms)) {
+        writes += 1;
+        if (previousX != nullptr && command.writeBuffer.data != nullptr) {
+          const float* record =
+            static_cast<const float*>(command.writeBuffer.data);
+          *previousX = record[16 + 12];
+        }
+      }
+    }
+    return writes;
+  };
+  fixture.frame();
+  ok = check(instanceWrites(nullptr) == 2 &&
+               world.stats().uploadedInstances == 3 &&
+               world.stats().drawnInstances == 3,
+             "The first frame uploads every bucket") &&
+       ok;
+  fixture.frame();
+  ok = check(instanceWrites(nullptr) == 0 &&
+               world.stats().uploadedInstances == 0 &&
+               fixture.drawCounts() == std::vector<unsigned int>{ 2, 1 },
+             "An unchanged frame draws from the held buffers") &&
+       ok;
+
+  ok = check(world.setInstanceTransform(20, translated(-0.25f)),
+             "An instance moves") &&
+       ok;
+  float previousX = 0.0f;
+  fixture.frame();
+  ok = check(instanceWrites(&previousX) == 1 &&
+               world.stats().uploadedInstances == 1 && previousX == -0.5f,
+             "Only the moved bucket uploads, with the previous transform") &&
+       ok;
+  fixture.frame();
+  ok =
+    check(instanceWrites(&previousX) == 1 && previousX == -0.25f,
+          "The next frame uploads it again without the previous transform") &&
+    ok;
+  fixture.frame();
+  ok = check(instanceWrites(nullptr) == 0, "Then it holds again") && ok;
+
+  ok = check(world.setInstanceTransform(11, translated(100.0f)),
+             "An instance leaves the view") &&
+       ok;
+  fixture.frame();
+  fixture.frame();
+  fixture.frame();
+  ok = check(instanceWrites(nullptr) == 0 &&
+               fixture.drawCounts() == std::vector<unsigned int>{ 1, 1 },
+             "A smaller visible set uploads once and then holds") &&
+       ok;
+  ok = check(world.setInstanceTint(10, { 0.5f, 0.5f, 0.5f, 1.0f }) &&
+               world.setInstanceVisible(20, false),
+             "A tint and a visibility change") &&
+       ok;
+  fixture.frame();
+  ok = check(instanceWrites(nullptr) == 1 &&
+               fixture.drawCounts() == std::vector<unsigned int>{ 1 },
+             "A tint re-uploads its bucket; a hidden bucket stops drawing") &&
+       ok;
+
+  // A camera change culls again: what is visible follows the camera.
+  const auto cameraFrame = [&fixture](float x) {
+    fixture.render.renderer.setNextWorldViewProjection(translated(x));
+    fixture.render.renderer.BeginFrame();
+    fixture.render.renderer.RenderScene(&fixture.scene, &fixture.render.camera);
+    fixture.render.renderer.EndFrame();
+  };
+  cameraFrame(1.4f);
+  ok = check(fixture.drawCounts().empty(),
+             "A camera that sees nothing draws nothing") &&
+       ok;
+  cameraFrame(-100.0f);
+  ok = check(fixture.drawCounts() == std::vector<unsigned int>{ 1 } &&
+               instanceWrites(nullptr) == 1,
+             "Another camera draws the other instance, uploaded once") &&
+       ok;
+  cameraFrame(-100.0f);
+  ok = check(fixture.drawCounts() == std::vector<unsigned int>{ 1 } &&
+               instanceWrites(nullptr) == 0,
+             "A held camera draws from the held buffer") &&
+       ok;
   return ok ? 0 : 1;
 }
 
@@ -482,6 +591,8 @@ registerRenderWorldTests(IllumoTestRegistry& registry)
                skyboxFromFrameCamera);
   registry.add("Illumo.RenderWorld.Bench", renderWorldBench, 120);
   registry.add("Illumo.RenderWorld.BucketsRecordOnce", bucketsRecordOnce);
+  registry.add("Illumo.RenderWorld.UnchangedBucketsSkipUploads",
+               unchangedBucketsSkipUploads);
   registry.add("Illumo.RenderWorld.RejectsInvalidCalls", rejectsInvalidCalls);
   registry.add("Illumo.RenderWorld.ShadowsAndBlending", shadowsAndBlending);
   registry.add("Illumo.RecordedList.RecordingAndNesting", recordingAndNesting);

@@ -24,6 +24,9 @@ struct IllumoConfig
   std::string applicationName{ "Illumo" };
   // UTF-8; empty selects EnvVars::ApplicationConfigPath().
   std::string environmentPath;
+  // UTF-8; where the rendering backend keeps compiled shaders and pipeline
+  // data between runs (D-R38). Empty keeps none.
+  std::string gpuCacheDirectory;
 };
 
 class IllumoTestAccess;
@@ -96,6 +99,7 @@ private:
 
   FrameProfiler m_frameProfiler;
   std::string m_applicationName;
+  std::string m_gpuCacheDirectory;
   WindowFactory m_windowFactory;
   BackendFactory m_backendFactory;
   std::unique_ptr<EnvVars> m_environment;

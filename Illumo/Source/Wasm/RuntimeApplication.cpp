@@ -5,6 +5,7 @@
 #include <Illumo/Engine/Illumo.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiEngineBrand.h>
+#include <Illumo/Platform/PathText.h>
 #include <Illumo/Rendering/WindowIcon.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>
@@ -756,6 +757,9 @@ CreateIllumoApplication()
 {
   IllumoApplicationDefinition application;
   application.applicationName = "Illumo Runtime";
+  // Compiled shaders and pipelines beside the WASM code cache (D-R38).
+  application.gpuCacheDirectory =
+    pathToUtf8(runtimeDirectory() / "cache" / "gpu");
   application.commandLine.applicationName = "IllumoRuntime";
   application.commandLine.description =
     "Isolated WASM application host. Installed applications live in "

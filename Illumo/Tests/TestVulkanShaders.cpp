@@ -2,13 +2,23 @@
 // preparation and reflection (GlslToSpirv) and texel conversion
 // (GpuTexels). The GPU paths are covered by IllumoGpuTests.
 
+#include "Rendering/Gpu/GlslProgramCache.h"
 #include "Rendering/Gpu/GlslToSpirv.h"
+#include "Rendering/Gpu/GpuProgramState.h"
+#include "Rendering/Gpu/GpuShaderCache.h"
 #include "Rendering/Gpu/GpuTexels.h"
+#include "Rendering/UniformNameTable.h"
+#include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <array>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <span>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #ifndef ILLUMO_ENGINE_SHADERS
@@ -194,6 +204,247 @@ testCompileLinksLikeOpenGl()
   return counters.failures;
 }
 
+// Uniform keys (D-R37): parsing, the per-program table, and the program
+// uniform state the explicit backends keep, including tokens whose key was
+// not built by the renderer.
+static int
+testUniformKeys()
+{
+  TestCounters counters;
+  testSection("Uniform keys: parsing, lookup and program state");
+  const UniformKey plain = uniformKeyOf("uMVP");
+  const UniformKey element = uniformKeyOf("uLights[2]");
+  const UniformKey base = uniformKeyOf("uLights");
+  testTrue(counters,
+           plain == uniformKeyOf("uMVP") && !(element == base) &&
+             !(plain == base) && uniformKeyOf(nullptr) == uniformKeyOf(""),
+           "a key hashes the whole name, element included");
+  testTrue(counters,
+           sizeof(RenderCommand) <= 72u &&
+             std::is_trivially_copyable_v<RenderCommand>,
+           "the key leaves the token at 72 bytes");
+
+  UniformNameTable table;
+  int resolved = 0;
+  const auto resolve = [&resolved](const char* name) {
+    resolved += 1;
+    return std::string(name) == "uMissing" ? -1 : 7;
+  };
+  const UniformKey garbage{ 0x12345678u };
+  const bool found =
+    lookupUniform(table, plain, "uMVP", resolve) == 7 &&
+    lookupUniform(table, plain, "uMVP", resolve) == 7 &&
+    lookupUniform(table, garbage, "uMVP", resolve) == 7 &&
+    lookupUniform(table, garbage, "uMissing", resolve) == -1 &&
+    lookupUniform(table, uniformKeyOf("uMissing"), "uMissing", resolve) == -1;
+  for (int index = 0; index < 64; ++index) {
+    const std::string name = "uMany" + std::to_string(index);
+    lookupUniform(table, uniformKeyOf(name.c_str()), name.c_str(), resolve);
+  }
+  testTrue(counters,
+           found && resolved == 66 &&
+             lookupUniform(table, garbage, "uMany40", resolve) == 7 &&
+             resolved == 66,
+           "names resolve once, by any key, absent ones included");
+
+  const std::string vertex = "#version 330 core\n"
+                             "layout (location = 0) in vec3 aPos;\n"
+                             "uniform mat4 uMVP;\n"
+                             "uniform vec4 uLights[3];\n"
+                             "void main() {\n"
+                             "  gl_Position = uMVP * vec4(aPos, 1.0) +\n"
+                             "                uLights[0] + uLights[2];\n"
+                             "}\n";
+  const std::string fragment = "#version 330 core\n"
+                               "uniform sampler2D uTexture;\n"
+                               "layout (location = 0) out vec4 color;\n"
+                               "void main() {\n"
+                               "  color = texture(uTexture, vec2(0.5));\n"
+                               "}\n";
+  GlslProgram program;
+  std::string error;
+  const bool compiled = compileGlslProgram(vertex, fragment, &program, &error);
+  testTrue(counters, compiled, ("the program links: " + error).c_str());
+  const GlslUniform* lights = findUniform(program, "uLights");
+  if (compiled && lights != nullptr) {
+    GpuProgramUniforms uniforms;
+    uniforms.configure(program);
+    const float second[4] = { 1.0f, 2.0f, 3.0f, 4.0f };
+    const float third[4] = { 5.0f, 6.0f, 7.0f, 8.0f };
+    const float ignored[4] = { 9.0f, 9.0f, 9.0f, 9.0f };
+    const int unit = 3;
+    uniforms.set("uLights[1]",
+                 uniformKeyOf("uLights[1]"),
+                 GlslValueType::Vec4,
+                 second,
+                 16);
+    // A hand-built token: any key, found by its name.
+    uniforms.set("uLights[2]", garbage, GlslValueType::Vec4, third, 16);
+    uniforms.set("uLights[3]", GlslValueType::Vec4, ignored, 16);
+    uniforms.set("uLights[x]", GlslValueType::Vec4, ignored, 16);
+    uniforms.set("uLights[]", GlslValueType::Vec4, ignored, 16);
+    uniforms.set("uLights[0]x", GlslValueType::Vec4, ignored, 16);
+    uniforms.set("uLights[0", GlslValueType::Vec4, ignored, 16);
+    uniforms.set("uLights[99999]", GlslValueType::Vec4, ignored, 16);
+    uniforms.set("uLights[65536]", GlslValueType::Vec4, ignored, 16);
+    uniforms.set("uTexture", garbage, GlslValueType::Int, &unit, sizeof(unit));
+    const unsigned char* block = uniforms.block().data();
+    float read[8] = {};
+    std::memcpy(read, block + lights->offset + lights->arrayStride, 16);
+    std::memcpy(
+      read + 4, block + lights->offset + 2u * lights->arrayStride, 16);
+    bool untouched = true;
+    for (unsigned byte = 0; byte < 16u; ++byte) {
+      untouched = untouched && block[lights->offset + byte] == 0u;
+    }
+    testTrue(counters,
+             read[0] == 1.0f && read[3] == 4.0f && read[4] == 5.0f &&
+               read[7] == 8.0f && untouched && uniforms.samplerUnit(0) == 3,
+             "array elements and samplers set by key; bad names ignored");
+  }
+  finalizeGlslCompiler();
+  return counters.failures;
+}
+
+static bool
+sameProgram(const GlslProgram& left, const GlslProgram& right)
+{
+  if (left.vertexSpirv != right.vertexSpirv ||
+      left.fragmentSpirv != right.fragmentSpirv ||
+      left.samplerNames != right.samplerNames ||
+      left.defaultBlockSize != right.defaultBlockSize ||
+      left.fragmentOutputs != right.fragmentOutputs ||
+      left.bindings.size() != right.bindings.size() ||
+      left.uniforms.size() != right.uniforms.size() ||
+      left.inputs.size() != right.inputs.size()) {
+    return false;
+  }
+  for (size_t index = 0; index < left.bindings.size(); ++index) {
+    const GlslBinding& a = left.bindings[index];
+    const GlslBinding& b = right.bindings[index];
+    if (a.kind != b.kind || a.binding != b.binding || a.size != b.size ||
+        a.sampler != b.sampler || a.name != b.name) {
+      return false;
+    }
+  }
+  for (size_t index = 0; index < left.uniforms.size(); ++index) {
+    const GlslUniform& a = left.uniforms[index];
+    const GlslUniform& b = right.uniforms[index];
+    if (a.name != b.name || a.type != b.type || a.offset != b.offset ||
+        a.arraySize != b.arraySize || a.arrayStride != b.arrayStride) {
+      return false;
+    }
+  }
+  for (size_t index = 0; index < left.inputs.size(); ++index) {
+    const GlslVertexInput& a = left.inputs[index];
+    const GlslVertexInput& b = right.inputs[index];
+    if (a.location != b.location || a.locationCount != b.locationCount ||
+        a.integer != b.integer) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The compiled-shader cache (D-R38): programs survive serialization
+// exactly, a second compile is a hit, and damaged or truncated entries are
+// misses that recompile.
+static int
+testShaderCache()
+{
+  TestCounters counters;
+  testSection("GPU shader cache: programs and blobs between runs");
+  GlslProgram compiled;
+  std::string error;
+  const bool built = compileFiles(
+    "mesh_lit_vertex.glsl", "mesh_lit_frag.glsl", &compiled, &error);
+  testTrue(counters, built, ("an engine program compiles: " + error).c_str());
+  std::vector<unsigned char> bytes;
+  serializeGlslProgram(compiled, &bytes);
+  GlslProgram restored;
+  testTrue(counters,
+           built && deserializeGlslProgram(bytes, &restored) &&
+             sameProgram(compiled, restored),
+           "a program round-trips through its bytes");
+  bool truncatedRejected = true;
+  for (size_t cut : { size_t{ 0 }, size_t{ 3 }, bytes.size() / 2 }) {
+    std::vector<unsigned char> shorter(bytes.begin(), bytes.begin() + cut);
+    truncatedRejected =
+      truncatedRejected && !deserializeGlslProgram(shorter, &restored);
+  }
+  std::vector<unsigned char> longer = bytes;
+  longer.push_back(0u);
+  testTrue(counters,
+           truncatedRejected && !deserializeGlslProgram(longer, &restored),
+           "truncated or overlong bytes are rejected");
+
+  const std::filesystem::path directory =
+    std::filesystem::temp_directory_path() / "illumo-gpu-cache-test";
+  std::error_code cleared;
+  std::filesystem::remove_all(directory, cleared);
+  GpuShaderCache cache;
+  testTrue(counters, !cache.enabled(), "a cache without a directory is off");
+  cache.setDirectory(directory);
+  const std::string vertex = "#version 330 core\n"
+                             "layout (location = 0) in vec3 aPos;\n"
+                             "void main() { gl_Position = vec4(aPos, 1.0); }\n";
+  const std::string fragment = "#version 330 core\n"
+                               "out vec4 color;\n"
+                               "void main() { color = vec4(1.0); }\n";
+  GlslProgram first;
+  GlslProgram second;
+  const bool stored =
+    compileGlslProgramCached(cache, vertex, fragment, &first, &error);
+  size_t entries = 0;
+  std::filesystem::path entry;
+  for (std::filesystem::directory_iterator it(directory, cleared);
+       !cleared && it != std::filesystem::directory_iterator();
+       it.increment(cleared)) {
+    entries += 1;
+    entry = it->path();
+  }
+  const bool hit =
+    compileGlslProgramCached(cache, vertex, fragment, &second, &error);
+  testTrue(counters,
+           stored && hit && entries == 1 && sameProgram(first, second),
+           "a cached compile stores one entry and later loads it");
+  {
+    // Damage the stored entry: the next compile misses, rebuilds and rewrites.
+    std::fstream damage(entry, std::ios::binary | std::ios::in | std::ios::out);
+    damage.seekp(-1, std::ios::end);
+    damage.put('\x7f');
+  }
+  std::vector<unsigned char> blob;
+  const std::string_view version(BuildInfo::FullVersion);
+  const std::span<const unsigned char> programParts[] = {
+    { reinterpret_cast<const unsigned char*>(version.data()), version.size() },
+    { reinterpret_cast<const unsigned char*>(vertex.data()), vertex.size() },
+    { reinterpret_cast<const unsigned char*>(fragment.data()),
+      fragment.size() },
+  };
+  const bool damagedMiss = !cache.load(
+    GpuShaderCache::key(kGlslProgramCacheFormat, programParts), &blob);
+  const std::span<const unsigned char> noParts[] = {
+    { reinterpret_cast<const unsigned char*>(vertex.data()), vertex.size() }
+  };
+  GlslProgram third;
+  testTrue(
+    counters,
+    damagedMiss &&
+      compileGlslProgramCached(cache, vertex, fragment, &third, &error) &&
+      sameProgram(first, third),
+    "a damaged entry recompiles to the same program");
+  const std::array<unsigned char, 3> payload{ 1, 2, 3 };
+  const Sha256::Digest key = GpuShaderCache::key("blob", noParts);
+  cache.store(key, payload);
+  const bool loaded = cache.load(key, &blob) && blob.size() == 3u &&
+                      blob[0] == 1u && blob[2] == 3u;
+  std::filesystem::remove_all(directory, cleared);
+  testTrue(counters, loaded, "blobs store and load by key");
+  finalizeGlslCompiler();
+  return counters.failures;
+}
+
 static int
 testEngineShadersCompile()
 {
@@ -327,4 +578,6 @@ registerVulkanShaderTests(IllumoTestRegistry& registry)
                []() { return testEngineShadersCompile(); });
   registry.add("Illumo.Vulkan.TexelConversion",
                []() { return testTexelConversion(); });
+  registry.add("Illumo.Vulkan.UniformKeys", []() { return testUniformKeys(); });
+  registry.add("Illumo.Vulkan.ShaderCache", []() { return testShaderCache(); });
 }

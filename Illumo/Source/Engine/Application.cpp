@@ -135,6 +135,7 @@ runApplication(int argc,
   IllumoConfig config;
   config.applicationName = application.applicationName;
   config.environmentPath = pathToUtf8(EnvVars::ApplicationConfigPath());
+  config.gpuCacheDirectory = application.gpuCacheDirectory;
   Illumo illumo(config);
   if (application.applyDefaults != nullptr) {
     application.applyDefaults(&illumo.environment());

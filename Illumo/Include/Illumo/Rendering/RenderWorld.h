@@ -32,6 +32,9 @@ public:
     // Instances drawn in the last frame's color and shadow passes.
     size_t drawnInstances = 0;
     size_t shadowInstances = 0;
+    // Of those, instances whose records were rebuilt and uploaded in the last
+    // frame; the rest drew from what their buffer already held.
+    size_t uploadedInstances = 0;
   };
 
   RenderWorld();
@@ -111,11 +114,29 @@ private:
   {
     size_t operator()(const BucketKey& key) const;
   };
+  // What a pass's instance buffer holds: the instances it lists, in order,
+  // as written by `frame` from bucket revision `revision`, and the renderer's
+  // cull revision under which they were last found visible.
+  struct PassUpload
+  {
+    bool valid = false;
+    uint64_t frame = 0;
+    uint64_t revision = 0;
+    uint64_t cullRevision = 0;
+    std::vector<size_t> slots;
+  };
   struct Bucket
   {
     BucketKey key;
     bool inUse = false;
     std::vector<size_t> members;
+    // Bumped when an instance joins, leaves or changes transform, tint or
+    // visibility. movedFrame is the latest frame a member's move targets: its
+    // record then carries the previous transform, and the frame after not.
+    uint64_t revision = 1;
+    uint64_t movedFrame = 0;
+    PassUpload colorUpload;
+    PassUpload shadowUpload;
     size_t capacity = 0;
     BufferHandle colorBuffer{};
     BufferHandle shadowBuffer{};
@@ -140,6 +161,20 @@ private:
   void recordColor(Renderer* renderer, Bucket& bucket);
   void recordShadow(Renderer* renderer, Bucket& bucket);
   void fillRecord(const Instance& instance, GpuInstance& record) const;
+  // A member changed: its bucket's uploads no longer describe it.
+  void touchBucket(const Instance& instance);
+  // A pass's visible instances in m_visible (culled by `visible`) and its
+  // buffer streamed unless it already holds exactly their records. Skips
+  // culling when neither the bucket nor the cull revision changed. Returns
+  // the instance count to draw (0: nothing visible).
+  template<typename Visible>
+  size_t streamPass(Renderer* renderer,
+                    Bucket& bucket,
+                    PassUpload& upload,
+                    std::vector<GpuInstance>& staging,
+                    BufferHandle buffer,
+                    uint64_t cullRevision,
+                    const Visible& visible);
   // Culls, streams and draws one bucket's color pass. `bound` tracks whether
   // this frame's shared state is already bound.
   void drawColor(Renderer* renderer, Bucket& bucket, bool& bound);
@@ -154,6 +189,8 @@ private:
   std::unordered_map<BucketKey, size_t, BucketKeyHash> m_bucketIndex;
   // Blended buckets in creation order, drawn after the opaque ones.
   std::vector<size_t> m_blendOrder;
+  // Retained: the instances of one bucket that pass a pass's culling.
+  std::vector<size_t> m_visible;
   RenderEnvironment m_environment;
   RenderSkyboxDesc m_skybox;
   MeshHandle m_skyboxMesh{};

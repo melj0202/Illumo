@@ -209,19 +209,48 @@ queryBench(size_t count)
     gridHits += std::isfinite(nearest) ? 1u : 0u;
   }
   const double gridQuery = elapsedMicros(start) / repeats;
+  // An editor hover: one node moves between queries, and the index refits
+  // instead of rebuilding (still answering exactly what a linear scan does).
+  std::vector<SceneNodeHandle> atOrigin;
+  graph.queryBounds(AxisAlignedBounds3{ Vector3(-0.5f), Vector3(0.5f) },
+                    &atOrigin);
+  const SceneNodeHandle mover =
+    atOrigin.empty() ? SceneNodeHandle{} : atOrigin[0];
+  bool moveParity = !mover.isNull();
+  start = std::chrono::steady_clock::now();
+  for (size_t i = 0; i < repeats; ++i) {
+    SceneNodeDesc desc;
+    desc.transform.position = Vector3(static_cast<float>(i % 7) * 0.25f, 0, 0);
+    graph.setLocalTransform(mover, desc.transform);
+    graph.raycast(
+      Vector3(static_cast<float>(i) * 2, 0, -10), Vector3(0, 0, 1), &hit);
+  }
+  const double moving = elapsedMicros(start) / repeats;
+  for (size_t i = 0; i < 8 && moveParity; ++i) {
+    SceneNodeDesc desc;
+    desc.transform.position = Vector3(static_cast<float>(i) * 0.3f, 0.1f, 0);
+    graph.setLocalTransform(mover, desc.transform);
+    SceneRayHit indexedHit, linearHit;
+    const Vector3 origin(static_cast<float>(i) * 0.3f, 0.1f, -10);
+    moveParity = graph.raycast(origin, Vector3(0, 0, 1), &indexedHit) ==
+                   graph.raycast(origin, Vector3(0, 0, 1), &linearHit, false) &&
+                 indexedHit.node == linearHit.node &&
+                 indexedHit.distance == linearHit.distance;
+  }
   std::printf(
     "SceneQuery nodes=%zu bvh_first_us=%.3f indexed_us=%.3f linear_us=%.3f "
-    "grid_build_us=%.3f grid_vertical_ray_us=%.3f grid_candidates=%zu "
-    "hits=%zu\n",
+    "move_and_ray_us=%.3f grid_build_us=%.3f grid_vertical_ray_us=%.3f "
+    "grid_candidates=%zu hits=%zu\n",
     count,
     build,
     indexed,
     linear,
+    moving,
     gridBuild,
     gridQuery,
     candidates,
     gridHits);
-  if (gridHits != repeats) {
+  if (gridHits != repeats || !moveParity) {
     return 1;
   }
   return 0;

@@ -25,6 +25,10 @@ This file specializes the repository `AGENTS.md` for `Illumo/Source/Scene/`.
   unknown bounds and preserve preorder ties.
 - Derived compilation or BVH allocation failure falls back to authoritative
   traversal or linear queries. A cache failure must not change results.
+- The query BVH refits only while the structural revision, queried members
+  and bounds count match its build; any edit that changes which nodes are
+  queried must advance the structural revision. Refit results must equal a
+  rebuild's (D-E41).
 - Reject mutation during extraction/bounds callbacks. Ordinary edits after
   publication leave snapshot values unchanged. Adding an attachment affects the
   next extraction without retiring existing captured items. Attachment removal,

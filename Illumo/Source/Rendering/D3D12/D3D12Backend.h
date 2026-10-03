@@ -26,6 +26,7 @@ public:
   D3D12Backend(D3D12Backend&&) = delete;
   D3D12Backend& operator=(D3D12Backend&&) = delete;
 
+  void setGpuCacheDirectory(const std::filesystem::path& directory) override;
   bool Initialize() override;
   void Shutdown() override;
   void BeginFrame() override;

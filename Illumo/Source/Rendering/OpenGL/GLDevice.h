@@ -162,12 +162,12 @@ private:
     }
   }
 
-  GLint getUniformLocation(const char* name)
+  GLint getUniformLocation(const char* name, const UniformKey& key)
   {
     if (_activeProgram == nullptr || name == nullptr) {
       return -1;
     }
-    return _activeProgram->GetUniformLocation(name);
+    return _activeProgram->GetUniformLocation(name, key);
   }
 
   GLMesh* resolveMesh(const GLResourceTables& tables, MeshHandle handle) const

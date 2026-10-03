@@ -20,6 +20,14 @@ D3D12Backend::~D3D12Backend()
   Shutdown();
 }
 
+void
+D3D12Backend::setGpuCacheDirectory(const std::filesystem::path& directory)
+{
+  if (m_device) {
+    m_device->setCacheDirectory(directory);
+  }
+}
+
 bool
 D3D12Backend::Initialize()
 {

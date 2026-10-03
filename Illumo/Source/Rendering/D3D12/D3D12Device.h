@@ -5,6 +5,7 @@
 #include "D3D12ShaderCompiler.h"
 #include "Rendering/Gpu/GlslToSpirv.h"
 #include "Rendering/Gpu/GpuProgramState.h"
+#include "Rendering/Gpu/GpuShaderCache.h"
 #include <Illumo/Rendering/CommandQueue.h>
 #include <Illumo/Rendering/FrameReadback.h>
 #include <Illumo/Rendering/IBackend.h>
@@ -19,6 +20,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -209,6 +211,12 @@ public:
   D3D12Device& operator=(D3D12Device&&) = delete;
 
   // present: show frames in the window; otherwise render offscreen only.
+  // Compiled shaders (and pipeline data) persist here between runs
+  // (D-R38); call before initialize. Empty keeps none.
+  void setCacheDirectory(const std::filesystem::path& directory)
+  {
+    m_shaderCache.setDirectory(directory);
+  }
   bool initialize(IRenderWindow* window, bool present, std::string* error);
   void shutdown();
 
@@ -493,6 +501,7 @@ private:
   void executeList(const RecordedCommandList* list);
   void reportFrameError(const char* message);
   void setUniform(const char* name,
+                  const UniformKey& key,
                   GlslValueType given,
                   const void* value,
                   size_t bytes);
@@ -545,6 +554,7 @@ private:
   bool createReadbackBuffer(ReadbackSlot& slot, size_t size);
 
   D3D12Context m_context;
+  GpuShaderCache m_shaderCache;
   IRenderWindow* m_window = nullptr;
   GLFWwindow* m_glfwWindow = nullptr;
   HWND m_hwnd = nullptr;

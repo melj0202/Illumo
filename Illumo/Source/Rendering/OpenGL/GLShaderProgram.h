@@ -1,4 +1,5 @@
 #pragma once
+#include "../UniformNameTable.h"
 #include <GL/glew.h> // Or your preferred OpenGL loader header
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/IShaderProgram.h>
@@ -39,21 +40,21 @@ public:
 
   GLint GetUniformLocation(const char* name)
   {
+    return GetUniformLocation(name, uniformKeyOf(name));
+  }
+
+  // By the token's key (D-R37); absent uniforms cache location -1.
+  GLint GetUniformLocation(const char* name, const UniformKey& key)
+  {
     if (!isValid() || name == nullptr) {
       return -1;
     }
-    const std::string_view nameView(name);
-    std::unordered_map<std::string,
-                       GLint,
-                       TransparentStringHash,
-                       std::equal_to<>>::const_iterator it =
-      _uniformLocations.find(nameView);
-    if (it != _uniformLocations.end()) {
-      return it->second;
-    }
-    const GLint location = glGetUniformLocation(_programID, name);
-    _uniformLocations.emplace(nameView, location);
-    return location;
+    const GLuint program = _programID;
+    return lookupUniform(
+      _uniformLocations, key, name, [program](const char* uniform) {
+        return static_cast<std::int32_t>(
+          glGetUniformLocation(program, uniform));
+      });
   }
 
   void Destroy() override
@@ -70,19 +71,9 @@ private:
   unsigned int _programID;
   unsigned int _vertexShadeID;
   unsigned int _fragmentShaderID;
-  struct TransparentStringHash
-  {
-    using is_transparent = void;
-
-    size_t operator()(std::string_view value) const noexcept
-    {
-      return std::hash<std::string_view>{}(value);
-    }
-  };
 
   bool _valid = false;
-  std::unordered_map<std::string, GLint, TransparentStringHash, std::equal_to<>>
-    _uniformLocations;
+  UniformNameTable _uniformLocations;
 
   void CompileAndLink(const ShaderSources& sources) override
   {

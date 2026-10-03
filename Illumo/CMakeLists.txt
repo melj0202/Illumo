@@ -157,7 +157,9 @@ add_library(Illumo STATIC
   Source/Rendering/OpenGL/GLBackend.cpp
   Source/Rendering/OpenGL/GLDevice.cpp
   Source/Rendering/Gpu/GlslToSpirv.cpp
+  Source/Rendering/Gpu/GlslProgramCache.cpp
   Source/Rendering/Gpu/GpuProgramState.cpp
+  Source/Rendering/Gpu/GpuShaderCache.cpp
   Source/Rendering/Gpu/GpuTexels.cpp
   Source/Rendering/Vulkan/CreateVulkanBackend.cpp
   Source/Rendering/Vulkan/VulkanBackend.cpp

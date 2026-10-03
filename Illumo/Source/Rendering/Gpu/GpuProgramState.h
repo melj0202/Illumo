@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Rendering/Gpu/GlslToSpirv.h"
+#include "Rendering/UniformNameTable.h"
 #include <Illumo/Rendering/IMesh.h>
 #include <array>
 #include <cstddef>
@@ -43,11 +44,20 @@ public:
   void configure(const GlslProgram& reflection);
 
   // glUniform*: `bytes` of `value` for a uniform named like OpenGL names it
-  // ("name" or "name[3]"). Int values set sampler units.
+  // ("name" or "name[3]"). Int values set sampler units. The token's key
+  // (D-R37) finds the uniform; the overload without one derives it.
   void set(const char* name,
+           const UniformKey& key,
            GlslValueType given,
            const void* value,
            size_t bytes);
+  void set(const char* name,
+           GlslValueType given,
+           const void* value,
+           size_t bytes)
+  {
+    set(name, uniformKeyOf(name), given, value, bytes);
+  }
 
   const std::vector<unsigned char>& block() const { return m_block; }
   // The unit sampler `sampler` (GlslBinding::sampler) reads.
@@ -60,11 +70,20 @@ public:
   void markUploaded() { m_dirty = false; }
 
 private:
+  // Reflection by base name, consulted once per token name; the table then
+  // maps each name a token uses to its slot index in the low bits and its
+  // array element above kElementShift (-1: not in the program). No uniform
+  // block holds 32,768 elements, so the pair always fits.
+  static constexpr unsigned kElementShift = 16u;
+  static constexpr uint32_t kMaximumSlot = 0xffffu;
+  static constexpr uint32_t kMaximumElement = 0x7fffu;
   std::unordered_map<std::string,
-                     GpuUniformSlot,
+                     std::int32_t,
                      TransparentStringHash,
                      std::equal_to<>>
-    m_slots;
+    m_slotIndices;
+  std::vector<GpuUniformSlot> m_slots;
+  UniformNameTable m_names;
   std::vector<unsigned char> m_block;
   std::vector<int> m_samplerUnits;
   bool m_dirty = true;

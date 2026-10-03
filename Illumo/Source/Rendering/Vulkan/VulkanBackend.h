@@ -26,6 +26,7 @@ public:
   VulkanBackend(VulkanBackend&&) = delete;
   VulkanBackend& operator=(VulkanBackend&&) = delete;
 
+  void setGpuCacheDirectory(const std::filesystem::path& directory) override;
   bool Initialize() override;
   void Shutdown() override;
   void BeginFrame() override;

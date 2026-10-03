@@ -7,6 +7,7 @@
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cstring>
+#include <span>
 
 static constexpr VkDeviceSize kStagingChunkBytes = 8u * 1024u * 1024u;
 
@@ -58,9 +59,31 @@ VulkanDevice::initialize(IRenderWindow* window,
   const int requested = window != nullptr ? window->getMsaaSamples() : 0;
   m_samples = m_context.sampleCountFor(requested > 0 ? requested : 0);
 
+  // The pipeline cache a previous run saved for this device and driver
+  // (D-R38); Vulkan also validates the data's own header.
+  const VkPhysicalDeviceProperties& properties = m_context.properties();
+  const std::uint32_t identity[3] = { properties.vendorID,
+                                      properties.deviceID,
+                                      properties.driverVersion };
+  const std::span<const unsigned char> keyParts[] = {
+    { reinterpret_cast<const unsigned char*>(identity), sizeof(identity) },
+    { properties.pipelineCacheUUID, VK_UUID_SIZE },
+  };
+  m_pipelineCacheKey = GpuShaderCache::key("vulkan-pipelines-1", keyParts);
+  std::vector<unsigned char> saved;
+  m_shaderCache.load(m_pipelineCacheKey, &saved);
   VkPipelineCacheCreateInfo cache{};
   cache.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-  vkCreatePipelineCache(m_context.device(), &cache, nullptr, &m_pipelineCache);
+  cache.initialDataSize = saved.size();
+  cache.pInitialData = saved.empty() ? nullptr : saved.data();
+  if (vkCreatePipelineCache(
+        m_context.device(), &cache, nullptr, &m_pipelineCache) != VK_SUCCESS &&
+      !saved.empty()) {
+    cache.initialDataSize = 0;
+    cache.pInitialData = nullptr;
+    vkCreatePipelineCache(
+      m_context.device(), &cache, nullptr, &m_pipelineCache);
+  }
   if (!createSlots(error) || !createDefaults(error) || !ensureBackbuffer()) {
     if (error->empty()) {
       *error = "The Vulkan backbuffer could not be created";
@@ -1001,6 +1024,20 @@ VulkanDevice::shutdown()
     slot = Slot{};
   }
   if (m_pipelineCache != VK_NULL_HANDLE) {
+    // Keep this run's pipelines for the next (D-R38).
+    if (m_shaderCache.enabled()) {
+      size_t size = 0;
+      if (vkGetPipelineCacheData(device, m_pipelineCache, &size, nullptr) ==
+            VK_SUCCESS &&
+          size != 0) {
+        std::vector<unsigned char> data(size);
+        if (vkGetPipelineCacheData(
+              device, m_pipelineCache, &size, data.data()) == VK_SUCCESS) {
+          data.resize(size);
+          m_shaderCache.store(m_pipelineCacheKey, data);
+        }
+      }
+    }
     vkDestroyPipelineCache(device, m_pipelineCache, nullptr);
     m_pipelineCache = VK_NULL_HANDLE;
   }

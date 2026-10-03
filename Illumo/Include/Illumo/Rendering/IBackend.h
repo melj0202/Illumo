@@ -9,6 +9,7 @@
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -54,6 +55,13 @@ public:
   IBackend() = default;
   virtual ~IBackend() = default;
 
+  // Where compiled shaders and pipeline data persist between runs (D-R38);
+  // empty, the default, keeps none. Call before Initialize. Backends without
+  // such data ignore it.
+  virtual void setGpuCacheDirectory(const std::filesystem::path& directory)
+  {
+    (void)directory;
+  }
   virtual bool Initialize() = 0;
   virtual void Shutdown() = 0;
   virtual void BeginFrame() = 0;

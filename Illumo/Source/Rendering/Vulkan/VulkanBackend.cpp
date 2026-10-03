@@ -20,6 +20,14 @@ VulkanBackend::~VulkanBackend()
   Shutdown();
 }
 
+void
+VulkanBackend::setGpuCacheDirectory(const std::filesystem::path& directory)
+{
+  if (m_device) {
+    m_device->setCacheDirectory(directory);
+  }
+}
+
 bool
 VulkanBackend::Initialize()
 {

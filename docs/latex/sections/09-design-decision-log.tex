@@ -1624,6 +1624,29 @@ against direct per-cell evaluation.\\
 \textbf{Refines:} D-GC6, D-GC9, D-GC10.
 \end{decisionbox}
 
+\subsection*{D-P37 --- Canvas resamples from what they already hold}
+\begin{decisionbox}[title={D-P37 \quad 2026-10-03}]
+\textbf{Decision:} At one cell per texel, \symbolref{CanvasView} writes a
+changed chunk's texels from the chunk cells its traversal already holds
+(\texttt{writeExactChunk}): changed-chunk resamples use the visited cells and a
+published delta uses its records' cells and change masks, stopping at the
+existing quarter-of-cache dense threshold. Incremental overview resamples
+collect the chunks under the marked texels (sorted, deduplicated, retained)
+and fetch each with \texttt{findChunkCells}; when that footprint would exceed
+half the chunks the marked texels span, one occupied-chunk traversal is used
+as before. Both visit chunks in the order of the old walk, so accumulation is
+unchanged.\\
+\textbf{Why:} The 2026-10-03 performance sweep found near-zoom deltas looking
+up every changed cell by hash and far-zoom updates walking every occupied
+chunk in view to refresh a few texels.\\
+\textbf{Consequences:} Texels are bit-identical to a fresh refill
+(\texttt{IllumoGame.CanvasInf.IncrementalResampleParity}, at zoom 1 and 0.1,
+delta and in-place revisions). A zoom-1 soup update went from 0.07 to
+0.055\,ms and a settled far-zoom world with one active patch from 0.22 to
+0.034\,ms; broad changes take the fallback and cost the same.\\
+\textbf{Refines:} D-P21, D-P24.
+\end{decisionbox}
+
 %----------------------------------------------------------------------------
 \subsection*{D-C6 --- Configurable infinite or finite toroidal world}
 \begin{decisionbox}[title={D-C6 \quad 2026-08-17}]
@@ -3311,6 +3334,77 @@ MIT), built without exceptions with its errors ending the process through
 DXGI and \texttt{d3dcompiler\_47.dll}.\\
 \textbf{Extends:} D-R33
 \end{decisionbox}
+
+\subsection*{D-R37 --- Uniform tokens carry a key}
+\begin{decisionbox}[title={D-R37 \quad 2026-10-03}]
+\textbf{Decision:} Every uniform token carries a \texttt{UniformKey} in
+\texttt{RenderCommand::uniformKey}: the FNV-1a hash of the whole name, set by
+the \symbolref{Renderer} push helpers with \texttt{uniformKeyOf}. It occupies
+what was the token's tail padding, so \texttt{RenderCommand} stays 72 bytes.
+\texttt{UniformNameTable}, an open-addressed table from key and full name to
+a location, or to a slot and array element packed together, that also
+remembers absent names, serves
+\symbolref{GLShaderProgram}\texttt{::GetUniformLocation} and the Vulkan and
+Direct3D 12 \texttt{GpuProgramUniforms::set}. A carried key that does not
+find its name falls back to the key derived from the name, so hand-built or
+recorded tokens stay correct.\\
+\textbf{Why:} The 2026-10-03 performance sweep found all three backends
+hashing the uniform name string on every uniform token.\\
+\textbf{Consequences:} A name resolves once per program and later tokens
+compare a key and the name. \texttt{Illumo.Vulkan.UniformKeys} covers garbage
+keys, arrays, malformed and oversized subscripts, samplers, the single resolve
+and the token size;
+\texttt{Illumo.Gpu.BackendParity} is unchanged.\\
+\textbf{Refines:} D-R33, D-R36 program uniforms.
+\end{decisionbox}
+
+\subsection*{D-R38 --- Compiled shaders and pipelines persist}
+\begin{decisionbox}[title={D-R38 \quad 2026-10-03}]
+\textbf{Decision:} \texttt{IBackend::setGpuCacheDirectory} gives a backend a
+directory before it starts; the runtime passes \pathref{cache/gpu} beside
+itself through \texttt{IllumoApplicationDefinition::gpuCacheDirectory} and
+\texttt{IllumoConfig}. \texttt{GpuShaderCache} stores blobs there (magic,
+format, SHA-256 key, size and checksum; written through \texttt{AtomicFile};
+newest 512 kept). Vulkan and Direct3D 12 cache each GLSL to SPIR-V program
+with its reflection (\texttt{compileGlslProgramCached}, keyed by format,
+engine version and both sources); Direct3D 12 caches the FXC vertex and pixel
+DXBC (keyed by engine version, SPIR-V and bindings); Vulkan loads its
+\texttt{VkPipelineCache} from an entry keyed by vendor, device, driver version
+and pipeline-cache UUID, starts empty if the driver refuses the data, and
+saves it at shutdown. OpenGL ignores the directory.\\
+\textbf{Why:} Every launch recompiled every engine shader through glslang
+and, on Direct3D 12, through FXC.\\
+\textbf{Consequences:} Warm launches start faster: Direct3D 12 about 1,020 to
+570\,ms, Vulkan about 865 to 765\,ms. A damaged, stale or refused entry is a
+miss and is rebuilt; without a directory nothing is cached. The directory is
+trusted like the runtime beside it. \texttt{Illumo.Vulkan.ShaderCache} covers
+the program round trip, truncation, hits, damage and blob storage.\\
+\textbf{Extends:} D-R33, D-R36
+\end{decisionbox}
+
+\subsection*{D-R39 --- Draw streams send only what changed}
+\begin{decisionbox}[title={D-R39 \quad 2026-10-03}]
+\textbf{Decision:} \texttt{RenderWorld} gives each bucket a revision (bumped
+by adds, removals, transforms, tints and visibility) and keeps a record of
+each pass's last upload; \symbolref{Renderer} exposes camera and shadow cull
+revisions that change only when the frustum does. A pass whose records and
+cull revision are unchanged skips culling, and one whose visible list is
+unchanged skips the instance write; a moved bucket rewrites for two frames so
+the previous-model attribute settles. Frame uniforms bind only when a pass
+draws. \symbolref{GameVisual}\texttt{::emitDraws} binds style, mesh and
+texture only when they change and sends resolution, \texttt{uMVP} and the
+sampler unit once per style per call.\\
+\textbf{Why:} The sweep found \texttt{RenderWorld} culling and re-uploading
+every instance every frame and \texttt{GameVisual} emitting about eight tokens
+per batch.\\
+\textbf{Consequences:} A static RenderWorld frame costs about 1\,$\mu$s
+instead of 99\,$\mu$s (2,000 instances) or 2.6\,ms (50,000).
+\texttt{Illumo.RenderWorld.UnchangedBucketsSkipUploads} covers moves, tints,
+visibility and camera changes; \texttt{Illumo.GameVisual.SpriteBatches} checks
+that four batches of one style send one shader, mesh, \texttt{uMVP} and
+sampler token.\\
+\textbf{Refines:} D-R28, D-R34
+\end{decisionbox}
 \subsection*{D-UI8 --- Liquid, bouncy menu motion}
 \begin{decisionbox}[title={D-UI8 \quad 2026-09-23}]
 \textbf{Decision:} The glass menus move like liquid. A travelling selection
@@ -3845,6 +3939,23 @@ no cache compile as before. \texttt{Illumo.Wasm.ModuleCache} and
 \texttt{Illumo.Wasm.RuntimeShellSplash} cover sharing, reuse, damage, refusal,
 pruning and the deferred start.\\
 \textbf{Refines:} D-E15 engine modes, D-E31 runtime shell, D-UI14 splash.
+\end{decisionbox}
+
+\subsection*{D-E41 --- The scene query BVH refits}
+\begin{decisionbox}[title={D-E41 \quad 2026-10-03}]
+\textbf{Decision:} When a query finds the graph's content changed but its
+structure unchanged, \texttt{SceneQueryIndex::refit} keeps the tree if the
+queried members (recorded sorted at build) and the bounds count match, and
+recomputes leaf and internal boxes in one reverse pass over the nodes. A
+structural change, a membership mismatch, or a change after 64 consecutive
+refits rebuilds the binned-SAH tree.\\
+\textbf{Why:} The 2026-10-03 performance sweep found every transform change
+rebuilding the whole BVH before the next raycast or bounds query.\\
+\textbf{Consequences:} Query results equal a rebuild's (the scene benchmark
+checks parity); the rebuild limit keeps moved boxes from loosening the tree
+indefinitely. Moving nodes and raycasting each frame went from 636 to
+29\,$\mu$s at 1,000 nodes and from 7.9 to 0.31\,ms at 10,000.\\
+\textbf{Refines:} D-E12
 \end{decisionbox}
 
 \subsection*{D-F2 --- Calendar build versions}

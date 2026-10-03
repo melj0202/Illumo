@@ -266,6 +266,48 @@ Renderer::isShadowCasterRelevant(const AxisAlignedBounds3& bounds) const
   return boundsIntersectFrustum(bounds, shadowFrustum);
 }
 
+bool
+Renderer::sameFrustum(const BoundsFrustum& left, const BoundsFrustum& right)
+{
+  return left.valid == right.valid && left.planes == right.planes &&
+         left.corners == right.corners &&
+         left.worldBounds.minimum == right.worldBounds.minimum &&
+         left.worldBounds.maximum == right.worldBounds.maximum;
+}
+
+uint64_t
+Renderer::getCullRevision() const
+{
+  if (m_cullActive != frameContext.active ||
+      (frameContext.active && !sameFrustum(m_cullFrustum, cameraFrustum))) {
+    m_cullActive = frameContext.active;
+    m_cullFrustum = cameraFrustum;
+    m_cullRevision += 1;
+  }
+  return m_cullRevision;
+}
+
+uint64_t
+Renderer::getShadowCullRevision() const
+{
+  const bool active = shadowFrameContext.active;
+  if (m_shadowCullActive != active ||
+      (active &&
+       (m_shadowCullVolumeValid != shadowCasterVolumeValid ||
+        !(m_shadowCullVolume.minimum == shadowCasterVolume.minimum) ||
+        !(m_shadowCullVolume.maximum == shadowCasterVolume.maximum) ||
+        !sameFrustum(m_shadowCullCasterFrustum, shadowCasterFrustum) ||
+        !sameFrustum(m_shadowCullFrustum, shadowFrustum)))) {
+    m_shadowCullActive = active;
+    m_shadowCullVolumeValid = shadowCasterVolumeValid;
+    m_shadowCullVolume = shadowCasterVolume;
+    m_shadowCullCasterFrustum = shadowCasterFrustum;
+    m_shadowCullFrustum = shadowFrustum;
+    m_shadowCullRevision += 1;
+  }
+  return m_shadowCullRevision;
+}
+
 void
 Renderer::ensureShadowResources(int mapSize)
 {
@@ -1067,6 +1109,7 @@ Renderer::pushUniformInt(const char* name, int value)
   RenderCommand cmd;
   cmd.commandType = CommandType::SetUniformInt;
   copyUniformName(cmd.uniformInt.name, sizeof(cmd.uniformInt.name), name);
+  cmd.uniformKey = uniformKeyOf(cmd.uniformInt.name);
   cmd.uniformInt.value = value;
   emitCommand(cmd);
 }
@@ -1077,6 +1120,7 @@ Renderer::pushUniformFloat(const char* name, float value)
   RenderCommand cmd;
   cmd.commandType = CommandType::SetUniformFloat;
   copyUniformName(cmd.uniformFloat.name, sizeof(cmd.uniformFloat.name), name);
+  cmd.uniformKey = uniformKeyOf(cmd.uniformFloat.name);
   cmd.uniformFloat.value = value;
   emitCommand(cmd);
 }
@@ -1087,6 +1131,7 @@ Renderer::pushUniformVec2(const char* name, float x, float y)
   RenderCommand cmd;
   cmd.commandType = CommandType::SetUniformVec2;
   copyUniformName(cmd.uniformVec2.name, sizeof(cmd.uniformVec2.name), name);
+  cmd.uniformKey = uniformKeyOf(cmd.uniformVec2.name);
   cmd.uniformVec2.x = x;
   cmd.uniformVec2.y = y;
   emitCommand(cmd);
@@ -1098,6 +1143,7 @@ Renderer::pushUniformVec3(const char* name, float x, float y, float z)
   RenderCommand cmd;
   cmd.commandType = CommandType::SetUniformVec3;
   copyUniformName(cmd.uniformVec3.name, sizeof(cmd.uniformVec3.name), name);
+  cmd.uniformKey = uniformKeyOf(cmd.uniformVec3.name);
   cmd.uniformVec3.x = x;
   cmd.uniformVec3.y = y;
   cmd.uniformVec3.z = z;
@@ -1110,6 +1156,7 @@ Renderer::pushUniformVec4(const char* name, float x, float y, float z, float w)
   RenderCommand cmd;
   cmd.commandType = CommandType::SetUniformVec4;
   copyUniformName(cmd.uniformVec4.name, sizeof(cmd.uniformVec4.name), name);
+  cmd.uniformKey = uniformKeyOf(cmd.uniformVec4.name);
   cmd.uniformVec4.x = x;
   cmd.uniformVec4.y = y;
   cmd.uniformVec4.z = z;
@@ -1134,6 +1181,7 @@ Renderer::pushUniformMat4(const char* name, const float* m16)
   RenderCommand cmd;
   cmd.commandType = CommandType::SetUniformMat4;
   copyUniformName(cmd.uniformMat4.name, sizeof(cmd.uniformMat4.name), name);
+  cmd.uniformKey = uniformKeyOf(cmd.uniformMat4.name);
   cmd.uniformMat4.value = retained;
   emitCommand(cmd);
 }

@@ -1,10 +1,14 @@
 #include "D3D12Device.h"
+#include "Rendering/Gpu/GlslProgramCache.h"
 #include "Rendering/Gpu/GpuTexels.h"
 
+#include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
 #include <cstring>
+#include <span>
+#include <string_view>
 
 static constexpr int kMaxTextureSize = D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
 
@@ -217,14 +221,76 @@ D3D12Device::isMeshValid(MeshHandle handle) const
   return m_meshHandles.isCurrent(handle) && resolveMesh(handle) != nullptr;
 }
 
+// A program's vertex and pixel DXBC: from the cache when an earlier run
+// translated and compiled the same SPIR-V and bindings with the same build
+// (D-R38), otherwise through SPIRV-Cross and FXC, then stored.
+static bool
+compileProgramCode(GpuShaderCache& cache,
+                   const GlslProgram& reflection,
+                   std::vector<unsigned char>* vertexCode,
+                   std::vector<unsigned char>* pixelCode,
+                   std::string* error)
+{
+  std::vector<unsigned char> bindings;
+  for (const GlslBinding& binding : reflection.bindings) {
+    bindings.push_back(static_cast<unsigned char>(binding.kind));
+    for (unsigned int index = 0u; index < 4u; ++index) {
+      bindings.push_back(
+        static_cast<unsigned char>(binding.binding >> (index * 8u)));
+    }
+  }
+  const std::string_view version(BuildInfo::FullVersion);
+  const std::span<const unsigned char> parts[] = {
+    { reinterpret_cast<const unsigned char*>(version.data()), version.size() },
+    { reinterpret_cast<const unsigned char*>(reflection.vertexSpirv.data()),
+      reflection.vertexSpirv.size() * sizeof(uint32_t) },
+    { reinterpret_cast<const unsigned char*>(reflection.fragmentSpirv.data()),
+      reflection.fragmentSpirv.size() * sizeof(uint32_t) },
+    { bindings.data(), bindings.size() },
+  };
+  const Sha256::Digest key = GpuShaderCache::key("d3d12-dxbc-1", parts);
+  // Entry: vertex size (u32), vertex DXBC, pixel DXBC.
+  std::vector<unsigned char> blob;
+  if (cache.load(key, &blob) && blob.size() >= 4u) {
+    const std::uint32_t vertexSize =
+      static_cast<std::uint32_t>(blob[0]) |
+      (static_cast<std::uint32_t>(blob[1]) << 8u) |
+      (static_cast<std::uint32_t>(blob[2]) << 16u) |
+      (static_cast<std::uint32_t>(blob[3]) << 24u);
+    if (vertexSize != 0u && vertexSize < blob.size() - 4u) {
+      vertexCode->assign(blob.begin() + 4, blob.begin() + 4 + vertexSize);
+      pixelCode->assign(blob.begin() + 4 + vertexSize, blob.end());
+      return true;
+    }
+  }
+  std::string vertexHlsl;
+  std::string pixelHlsl;
+  translateProgramToHlsl(reflection, &vertexHlsl, &pixelHlsl);
+  if (!compileHlsl(vertexHlsl, true, vertexCode, error) ||
+      !compileHlsl(pixelHlsl, false, pixelCode, error)) {
+    return false;
+  }
+  blob.clear();
+  const std::uint32_t vertexSize =
+    static_cast<std::uint32_t>(vertexCode->size());
+  for (unsigned int index = 0u; index < 4u; ++index) {
+    blob.push_back(static_cast<unsigned char>(vertexSize >> (index * 8u)));
+  }
+  blob.insert(blob.end(), vertexCode->begin(), vertexCode->end());
+  blob.insert(blob.end(), pixelCode->begin(), pixelCode->end());
+  cache.store(key, blob);
+  return true;
+}
+
 std::unique_ptr<D3D12Program>
 D3D12Device::buildProgram(const ShaderSources& sources, std::string* error)
 {
   std::unique_ptr<D3D12Program> program = std::make_unique<D3D12Program>();
-  if (!compileGlslProgram(sources.vertexSource,
-                          sources.fragmentSource,
-                          &program->reflection,
-                          error)) {
+  if (!compileGlslProgramCached(m_shaderCache,
+                                sources.vertexSource,
+                                sources.fragmentSource,
+                                &program->reflection,
+                                error)) {
     return nullptr;
   }
   const GlslProgram& reflection = program->reflection;
@@ -232,11 +298,11 @@ D3D12Device::buildProgram(const ShaderSources& sources, std::string* error)
     *error = "The shader program uses more than 32 uniform blocks and samplers";
     return nullptr;
   }
-  std::string vertexHlsl;
-  std::string pixelHlsl;
-  translateProgramToHlsl(reflection, &vertexHlsl, &pixelHlsl);
-  if (!compileHlsl(vertexHlsl, true, &program->vertexCode, error) ||
-      !compileHlsl(pixelHlsl, false, &program->pixelCode, error) ||
+  if (!compileProgramCode(m_shaderCache,
+                          reflection,
+                          &program->vertexCode,
+                          &program->pixelCode,
+                          error) ||
       !reflectVertexInputs(
         program->vertexCode, &program->vertexInputs, error)) {
     return nullptr;

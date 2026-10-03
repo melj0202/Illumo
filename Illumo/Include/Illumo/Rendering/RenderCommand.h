@@ -1,6 +1,8 @@
 #pragma once
 #include <Illumo/Rendering/PipelineState.h>
 #include <Illumo/Rendering/ResourceHandle.h>
+#include <cstddef>
+#include <cstdint>
 
 // Opaque, typed, generational backend handles (never raw GL object names).
 // Data pointers in uniform/update payloads must remain valid until
@@ -118,9 +120,36 @@ struct CmdBindTexture
   unsigned int slot;
 };
 
-// D-R9: string-named uniforms are GL-shaped debt. Fine for OpenGL +
-// MockBackend. A second real API (Metal/Vulkan) would want locations / binding
-// points instead.
+// A uniform's identity, computed once when its token is built (D-R37): the
+// FNV-1a hash of its whole name, "[n]" suffix included. Backends find a
+// program's uniform by it instead of hashing the name on every token, and
+// always confirm the name: a token built without the renderer may carry any
+// key, and a lookup that misses re-derives the key from the name.
+struct UniformKey
+{
+  std::uint32_t hash;
+};
+
+inline bool
+operator==(const UniformKey& left, const UniformKey& right)
+{
+  return left.hash == right.hash;
+}
+
+inline UniformKey
+uniformKeyOf(const char* name)
+{
+  std::uint32_t hash = 2166136261u;
+  if (name != nullptr) {
+    for (std::size_t index = 0u; name[index] != '\0'; ++index) {
+      hash = (hash ^ static_cast<unsigned char>(name[index])) * 16777619u;
+    }
+  }
+  return UniformKey{ hash };
+}
+
+// D-R9: string-named uniforms are GL-shaped debt; D-R37 adds
+// RenderCommand::uniformKey so no backend hashes the name per token.
 struct CmdUniformInt
 {
   char name[32];
@@ -280,4 +309,7 @@ struct RenderCommand
   // Append fields to preserve existing positional aggregate initialization.
   // ClearDepthBuffer, ClearScreen and ClearAll default to the far depth.
   float clearDepthValue = 1.0f;
+  // The SetUniform* name's key (D-R37), set by the Renderer push helpers. It
+  // sits in what was tail padding, so the token stays 72 bytes.
+  UniformKey uniformKey{ 0u };
 };

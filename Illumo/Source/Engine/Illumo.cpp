@@ -66,6 +66,7 @@ backendDisplayName(BackendDef api)
 Illumo::Illumo(IllumoConfig config)
   : m_applicationName(config.applicationName.empty() ? "Illumo"
                                                      : config.applicationName)
+  , m_gpuCacheDirectory(config.gpuCacheDirectory)
   , m_windowFactory(CreateRenderWindowFor)
   , m_backendFactory(createBackend)
 {
@@ -247,6 +248,12 @@ Illumo::startGraphics(BackendDef api,
                      backendDisplayName(api) + " rendering backend");
     m_window.reset();
     return false;
+  }
+  if (!m_gpuCacheDirectory.empty()) {
+    std::filesystem::path gpuCache;
+    if (pathFromUtf8(m_gpuCacheDirectory, &gpuCache)) {
+      (*backend)->setGpuCacheDirectory(gpuCache);
+    }
   }
   bool backendInitialized = false;
   {

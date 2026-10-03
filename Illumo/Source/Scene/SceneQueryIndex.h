@@ -12,6 +12,12 @@ public:
   bool build(const std::vector<AxisAlignedBounds3>& bounds,
              const std::vector<unsigned char>& valid,
              const std::vector<unsigned char>& enabled);
+  // Rebounds the built tree over changed box values, bottom-up in O(n).
+  // False, leaving the tree untouched, when the indexed set (valid and
+  // enabled) differs from the one it was built over: rebuild then.
+  bool refit(const std::vector<AxisAlignedBounds3>& bounds,
+             const std::vector<unsigned char>& valid,
+             const std::vector<unsigned char>& enabled);
   bool raycast(const std::vector<AxisAlignedBounds3>& bounds,
                const Vector3& origin,
                const Vector3& direction,
@@ -42,4 +48,7 @@ private:
   std::vector<Node> m_nodes;
   std::vector<uint32_t> m_indices;
   std::vector<uint32_t> m_buildScratch;
+  // The indexed set in ascending order, for refit to confirm it holds.
+  std::vector<uint32_t> m_members;
+  size_t m_boundsCount = 0;
 };

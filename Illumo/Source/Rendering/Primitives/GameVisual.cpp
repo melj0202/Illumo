@@ -2012,22 +2012,72 @@ GameVisual::emitDraws(Renderer* value, const FrameState& state)
                         state.clipRect[2],
                         state.clipRect[3]);
   }
+  // A batch re-emits only what differs from the batch before it in this
+  // visual: a new style (pipeline and shader) re-binds the mesh and texture,
+  // otherwise only a changed mesh or texture is bound. Uniform values belong
+  // to their shader program in every backend, so each style receives this
+  // visual's uniforms once (the sampler unit once it draws sprites).
+  struct UniformedStyle
+  {
+    RenderStyleHandle style;
+    bool sampler = false;
+  };
+  std::array<UniformedStyle, 8> uniformed{};
+  std::size_t uniformedCount = 0u;
+  RenderStyleHandle boundStyle{};
+  MeshHandle boundMesh{};
+  TextureHandle boundTexture{};
+  bool styleBound = false;
+  bool meshBound = false;
+  bool textureBound = false;
   bool appended = true;
   for (size_t i = 0; i < drawBatches.size(); ++i) {
     const DrawBatch& batch = drawBatches[i];
-    if (!value->bindStyle(batch.styleHandle)) {
-      appended = false;
-      break;
+    if (!styleBound || batch.styleHandle != boundStyle) {
+      if (!value->bindStyle(batch.styleHandle)) {
+        appended = false;
+        break;
+      }
+      boundStyle = batch.styleHandle;
+      styleBound = true;
+      meshBound = false;
+      textureBound = false;
     }
-    value->pushSetMesh(batch.kind == BatchKind::Shape ? shapeMeshHandle
-                                                      : spriteMeshHandle);
-    value->pushUniformVec2(
-      WorldLook::kResolutionUniform, state.resolutionX, state.resolutionY);
-    value->pushUniformMat4(WorldLook::kMvpUniform, state.mvp.data());
+    const MeshHandle mesh =
+      batch.kind == BatchKind::Shape ? shapeMeshHandle : spriteMeshHandle;
+    if (!meshBound || mesh != boundMesh) {
+      value->pushSetMesh(mesh);
+      boundMesh = mesh;
+      meshBound = true;
+    }
+    std::size_t entry = 0u;
+    while (entry < uniformedCount && uniformed[entry].style != boundStyle) {
+      ++entry;
+    }
+    // More than eight styles in one visual: the extra ones re-send theirs.
+    const bool known = entry < uniformedCount;
+    if (!known) {
+      value->pushUniformVec2(
+        WorldLook::kResolutionUniform, state.resolutionX, state.resolutionY);
+      value->pushUniformMat4(WorldLook::kMvpUniform, state.mvp.data());
+      if (uniformedCount < uniformed.size()) {
+        uniformed[uniformedCount] = UniformedStyle{ boundStyle, false };
+        entry = uniformedCount++;
+      }
+    }
     if (batch.kind == BatchKind::Sprite) {
-      value->pushUniformInt(WorldLook::kTextureUniform,
-                            WorldLook::kTextureUnit);
-      value->pushSetTexture(batch.textureHandle, WorldLook::kTextureUnit);
+      if (entry >= uniformedCount || !uniformed[entry].sampler) {
+        value->pushUniformInt(WorldLook::kTextureUniform,
+                              WorldLook::kTextureUnit);
+        if (entry < uniformedCount) {
+          uniformed[entry].sampler = true;
+        }
+      }
+      if (!textureBound || batch.textureHandle != boundTexture) {
+        value->pushSetTexture(batch.textureHandle, WorldLook::kTextureUnit);
+        boundTexture = batch.textureHandle;
+        textureBound = true;
+      }
     }
     value->pushDrawIndexed(batch.quadCount * 6, batch.firstQuad * 6);
   }

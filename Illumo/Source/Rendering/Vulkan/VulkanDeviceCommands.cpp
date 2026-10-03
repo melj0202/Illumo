@@ -142,6 +142,7 @@ VulkanDevice::executeCommand(const RenderCommand& command)
 
     case CommandType::SetUniformInt:
       setUniform(command.uniformInt.name,
+                 command.uniformKey,
                  GlslValueType::Int,
                  &command.uniformInt.value,
                  sizeof(int));
@@ -149,6 +150,7 @@ VulkanDevice::executeCommand(const RenderCommand& command)
 
     case CommandType::SetUniformFloat:
       setUniform(command.uniformFloat.name,
+                 command.uniformKey,
                  GlslValueType::Float,
                  &command.uniformFloat.value,
                  sizeof(float));
@@ -156,8 +158,11 @@ VulkanDevice::executeCommand(const RenderCommand& command)
 
     case CommandType::SetUniformVec2: {
       const float values[2] = { command.uniformVec2.x, command.uniformVec2.y };
-      setUniform(
-        command.uniformVec2.name, GlslValueType::Vec2, values, sizeof(values));
+      setUniform(command.uniformVec2.name,
+                 command.uniformKey,
+                 GlslValueType::Vec2,
+                 values,
+                 sizeof(values));
       break;
     }
 
@@ -165,8 +170,11 @@ VulkanDevice::executeCommand(const RenderCommand& command)
       const float values[3] = { command.uniformVec3.x,
                                 command.uniformVec3.y,
                                 command.uniformVec3.z };
-      setUniform(
-        command.uniformVec3.name, GlslValueType::Vec3, values, sizeof(values));
+      setUniform(command.uniformVec3.name,
+                 command.uniformKey,
+                 GlslValueType::Vec3,
+                 values,
+                 sizeof(values));
       break;
     }
 
@@ -175,8 +183,11 @@ VulkanDevice::executeCommand(const RenderCommand& command)
                                 command.uniformVec4.y,
                                 command.uniformVec4.z,
                                 command.uniformVec4.w };
-      setUniform(
-        command.uniformVec4.name, GlslValueType::Vec4, values, sizeof(values));
+      setUniform(command.uniformVec4.name,
+                 command.uniformKey,
+                 GlslValueType::Vec4,
+                 values,
+                 sizeof(values));
       break;
     }
 
@@ -186,6 +197,7 @@ VulkanDevice::executeCommand(const RenderCommand& command)
         break;
       }
       setUniform(command.uniformMat4.name,
+                 command.uniformKey,
                  GlslValueType::Mat4,
                  command.uniformMat4.value,
                  16 * sizeof(float));
@@ -319,6 +331,7 @@ VulkanDevice::executeCommand(const RenderCommand& command)
 
 void
 VulkanDevice::setUniform(const char* name,
+                         const UniformKey& key,
                          GlslValueType given,
                          const void* value,
                          size_t bytes)
@@ -327,7 +340,7 @@ VulkanDevice::setUniform(const char* name,
   // glUniform* reaches only the program in use.
   VulkanProgram* program = resolveProgram(m_program);
   if (program != nullptr) {
-    program->uniforms.set(name, given, value, bytes);
+    program->uniforms.set(name, key, given, value, bytes);
   }
 }
 

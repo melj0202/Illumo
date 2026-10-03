@@ -6,22 +6,37 @@ void
 GpuProgramUniforms::configure(const GlslProgram& reflection)
 {
   m_slots.clear();
+  m_slotIndices.clear();
+  m_names.clear();
   m_block.assign(reflection.defaultBlockSize, 0);
   m_samplerUnits.assign(reflection.samplerNames.size(), 0);
   m_dirty = true;
+  const auto add = [this](const std::string& name, const GpuUniformSlot& slot) {
+    const std::unordered_map<std::string,
+                             std::int32_t,
+                             TransparentStringHash,
+                             std::equal_to<>>::const_iterator found =
+      m_slotIndices.find(name);
+    if (found != m_slotIndices.end()) {
+      m_slots[static_cast<size_t>(found->second)] = slot;
+      return;
+    }
+    m_slotIndices.emplace(name, static_cast<std::int32_t>(m_slots.size()));
+    m_slots.push_back(slot);
+  };
   for (const GlslUniform& uniform : reflection.uniforms) {
     GpuUniformSlot slot;
     slot.type = uniform.type;
     slot.offset = uniform.offset;
     slot.arraySize = uniform.arraySize;
     slot.arrayStride = uniform.arrayStride;
-    m_slots[uniform.name] = slot;
+    add(uniform.name, slot);
   }
   for (size_t index = 0; index < reflection.samplerNames.size(); ++index) {
     GpuUniformSlot slot;
     slot.type = GlslValueType::Int;
     slot.sampler = static_cast<int>(index);
-    m_slots[reflection.samplerNames[index]] = slot;
+    add(reflection.samplerNames[index], slot);
   }
 }
 
@@ -55,6 +70,7 @@ isBoolType(GlslValueType type)
 
 void
 GpuProgramUniforms::set(const char* name,
+                        const UniformKey& key,
                         GlslValueType given,
                         const void* value,
                         size_t bytes)
@@ -62,33 +78,46 @@ GpuProgramUniforms::set(const char* name,
   if (name == nullptr) {
     return;
   }
-  std::string_view base(name);
-  unsigned element = 0;
-  const size_t bracket = base.find('[');
-  if (bracket != std::string_view::npos) {
-    const size_t close = base.find(']', bracket);
-    if (close == std::string_view::npos || close != base.size() - 1) {
-      return;
-    }
-    element = 0;
-    for (size_t index = bracket + 1; index < close; ++index) {
-      const char digit = base[index];
-      if (digit < '0' || digit > '9') {
-        return;
+  const std::int32_t entry =
+    lookupUniform(m_names, key, name, [this](const char* uniform) {
+      // First use of this name: its base name's reflected slot and its
+      // element, packed as kElementShift; -1 for a malformed suffix, an
+      // element no block could hold or a uniform the program lacks.
+      std::string_view base(uniform);
+      uint32_t element = 0u;
+      const size_t open = base.find('[');
+      if (open != std::string_view::npos) {
+        size_t index = open + 1u;
+        size_t digits = 0u;
+        for (; index < base.size() && base[index] >= '0' && base[index] <= '9';
+             ++index, ++digits) {
+          element = element * 10u + static_cast<uint32_t>(base[index] - '0');
+          if (element > kMaximumElement) {
+            return static_cast<std::int32_t>(-1);
+          }
+        }
+        if (digits == 0u || index + 1u != base.size() || base[index] != ']') {
+          return static_cast<std::int32_t>(-1);
+        }
+        base = base.substr(0, open);
       }
-      element = element * 10u + static_cast<unsigned>(digit - '0');
-    }
-    base = base.substr(0, bracket);
-  }
-  const std::unordered_map<std::string,
-                           GpuUniformSlot,
-                           TransparentStringHash,
-                           std::equal_to<>>::const_iterator found =
-    m_slots.find(base);
-  if (found == m_slots.end()) {
+      const std::unordered_map<std::string,
+                               std::int32_t,
+                               TransparentStringHash,
+                               std::equal_to<>>::const_iterator found =
+        m_slotIndices.find(base);
+      if (found == m_slotIndices.end() || found->second > kMaximumSlot) {
+        return static_cast<std::int32_t>(-1);
+      }
+      return static_cast<std::int32_t>(static_cast<uint32_t>(found->second) |
+                                       (element << kElementShift));
+    });
+  if (entry < 0) {
     return;
   }
-  const GpuUniformSlot& slot = found->second;
+  const size_t index = static_cast<size_t>(entry) & kMaximumSlot;
+  const unsigned element = static_cast<unsigned>(entry) >> kElementShift;
+  const GpuUniformSlot& slot = m_slots[index];
   if (slot.sampler >= 0) {
     if (given == GlslValueType::Int && element == 0) {
       int unit = 0;

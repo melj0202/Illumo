@@ -236,7 +236,7 @@ GLDevice::executeCommand(const RenderCommand& cmd,
     }
 
     case CommandType::SetUniformInt: {
-      GLint loc = getUniformLocation(cmd.uniformInt.name);
+      GLint loc = getUniformLocation(cmd.uniformInt.name, cmd.uniformKey);
       if (loc >= 0) {
         glUniform1i(loc, cmd.uniformInt.value);
       }
@@ -244,7 +244,7 @@ GLDevice::executeCommand(const RenderCommand& cmd,
     }
 
     case CommandType::SetUniformFloat: {
-      GLint loc = getUniformLocation(cmd.uniformFloat.name);
+      GLint loc = getUniformLocation(cmd.uniformFloat.name, cmd.uniformKey);
       if (loc >= 0) {
         glUniform1f(loc, cmd.uniformFloat.value);
       }
@@ -252,7 +252,7 @@ GLDevice::executeCommand(const RenderCommand& cmd,
     }
 
     case CommandType::SetUniformVec2: {
-      GLint loc = getUniformLocation(cmd.uniformVec2.name);
+      GLint loc = getUniformLocation(cmd.uniformVec2.name, cmd.uniformKey);
       if (loc >= 0) {
         glUniform2f(loc, cmd.uniformVec2.x, cmd.uniformVec2.y);
       }
@@ -260,7 +260,7 @@ GLDevice::executeCommand(const RenderCommand& cmd,
     }
 
     case CommandType::SetUniformVec3: {
-      GLint loc = getUniformLocation(cmd.uniformVec3.name);
+      GLint loc = getUniformLocation(cmd.uniformVec3.name, cmd.uniformKey);
       if (loc >= 0) {
         glUniform3f(
           loc, cmd.uniformVec3.x, cmd.uniformVec3.y, cmd.uniformVec3.z);
@@ -269,7 +269,7 @@ GLDevice::executeCommand(const RenderCommand& cmd,
     }
 
     case CommandType::SetUniformVec4: {
-      GLint loc = getUniformLocation(cmd.uniformVec4.name);
+      GLint loc = getUniformLocation(cmd.uniformVec4.name, cmd.uniformKey);
       if (loc >= 0) {
         glUniform4f(loc,
                     cmd.uniformVec4.x,
@@ -281,7 +281,7 @@ GLDevice::executeCommand(const RenderCommand& cmd,
     }
 
     case CommandType::SetUniformMat4: {
-      GLint loc = getUniformLocation(cmd.uniformMat4.name);
+      GLint loc = getUniformLocation(cmd.uniformMat4.name, cmd.uniformKey);
       if (loc >= 0 && cmd.uniformMat4.value != nullptr) {
         glUniformMatrix4fv(loc, 1, GL_FALSE, cmd.uniformMat4.value);
       } else if (cmd.uniformMat4.value == nullptr) {

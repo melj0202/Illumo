@@ -57,6 +57,9 @@ attachments. Bounds cache by nonzero attachment revision; zero requests polling.
 World boxes transform each attachment before union, and backward refit computes
 subtree boxes. Unknown bounds fail open. A lazy binned-SAH query index has a
 linear correctness fallback; warm queries still poll revisions in linear time.
+Bounds-only changes on an unchanged structure refit the index's node boxes in
+one reverse pass instead of rebuilding it; structural changes, and changes
+after 64 consecutive refits, rebuild (D-E41).
 The 4,096-entry change journal reports overflow explicitly.
 
 \texttt{SceneGraphDrawable}, not the graph, derives from
@@ -289,7 +292,10 @@ during replacement.
         world cell. Far views use a stable integer density LOD bounded to about
         four screen pixels per texel; it coarsens immediately to fit and refines
         only when the next level fits within 80\% of the budget. Changed chunks
-        map to deduplicated exact or overview cache bins.
+        map to deduplicated exact or overview cache bins. Exact texels are
+        written from the chunk cells already in hand, and incremental overview
+        bins accumulate only the chunks under them, falling back to one
+        occupied-chunk walk past half the spanned chunks (D-P37).
   \item GPU: one reusable nearest-filtered RGB display texture and one
         world-space quad aligned to the same 16$\times$16 cell bounds as the
         editor cursor. Dirty 16$\times$16-texel tiles merge into at most eight
@@ -338,7 +344,12 @@ during replacement.
         sharing a mesh range and material draw with one instanced call per
         pass. Per frame it culls against the camera and shadow volume,
         streams visible instances and patches counts; its lists re-record only
-        when buffers, materials or the environment change. With a mock
+        when buffers, materials or the environment change. A bucket whose
+        instances are unchanged and whose cull revision (Renderer's
+        \texttt{getCullRevision}, \texttt{getShadowCullRevision}) holds skips
+        culling, and an unchanged visible list skips the instance write
+        (D-R39): a static 50,000-instance world went from 2.6\,ms to about
+        1\,$\mu$s a frame. With a mock
         backend, 2,000 objects cost 0.11\,ms and 30 tokens per frame against
         3.8\,ms and 50,017 tokens as one MeshVisual each. On a real GPU its
         images are bit-identical to MeshVisual's, shadows included.
@@ -404,6 +415,19 @@ the token's name directly rather than building and hashing a combined
 program-ID/name string, and shader replacement or destruction retires cached
 locations with the owning program.
 
+Uniform tokens carry a \texttt{UniformKey} (FNV-1a of the whole name) in
+\texttt{RenderCommand::uniformKey}, set once by the \symbolref{Renderer} push
+helpers; it occupies what was tail padding, so the token stays 72 bytes. OpenGL
+locations and the Vulkan and Direct3D 12 program uniform slots resolve through
+\texttt{UniformNameTable} by key and name, so no backend hashes a name string
+per token; a key that disagrees with its name falls back to the derived key
+(D-R37).
+
+\symbolref{GameVisual}\texttt{::emitDraws} tracks the bound style, mesh and
+texture and sends resolution, \texttt{uMVP} and the sampler unit once per
+style per call, so a batch that shares its neighbour's style emits only its
+texture (when it differs) and its draw (D-R39).
+
 Renderer maintains a per-frame scissor stack for \texttt{pushClipRect}/
 \texttt{popClipRect}. Nested clips intersect in physical viewport coordinates
 and restore the prior state; low-level \texttt{pushScissor} remains the explicit
@@ -459,7 +483,15 @@ the OpenGL backend's observable results:
         attributes read $(0,0,0,1)$ and empty texture units sample black.
   \item Uploads are ordered with draws: until a resource is used in a
         submission its updates go to that submission's upload command buffer,
-        afterwards inline in the main one.
+        afterwards inline in the main one. Program default-block uniforms are
+        written into mapped per-frame memory and read in place. Measured on
+        the game, IllEd and the mesh viewer, no frame took an inline transfer;
+        the one remaining render-pass break (the game menu's blur target
+        becoming readable) is a required layout transition.
+  \item Caches (D-R38): compiled SPIR-V programs with their reflection and the
+        \texttt{VkPipelineCache} (keyed by vendor, device, driver and
+        pipeline-cache UUID) persist in the engine's GPU cache directory,
+        \pathref{cache/gpu} beside the runtime.
   \item Multisampled lines are rectangular and aliased ones Bresenham, sample
         positions mirror the OpenGL driver's, and the resolve is gamma-correct,
         as the NVIDIA OpenGL driver resolves its default framebuffer.
@@ -500,7 +532,9 @@ program uniform state, attribute layouts and texel conversions --- lives in
         FXC. Each binding keeps its number as its register, and the pixel
         stage declares the vertex outputs it does not read, because Direct3D
         links stages by signature register rather than by name. Input layouts
-        follow the compiled input signature.
+        follow the compiled input signature. The SPIR-V program and the
+        vertex and pixel DXBC are cached in \pathref{cache/gpu} (D-R38), so a
+        warm launch runs neither glslang nor FXC.
   \item Bindings: a root signature per program holds a root CBV for each
         uniform block and a one-descriptor table for each texture and
         sampler. Every texture keeps one shader-visible SRV for its life and

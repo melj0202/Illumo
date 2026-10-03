@@ -351,6 +351,27 @@ testGameVisualSpritesBatchByTexture()
              mock.countNonEmptyOfType(CommandType::DrawIndexed),
              4u,
              "a touching sprite does not join a batch it would pass");
+  // The four batches share one style and mesh: after the first, each binds
+  // only its texture before drawing, and the uniforms go to the program once.
+  std::size_t mvpUniforms = 0u;
+  std::size_t samplerUniforms = 0u;
+  for (size_t index = 0; index < mock.getLastNonEmptySubmittedCount();
+       ++index) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(index);
+    if (command.commandType == CommandType::SetUniformMat4 &&
+        std::strcmp(command.uniformMat4.name, WorldLook::kMvpUniform) == 0) {
+      mvpUniforms += 1u;
+    }
+    if (command.commandType == CommandType::SetUniformInt &&
+        std::strcmp(command.uniformInt.name, WorldLook::kTextureUniform) == 0) {
+      samplerUniforms += 1u;
+    }
+  }
+  testTrue(g,
+           mock.countNonEmptyOfType(CommandType::SetShader) == 1u &&
+             mock.countNonEmptyOfType(CommandType::SetMesh) == 1u &&
+             mvpUniforms == 1u && samplerUniforms == 1u,
+           "batches of one style bind it, its mesh and its uniforms once");
 }
 
 static void

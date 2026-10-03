@@ -88,6 +88,12 @@ struct SceneGraph::Impl
   SceneQueryIndex queryIndex;
   std::vector<uint32_t> queryScratch;
   uint64_t queryRevision = 0;
+  // The structure the query index was built for, and refits since: content
+  // changes on the same structure refit, and every kQueryRefitLimit-th
+  // rebuilds so moved boxes cannot loosen the tree indefinitely.
+  uint64_t queryStructuralRevision = 0;
+  uint32_t queryRefits = 0;
+  static constexpr uint32_t kQueryRefitLimit = 64u;
   SceneGraphStatistics statistics;
 
   std::shared_ptr<SceneSnapshotLifetime> lifetime =

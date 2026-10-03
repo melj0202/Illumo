@@ -169,6 +169,18 @@ private:
   BoundsFrustum shadowCasterFrustum;
   AxisAlignedBounds3 shadowCasterVolume{};
   bool shadowCasterVolumeValid = false;
+  // The culling state the revisions last described.
+  static bool sameFrustum(const BoundsFrustum& left,
+                          const BoundsFrustum& right);
+  mutable uint64_t m_cullRevision = 1;
+  mutable bool m_cullActive = false;
+  mutable BoundsFrustum m_cullFrustum;
+  mutable uint64_t m_shadowCullRevision = 1;
+  mutable bool m_shadowCullActive = false;
+  mutable bool m_shadowCullVolumeValid = false;
+  mutable AxisAlignedBounds3 m_shadowCullVolume{};
+  mutable BoundsFrustum m_shadowCullCasterFrustum;
+  mutable BoundsFrustum m_shadowCullFrustum;
   std::vector<ShadowCasterDesc> shadowCasters;
   ShadowFrameContext shadowFrameContext;
   std::array<float, 16> m_nextWorldViewProjection{};
@@ -259,6 +271,11 @@ public:
   void setNextWorldViewProjection(const std::array<float, 16>& matrix);
   bool isWorldBoundsVisible(const AxisAlignedBounds3& bounds) const;
   bool isShadowCasterRelevant(const AxisAlignedBounds3& bounds) const;
+  // Change whenever the answers of isWorldBoundsVisible and
+  // isShadowCasterRelevant may change (camera, shadow fit, frame state), so a
+  // caller may keep a culling result while its revision holds.
+  uint64_t getCullRevision() const;
+  uint64_t getShadowCullRevision() const;
 
   // =========================================================================
   // Asset enrollment (not mixed into the per-frame token stream — D-007)

@@ -66,6 +66,8 @@ RenderWorld::releaseResources()
     bucket->shadowBuffer = BufferHandle{};
     bucket->capacity = 0;
     bucket->dirty = true;
+    bucket->colorUpload.valid = false;
+    bucket->shadowUpload.valid = false;
   }
 }
 
@@ -169,6 +171,8 @@ RenderWorld::setInstanceTransform(RenderInstanceId id,
   }
   instance->desc.world = world;
   computeWorldBounds(*instance);
+  touchBucket(*instance);
+  m_buckets[instance->bucket]->movedFrame = m_frame + 1;
   return true;
 }
 
@@ -181,6 +185,7 @@ RenderWorld::setInstanceTint(RenderInstanceId id,
     return false;
   }
   instance->desc.tint = tint;
+  touchBucket(*instance);
   return true;
 }
 
@@ -192,6 +197,7 @@ RenderWorld::setInstanceVisible(RenderInstanceId id, bool shown)
     return false;
   }
   instance->desc.visible = shown;
+  touchBucket(*instance);
   return true;
 }
 
@@ -260,6 +266,8 @@ RenderWorld::addToBucket(size_t slot)
     bucket.inUse = true;
     bucket.members.clear();
     bucket.dirty = true;
+    bucket.colorUpload.valid = false;
+    bucket.shadowUpload.valid = false;
     m_bucketIndex[key] = index;
     if (key.blendOwner != 0) {
       m_blendOrder.push_back(index);
@@ -270,6 +278,16 @@ RenderWorld::addToBucket(size_t slot)
   instance.bucket = index;
   instance.bucketPosition = bucket.members.size();
   bucket.members.push_back(slot);
+  bucket.revision += 1;
+  if (instance.movedFrame > bucket.movedFrame) {
+    bucket.movedFrame = instance.movedFrame;
+  }
+}
+
+void
+RenderWorld::touchBucket(const Instance& instance)
+{
+  m_buckets[instance.bucket]->revision += 1;
 }
 
 void
@@ -281,6 +299,7 @@ RenderWorld::removeFromBucket(size_t slot)
   bucket.members[instance.bucketPosition] = last;
   m_instances[last].bucketPosition = instance.bucketPosition;
   bucket.members.pop_back();
+  bucket.revision += 1;
   if (!bucket.members.empty()) {
     return;
   }
@@ -329,6 +348,7 @@ RenderWorld::prepareFrame(Renderer* renderer)
   m_renderer = renderer;
   m_stats.drawnInstances = 0;
   m_stats.shadowInstances = 0;
+  m_stats.uploadedInstances = 0;
   renderer->ensureBuiltinStyles();
   m_ready = renderer->getStyle(RenderStyleId::LitMeshInstanced) != nullptr &&
             renderer->getStyle(RenderStyleId::ShadowDepthInstanced) != nullptr;
@@ -387,8 +407,10 @@ RenderWorld::ensureBuffers(Renderer* renderer, Bucket& bucket)
   }
   bucket.colorStaging.reserve(capacity);
   bucket.shadowStaging.reserve(capacity);
-  // New buffer handles live in the recorded lists.
+  // New buffer handles live in the recorded lists, and hold nothing yet.
   bucket.dirty = true;
+  bucket.colorUpload.valid = false;
+  bucket.shadowUpload.valid = false;
   return bucket.colorBuffer.isValid() &&
          (!shadows || bucket.shadowBuffer.isValid());
 }
@@ -478,6 +500,58 @@ RenderWorld::fillRecord(const Instance& instance, GpuInstance& record) const
   record.tint = instance.desc.tint;
 }
 
+template<typename Visible>
+size_t
+RenderWorld::streamPass(Renderer* renderer,
+                        Bucket& bucket,
+                        PassUpload& upload,
+                        std::vector<GpuInstance>& staging,
+                        BufferHandle buffer,
+                        uint64_t cullRevision,
+                        const Visible& visible)
+{
+  // Buffers keep their contents until written. The held records still match
+  // when no member changed since and no member's move targeted the writing
+  // frame (its record then carried the previous transform for motion vectors,
+  // which it no longer does); culling is unchanged as well when the cull
+  // revision holds.
+  const bool recordsCurrent = upload.valid &&
+                              upload.revision == bucket.revision &&
+                              bucket.movedFrame != upload.frame;
+  if (recordsCurrent && upload.cullRevision == cullRevision) {
+    return upload.slots.size();
+  }
+  m_visible.clear();
+  for (size_t slot : bucket.members) {
+    const Instance& instance = m_instances[slot];
+    if (instance.desc.visible &&
+        (!instance.hasWorldBounds || visible(instance))) {
+      m_visible.push_back(slot);
+    }
+  }
+  if (m_visible.empty()) {
+    return 0;
+  }
+  if (!recordsCurrent || upload.slots != m_visible) {
+    staging.clear();
+    for (size_t slot : m_visible) {
+      fillRecord(m_instances[slot], staging.emplace_back());
+    }
+    renderer->pushWriteBuffer(
+      buffer,
+      0,
+      static_cast<unsigned int>(staging.size() * sizeof(GpuInstance)),
+      staging.data());
+    upload.valid = true;
+    upload.frame = m_frame;
+    upload.revision = bucket.revision;
+    upload.slots.assign(m_visible.begin(), m_visible.end());
+    m_stats.uploadedInstances += staging.size();
+  }
+  upload.cullRevision = cullRevision;
+  return m_visible.size();
+}
+
 void
 RenderWorld::CollectShadowCasters(Renderer* renderer)
 {
@@ -528,16 +602,17 @@ RenderWorld::AppendShadowCommands(Renderer* renderer)
         !m_materials.at(bucket->key.material).desc.castsShadow) {
       continue;
     }
-    bucket->shadowStaging.clear();
-    for (size_t slot : bucket->members) {
-      const Instance& instance = m_instances[slot];
-      if (instance.desc.visible &&
-          (!instance.hasWorldBounds ||
-           renderer->isShadowCasterRelevant(instance.worldBounds))) {
-        fillRecord(instance, bucket->shadowStaging.emplace_back());
-      }
-    }
-    if (bucket->shadowStaging.empty()) {
+    const unsigned int count = static_cast<unsigned int>(streamPass(
+      renderer,
+      *bucket,
+      bucket->shadowUpload,
+      bucket->shadowStaging,
+      bucket->shadowBuffer,
+      renderer->getShadowCullRevision(),
+      [renderer](const Instance& instance) {
+        return renderer->isShadowCasterRelevant(instance.worldBounds);
+      }));
+    if (count == 0) {
       continue;
     }
     if (!bound) {
@@ -546,13 +621,6 @@ RenderWorld::AppendShadowCommands(Renderer* renderer)
       }
       bound = true;
     }
-    const unsigned int count =
-      static_cast<unsigned int>(bucket->shadowStaging.size());
-    renderer->pushWriteBuffer(bucket->shadowBuffer,
-                              0,
-                              count *
-                                static_cast<unsigned int>(sizeof(GpuInstance)),
-                              bucket->shadowStaging.data());
     bucket->shadow.at(bucket->shadowDraw).drawIndexedInstanced.instanceCount =
       count;
     renderer->pushExecuteList(&bucket->shadow);
@@ -571,16 +639,17 @@ RenderWorld::drawColor(Renderer* renderer, Bucket& bucket, bool& bound)
   if (bucket.dirty || bucket.color.size() == 0) {
     return;
   }
-  bucket.colorStaging.clear();
-  for (size_t slot : bucket.members) {
-    const Instance& instance = m_instances[slot];
-    if (instance.desc.visible &&
-        (!instance.hasWorldBounds ||
-         renderer->isWorldBoundsVisible(instance.worldBounds))) {
-      fillRecord(instance, bucket.colorStaging.emplace_back());
-    }
-  }
-  if (bucket.colorStaging.empty()) {
+  const unsigned int count = static_cast<unsigned int>(
+    streamPass(renderer,
+               bucket,
+               bucket.colorUpload,
+               bucket.colorStaging,
+               bucket.colorBuffer,
+               renderer->getCullRevision(),
+               [renderer](const Instance& instance) {
+                 return renderer->isWorldBoundsVisible(instance.worldBounds);
+               }));
+  if (count == 0) {
     return;
   }
   if (!bound) {
@@ -595,13 +664,6 @@ RenderWorld::drawColor(Renderer* renderer, Bucket& bucket, bool& bound)
     }
     bound = true;
   }
-  const unsigned int count =
-    static_cast<unsigned int>(bucket.colorStaging.size());
-  renderer->pushWriteBuffer(bucket.colorBuffer,
-                            0,
-                            count *
-                              static_cast<unsigned int>(sizeof(GpuInstance)),
-                            bucket.colorStaging.data());
   bucket.color.at(bucket.colorDraw).drawIndexedInstanced.instanceCount = count;
   renderer->pushExecuteList(&bucket.color);
   m_stats.drawnInstances += count;

@@ -1,3 +1,4 @@
+#include "Rendering/Gpu/GlslProgramCache.h"
 #include "Rendering/Gpu/GpuTexels.h"
 #include "VulkanDevice.h"
 
@@ -182,10 +183,11 @@ std::unique_ptr<VulkanProgram>
 VulkanDevice::buildProgram(const ShaderSources& sources, std::string* error)
 {
   std::unique_ptr<VulkanProgram> program = std::make_unique<VulkanProgram>();
-  if (!compileGlslProgram(sources.vertexSource,
-                          sources.fragmentSource,
-                          &program->reflection,
-                          error)) {
+  if (!compileGlslProgramCached(m_shaderCache,
+                                sources.vertexSource,
+                                sources.fragmentSource,
+                                &program->reflection,
+                                error)) {
     return nullptr;
   }
   const GlslProgram& reflection = program->reflection;

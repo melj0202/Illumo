@@ -69,6 +69,8 @@ SceneQueryIndex::build(const std::vector<AxisAlignedBounds3>& bounds,
       m_indices.push_back(i);
     }
   }
+  m_members.assign(m_indices.begin(), m_indices.end());
+  m_boundsCount = bounds.size();
   if (m_indices.empty()) {
     return true;
   }
@@ -195,6 +197,45 @@ SceneQueryIndex::build(const std::vector<AxisAlignedBounds3>& bounds,
     m_nodes[nodeIndex].count = 0;
     m_buildScratch.push_back(rightIndex);
     m_buildScratch.push_back(leftIndex);
+  }
+  return true;
+}
+
+bool
+SceneQueryIndex::refit(const std::vector<AxisAlignedBounds3>& bounds,
+                       const std::vector<unsigned char>& valid,
+                       const std::vector<unsigned char>& enabled)
+{
+  ILLUMO_PROFILE_ZONE("SceneQueryIndex.refit");
+  if (bounds.size() != m_boundsCount) {
+    return false;
+  }
+  size_t member = 0;
+  for (uint32_t i = 0; i < bounds.size(); ++i) {
+    if (valid[i] == 0 || enabled[i] == 0) {
+      continue;
+    }
+    if (member >= m_members.size() || m_members[member] != i) {
+      return false;
+    }
+    ++member;
+  }
+  if (member != m_members.size()) {
+    return false;
+  }
+  // Children always follow their parent in m_nodes, so one reverse pass
+  // sees both children before the node itself. Node 0 is the terminator.
+  for (size_t index = m_nodes.size(); index-- > 1;) {
+    Node& node = m_nodes[index];
+    if (node.count == 0) {
+      node.bounds = m_nodes[node.left].bounds;
+      node.bounds.include(m_nodes[node.right].bounds);
+      continue;
+    }
+    node.bounds = bounds[m_indices[node.begin]];
+    for (uint32_t i = node.begin + 1; i < node.begin + node.count; ++i) {
+      node.bounds.include(bounds[m_indices[i]]);
+    }
   }
   return true;
 }

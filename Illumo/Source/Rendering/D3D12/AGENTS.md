@@ -59,6 +59,8 @@ never see it.
   as on Vulkan; frames keep rendering and readbacks keep working.
 - SPIRV-Cross errors end the process through `IllumoSpirvCrossFatal`; only
   first-party engine shaders reach it.
+- Programs and their DXBC are cached through `GpuShaderCache` (D-R38); change
+  the `d3d12-dxbc-N` key when HLSL generation or compile flags change.
 - No exceptions, `auto`, namespaces or recursion, as everywhere.
 
 ## Verification

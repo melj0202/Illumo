@@ -2,6 +2,7 @@
 
 #include "Rendering/Gpu/GlslToSpirv.h"
 #include "Rendering/Gpu/GpuProgramState.h"
+#include "Rendering/Gpu/GpuShaderCache.h"
 #include "VulkanCommon.h"
 #include "VulkanContext.h"
 #include <Illumo/Rendering/CommandQueue.h>
@@ -18,6 +19,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -177,6 +179,12 @@ public:
   VulkanDevice& operator=(VulkanDevice&&) = delete;
 
   // present: show frames in the window; otherwise render offscreen only.
+  // Compiled shaders (and pipeline data) persist here between runs
+  // (D-R38); call before initialize. Empty keeps none.
+  void setCacheDirectory(const std::filesystem::path& directory)
+  {
+    m_shaderCache.setDirectory(directory);
+  }
   bool initialize(IRenderWindow* window, bool present, std::string* error);
   void shutdown();
 
@@ -507,6 +515,7 @@ private:
   void executeList(const RecordedCommandList* list);
   void reportFrameError(const char* message);
   void setUniform(const char* name,
+                  const UniformKey& key,
                   GlslValueType given,
                   const void* value,
                   size_t bytes);
@@ -565,6 +574,9 @@ private:
   bool m_compilerStarted = false;
   VkSampleCountFlagBits m_samples = VK_SAMPLE_COUNT_1_BIT;
   VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
+  GpuShaderCache m_shaderCache;
+  // The persisted pipeline cache's key: this device and driver (D-R38).
+  Sha256::Digest m_pipelineCacheKey{};
 
   std::array<Slot, kSlotCount> m_slots{};
   uint32_t m_slotIndex = 0;

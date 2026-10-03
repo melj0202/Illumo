@@ -22,6 +22,8 @@ struct IllumoApplicationDefinition
   IllumoDefaultsCallback applyDefaults{ nullptr };
   // The runtime's frame loop (D-E31). Required.
   IllumoRunCallback run{ nullptr };
+  // UTF-8; IllumoConfig::gpuCacheDirectory. Empty keeps no GPU cache.
+  std::string gpuCacheDirectory;
 };
 
 // The consuming product defines this factory. Illumo's platform entry invokes

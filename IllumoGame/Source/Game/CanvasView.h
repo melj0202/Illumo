@@ -197,6 +197,8 @@ private:
   std::vector<unsigned char> fadingFlags;
   std::vector<int> changedSampleTexels;
   std::vector<unsigned char> changedSampleFlags;
+  // Retained: the chunks under the marked texels of an overview resample.
+  std::vector<ChunkAddress> overviewChunks;
   std::vector<unsigned char> dirtyTiles;
   std::vector<UploadRect> uploadRectScratch;
   std::vector<UploadRect> uploadRunScratch;
@@ -288,6 +290,16 @@ private:
   void sampleExposedCacheStrips(int deltaTexelsX, int deltaTexelsY);
   void sampleGrid(bool snap);
   bool sampleChangedChunks(std::uint64_t previousRevision);
+  // One cell per texel: the texel of a cell whose state is already known.
+  void writeExactTexel(int index, unsigned char state, bool snap);
+  // One cell per texel, infinite canvas: writes a chunk's cells inside the
+  // cache (null cells: background), only those set in changed when given,
+  // counting them in lastSampledTexelCount. False once the count passes the
+  // dense-change share, when a complete resample is cheaper.
+  bool writeExactChunk(const ChunkAddress& address,
+                       const unsigned char* cells,
+                       const SparseChunkMask* changed,
+                       bool snap);
   void sampleCacheTexel(int x, int y, bool snap);
   void markChangedCacheChunk(const ChunkAddress& address);
   void markChangedCacheCells(const ChunkAddress& address,
