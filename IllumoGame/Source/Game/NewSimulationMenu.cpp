@@ -5,8 +5,8 @@
 #include "SparseCellGrid.h"
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
-#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Gui/GuiMenuShell.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -62,7 +62,7 @@ NewSimulationMenu::open(const NewSimulationConfiguration& initial,
   dropdown.close();
   listRow = -1;
   openState = true;
-  rebuild();
+  draw();
 }
 
 NewSimulationConfiguration
@@ -97,7 +97,7 @@ NewSimulationMenu::tick(float dt)
     tilt.tick(step, still);
     dropdown.tick(step);
   }
-  rebuild();
+  layout();
 }
 
 void
@@ -133,9 +133,9 @@ NewSimulationMenu::openList(int row)
       if (id == draft.family) {
         current = static_cast<int>(items.size());
       }
-      items.push_back({ family == nullptr ? id : family->name,
-                        std::to_string(rules) +
-                          (rules == 1u ? " rule" : " rules") });
+      items.push_back(
+        { family == nullptr ? id : family->name,
+          std::to_string(rules) + (rules == 1u ? " rule" : " rules") });
       listIds.push_back(id);
     }
   } else {
@@ -200,7 +200,7 @@ NewSimulationMenu::updateList(InputManager* input)
 {
   // The open list takes every key, typed letter, the wheel and the pointer;
   // the rows beneath it keep their selection.
-  rebuild();
+  layout();
   pointer.sample(window, input, panelFit.layoutScale);
   const int before = dropdown.highlightedIndex();
   const GuiDropdownResult result = dropdown.update(input, pointer);
@@ -214,7 +214,6 @@ NewSimulationMenu::updateList(InputManager* input)
   if (!dropdown.isOpen()) {
     listRow = -1;
   }
-  rebuild();
   return NewSimulationAction::None;
 }
 
@@ -367,7 +366,7 @@ NewSimulationMenu::update(InputManager* input)
   double* wheel = input->getMouseScrollOffset();
   if (wheel != nullptr)
     *wheel = 0;
-  rebuild();
+  layout();
   pointer.sample(window, input, panelFit.layoutScale);
   const float mx = pointer.x();
   const float my = pointer.y();
@@ -399,7 +398,6 @@ NewSimulationMenu::update(InputManager* input)
       CSimSounds::play(CSimSound::MenuError);
     }
   }
-  rebuild();
   return result;
 }
 
@@ -412,9 +410,8 @@ NewSimulationMenu::addDrawables(DrawList& scene)
 }
 
 void
-NewSimulationMenu::rebuild()
+NewSimulationMenu::layout()
 {
-  ILLUMO_PROFILE_ZONE("NewSimulationMenu.rebuild");
   panelFit = GuiPanelLayout::fit(window, renderer, nullptr);
   const float screenWidth = panelFit.virtualWidth;
   const float screenHeight = panelFit.virtualHeight;
@@ -425,6 +422,16 @@ NewSimulationMenu::rebuild()
   x = (screenWidth - width) / 2 + tilt.bodyShiftX();
   y = (screenHeight - height) / 2 + animator.panelOffsetY() + tilt.bodyShiftY();
   rowHeight = (height - 164) / static_cast<float>(kRowCount);
+}
+
+void
+NewSimulationMenu::draw()
+{
+  ILLUMO_PROFILE_ZONE("NewSimulationMenu.draw");
+  layout();
+  const float screenWidth = panelFit.virtualWidth;
+  const float screenHeight = panelFit.virtualHeight;
+  const float height = std::min(610.0f, screenHeight - 24);
   for (GameVisual& layer : layers) {
     layer.clearPrimitives();
   }
@@ -766,13 +773,8 @@ NewSimulationMenu::drawRows(unsigned char opacity, float breathe)
       } else {
         GuiKit::drawSideChevron(
           visual, boxX + 9 - leftNudge, arrowY, 4.5f, -4.0f, 1.8f, arrow);
-        GuiKit::drawSideChevron(visual,
-                                x + width - 43 + rightNudge,
-                                arrowY,
-                                4.5f,
-                                4.0f,
-                                1.8f,
-                                arrow);
+        GuiKit::drawSideChevron(
+          visual, x + width - 43 + rightNudge, arrowY, 4.5f, 4.0f, 1.8f, arrow);
       }
     }
     const ColorRgba labelColor =

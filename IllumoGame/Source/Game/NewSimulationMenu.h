@@ -39,8 +39,11 @@ public:
   void open(const NewSimulationConfiguration& initial, bool reducedMotion);
   void close() { openState = false; }
   bool isOpen() const { return openState; }
+  // A frame is tick, then update (input; skipped while the console is open),
+  // then draw. Only draw rebuilds the layers.
   void tick(float dt);
   NewSimulationAction update(InputManager* input);
+  void draw();
   NewSimulationConfiguration configuration() const;
   // The rows' boxes, labels and values and the footer.
   GameVisual& getVisual() { return layers[kContentLayer]; }
@@ -71,7 +74,8 @@ private:
     kListTextLayer,
     kLayerCount
   };
-  void rebuild();
+  // The panel's fit, origin and row height, which hit testing needs.
+  void layout();
   void drawRows(unsigned char opacity, float breathe);
   void drawFooter(float height, unsigned char opacity);
   void change(int direction);
@@ -81,7 +85,10 @@ private:
   // The family (row 0) and ruleset (row 1) rows pick from a drop-down list.
   static bool isListRow(int row) { return row == 0 || row == 1; }
   // The value box of a row, in the menu's virtual space.
-  void valueBox(int row, float* boxX, float* boxY, float* boxWidth,
+  void valueBox(int row,
+                float* boxX,
+                float* boxY,
+                float* boxWidth,
                 float* boxHeight) const;
   void openList(int row);
   void chooseFromList(int index);

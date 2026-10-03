@@ -14,8 +14,8 @@
 #include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiKit.h>
-#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Gui/GuiMenuShell.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/Font.h>
 #include <Illumo/Rendering/Primitives/UiTheme.h>
@@ -790,6 +790,9 @@ TitleScene::update(double dt)
         CSimSounds::play(CSimSound::MenuBack);
         m_newSimulationMenu->close();
       }
+    }
+    if (m_newSimulationMenu->isOpen()) {
+      m_newSimulationMenu->draw();
     }
     rebuildVisual();
     return;
