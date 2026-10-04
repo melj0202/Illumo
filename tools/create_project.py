@@ -278,7 +278,7 @@ add_subdirectory(Illumo)
 add_subdirectory({app_folder_name})
 {debug_tools_sub}
 if(BUILD_TESTING)
-  add_custom_target(IllumoRunTests ALL
+  add_custom_target(IllumoRunTests ${{ILLUMO_RUN_TESTS_ALL}}
     COMMAND ${{CMAKE_CTEST_COMMAND}} -C $<CONFIG>
       -L IllumoWorkspace --output-on-failure
     DEPENDS IllumoTestsDiscover {project_name}TestsDiscover

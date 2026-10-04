@@ -325,13 +325,21 @@ cmake --build build-tidy --target IllumoTidy
 
 `python build.py tidy` configures the same tree under `build-workspace-tidy`.
 
-The default workspace build compiles both runners, runs every granular
-`Illumo.*` and `IllumoGame.*` case through `IllumoRunTests`, and builds
-`IllumoDocs` when PowerShell and
-`latexmk` are available. Headless tests do not prove the live OpenGL window,
+The default workspace build compiles every test runner and builds
+`IllumoDocs` when PowerShell and `latexmk` are available. It does not run
+the suite: `IllumoRunTests`, `ctest` or `python build.py test` do, and
+`-DILLUMO_RUN_TESTS_ON_BUILD=ON` adds the suite back to every default build. Headless tests do not prove the live OpenGL window,
 native dialogs, or non-Windows ports. Use Debug or Release GUI smoke tests and
 sanitizers when the affected risk requires them. When static analysis is
 requested beyond `IllumoTidy`, report the extra checks and translation units.
+
+When to run what: the full suite is slow, so it runs once, before a push.
+While working and when committing, build only the targets the change needs
+(`IllumoRuntime`, an app with `build.py play`, or the affected test runners)
+and run the exact cases and package tests that cover it. Before any push,
+build Release and run the full `IllumoWorkspace` label on the commit being
+pushed. A failure blocks the push until it is fixed in a new commit and the
+suite passes.
 
 ## Project-wide invariants
 
@@ -456,7 +464,9 @@ than rewriting history when current implementation changes.
 A change is complete only when its scope is reviewed for accidental edits and:
 
 - affected targets build and relevant exact tests pass;
-- behavior changes pass the full Release build and labeled CTest suite above;
+- behavior changes pass the full Release build and labeled CTest suite above
+  before they are pushed (not on every edit or commit; see "When to run
+  what");
 - configured formatting, analysis (`IllumoTidy` when the change warrants
   clang-tidy), sanitizer, coverage, benchmark, or manual checks relevant to
   the risk pass, with environment and limitations reported;
@@ -464,6 +474,25 @@ A change is complete only when its scope is reviewed for accidental edits and:
   recorded without opportunistic fixes;
 - matching canonical documentation is synchronized in the same change;
 - the final handoff states what was verified, what was not, and why.
+
+Test and visual-check hygiene:
+
+- Automated tests never read or write the user's settings or saved state.
+  `EnvVars` persists to `envvars.json`, so each fixture gives it a fresh
+  file in a temp or test directory (as the IllEd and IllMeshViewer scene
+  fixtures do), and no case may depend on another's saved toggles or
+  layouts.
+- Live runs and captures write the window size (`WinX`/`WinY`) into the
+  runtime's `envvars.json`; record and restore it, and use a scratch
+  `--storage` for app state.
+- A skipped or environment-gated test reports why it skipped, and the
+  handoff names every skip; a skip is not a pass.
+- Visual evidence (captures, screenshots, live-window checks) comes from a
+  build of the configuration being shown, made after the last edit. Confirm
+  the executable is newer than the change before citing it.
+- Window, focus, input and presentation changes are checked in windowed mode
+  and in fullscreen (F11, a monitor-owned GLFW window), on the backend the
+  user reported.
 
 ## Nested guidance
 

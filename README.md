@@ -258,8 +258,8 @@ executables do not collide with CMake directories named `IllumoGame/`.
 IllMeshViewer and frame capture run only as WASM packages inside the Windows
 x64 `IllumoRuntime`. The staged directory holds the native test runners.
 
-**Test.** The default Ninja `ALL` target also runs `IllumoRunTests`. For a
-faster headless pass:
+**Test.** The default build only builds the tests (`ILLUMO_RUN_TESTS_ON_BUILD`
+is `OFF`). For a faster headless pass:
 
 ```bash
 ctest --test-dir build-linux -L IllumoWorkspace -E "Bench|Oracle" --output-on-failure
@@ -315,8 +315,10 @@ folder can be moved or zipped. Linux has no equivalent yet.
 Windows (VS generator): `build-workspace/Release/` for `build.py`, or
 `build/Release/` for `-B build`. Linux (Ninja): `build-linux/<CONFIG>/`.
 
-The default `ALL` target also runs the `IllumoWorkspace` CTest label via
-`IllumoRunTests`. Debug builds enable AddressSanitizer on MSVC and GCC/Clang
+The default `ALL` target builds every test runner but does not run the suite:
+run it with `ctest -L IllumoWorkspace`, `python build.py test`, or the
+`IllumoRunTests` target. Configure with `-DILLUMO_RUN_TESTS_ON_BUILD=ON` to
+run the `IllumoWorkspace` label as part of every default build. Debug builds enable AddressSanitizer on MSVC and GCC/Clang
 (`ILLUMO_ENABLE_ASAN`, default `ON`). Debug is the sanitizer profile: its
 WASM guests also run with explicit bounds checks on every memory access, so
 it is markedly slower to play. Play and profile with RelWithDebInfo

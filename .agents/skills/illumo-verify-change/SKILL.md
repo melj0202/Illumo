@@ -16,7 +16,7 @@ Verify the requested outcome, not merely that a command returned zero.
 
 ## Select proportional checks
 
-Use repository-provided commands from the repository root. A normal behavior change generally requires:
+Use repository-provided commands from the repository root. The full suite runs once, before a push (root `AGENTS.md`, "When to run what"):
 
 ```powershell
 cmake -S . -B build
@@ -24,7 +24,9 @@ cmake --build build --config Release
 ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
 ```
 
-For focused work, discover and run exact tests before or alongside the full suite:
+The default build only builds the runners (`ILLUMO_RUN_TESTS_ON_BUILD` is `OFF`); if a tree was configured with it `ON`, the build already ran the suite, so do not run `ctest` again.
+
+Short of a push, build only the affected targets and run the exact cases and package tests that cover the change:
 
 ```powershell
 cmake --build build --config Release --target IllumoTests IllumoGameTests IllEdTests IllMeshViewerTests

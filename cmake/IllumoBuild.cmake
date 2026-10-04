@@ -10,6 +10,14 @@ option(ILLUMO_ENABLE_ASAN
   "Build Debug runtime targets with AddressSanitizer" ON)
 option(ILLUMO_ENABLE_CLANG_TIDY
   "Run clang-tidy on first-party C++ during build" ON)
+# The workspace suite is slow, so a default build only builds it; the suite
+# runs through ctest, `python build.py test`, or the IllumoRunTests target.
+option(ILLUMO_RUN_TESTS_ON_BUILD
+  "Run the workspace test suite as part of the default (ALL) build" OFF)
+set(ILLUMO_RUN_TESTS_ALL "")
+if(ILLUMO_RUN_TESTS_ON_BUILD)
+  set(ILLUMO_RUN_TESTS_ALL ALL)
+endif()
 if(UNIX AND NOT APPLE)
   option(ILLUMO_INSTALL_LINUX_DEPS
     "Install Debian/Ubuntu apt packages during configure" ON)

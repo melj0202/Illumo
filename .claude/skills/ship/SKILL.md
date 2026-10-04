@@ -49,13 +49,14 @@ commit-message, push and pipe-race traps; read it before step 5.
 
 ## 4. Verify
 
-Follow `illumo-verify-change`, with the root `AGENTS.md` commands as the
-source of truth (`cmake -S . -B build`, label `IllumoWorkspace`). The floor
-for any code change:
+Follow `illumo-verify-change`. The full suite is not run here; it runs in
+step 7, before a push. For a commit, build only the affected targets and
+run the exact cases and package tests that cover the change, e.g.:
 
 ```powershell
-cmake --build build --config Release
-ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
+cmake --build build --config Release --target IllumoGameTests
+build/Release/IllumoGameTests.exe --run <IllumoGame.exact-name>
+ctest --test-dir build -C Release -R "<package-test-regex>" --output-on-failure
 ```
 
 - Before linking, make sure no `IllumoRuntime.exe` or test runner from this
@@ -93,10 +94,23 @@ the feature tip. A fast-forward that fails is a stop, not a merge commit.
 
 ## 7. Push (only when asked)
 
-List `git log --oneline origin/<release>..<release>` and check for commits
-that are not this effort's (other sessions may have merged). Push with the
-`gh` credential helper from `windows-agent-shell`, then confirm the local
-and remote-tracking tips match.
+1. List `git log --oneline origin/<release>..<release>` and check for
+   commits that are not this effort's (other sessions may have merged).
+2. Run the full suite on the release tip being pushed:
+
+   ```powershell
+   cmake --build build --config Release
+   ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
+   ```
+
+   (A tree configured with `ILLUMO_RUN_TESTS_ON_BUILD=ON` already ran the
+   suite during the build; skip the `ctest` line there.)
+
+   Any failure blocks the push. Find the cause, fix it in a new commit
+   (through steps 2-6), and rerun the suite before pushing. Pre-existing
+   failures are named, and the user decides whether to push anyway.
+3. Push with the `gh` credential helper from `windows-agent-shell`, then
+   confirm the local and remote-tracking tips match.
 
 ## 8. Report
 

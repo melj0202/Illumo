@@ -13,7 +13,9 @@ All four runners support `--list` and exact `--run`. CMake discovers each logica
 case into a per-configuration file and CTest runs it in an isolated working
 directory. The aggregate `IllumoWorkspace` label covers the library, IllumoGame,
 IllEd, IllMeshViewer, and the public-header smoke. Standalone Illumo tests also
-carry both the `Illumo` and `IllumoWorkspace` labels.
+carry both the `Illumo` and `IllumoWorkspace` labels. The default build only
+builds the runners; `IllumoRunTests` (or `ctest`) runs the suite, and
+`-DILLUMO_RUN_TESTS_ON_BUILD=ON` adds it back to the default build.
 
 ```powershell
 cmake -S . -B build

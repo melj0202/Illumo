@@ -16,7 +16,9 @@ as test oracles (IllumoGame, IllEd, IllMeshViewer), the
 four test runners, \texttt{IllumoPublicHeaderSmoke}, and the
 \texttt{IllumoPack} host tool. The aggregate
 \texttt{IllumoRunTests} target refreshes all per-configuration test inventories
-before running the workspace label. There is no compatibility executable named
+before running the workspace label. It is not part of the default build unless
+\texttt{ILLUMO\_RUN\_TESTS\_ON\_BUILD} is \texttt{ON}, so a plain build only
+builds the runners. There is no compatibility executable named
 \texttt{Illumo}.
 
 The Python front end configures the root workspace and exposes the same flow:

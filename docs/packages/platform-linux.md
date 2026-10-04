@@ -128,7 +128,8 @@ cmake --build build-linux-rel --parallel
 equivalent if you prefer it. `python build.py doctor` reports tools; it does
 not compile. `python build.py play` is Windows x64 only.
 
-The default Ninja `ALL` target also runs `IllumoRunTests`. Debug AddressSanitizer
+The default Ninja `ALL` target builds the tests without running them, unless
+`ILLUMO_RUN_TESTS_ON_BUILD` is `ON`. Debug AddressSanitizer
 makes `Illumo.SceneGraph.Oracle` and the large scene benches very slow (tens of
 minutes on WSL). Prefer RelWithDebInfo for a first GUI smoke, or build specific
 targets and then:
