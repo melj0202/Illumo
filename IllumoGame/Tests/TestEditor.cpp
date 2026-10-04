@@ -4,6 +4,7 @@
 #include "Game/CellClipboard.h"
 #include "Game/CanvasScene.h"
 #include "Game/CellPattern.h"
+#include "Game/ConfigurationMenu.h"
 #include "Game/IllumoCodec.h"
 #include "Game/PatternCodec.h"
 #include "Game/RuleCatalogLoader.h"
@@ -1357,6 +1358,61 @@ testEditIcons()
   testTrue(g, hidden.shapeCount() == 0u, "a transparent icon draws nothing");
 }
 
+static void
+testHeldPressesDoNotPaint()
+{
+  testSection("Editor: a press held from a menu does not paint the canvas");
+  EditorFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  SparseCellGrid* grid =
+    CanvasSceneTestAccess::getCellContext(fixture.module)->getGrid();
+  grid->clear();
+  CellAddress cell{};
+  testTrue(g,
+           cellAt(fixture, 200.0, 200.0, &cell),
+           "the target point converts to a cell");
+  setMouse(fixture, 200.0, 200.0);
+  fixture.module.update(0.0);
+
+  // The press that closes settings is still down on the canvas's next frame.
+  ConfigurationMenu* settings =
+    CanvasSceneTestAccess::getConfigurationMenu(fixture.module);
+  settings->open(CanvasSceneTestAccess::currentConfiguration(fixture.module));
+  fixture.module.update(0.0);
+  settings->close();
+  setButton(fixture, KeyCode::MouseLeft, true);
+  fixture.module.update(0.0);
+  fixture.module.update(0.0);
+  testTrue(g,
+           grid->getCell(cell) == SparseCellGrid::BackgroundState,
+           "the press that closed settings does not paint");
+  setButton(fixture, KeyCode::MouseLeft, false);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseLeft, true);
+  fixture.module.update(0.0);
+  testTrue(g, grid->getCell(cell) == 0, "the next press paints");
+  setButton(fixture, KeyCode::MouseLeft, false);
+  fixture.module.update(0.0);
+
+  // A menu button that resumes the canvas is still held when it comes back.
+  grid->clear();
+  fixture.module.leave();
+  setButton(fixture, KeyCode::MouseLeft, true);
+  fixture.module.enter();
+  fixture.module.update(0.0);
+  fixture.module.update(0.0);
+  testTrue(g,
+           grid->getCell(cell) == SparseCellGrid::BackgroundState,
+           "the press that resumed the canvas does not paint");
+  setButton(fixture, KeyCode::MouseLeft, false);
+  fixture.module.update(0.0);
+  setButton(fixture, KeyCode::MouseLeft, true);
+  fixture.module.update(0.0);
+  testTrue(g, grid->getCell(cell) == 0, "a fresh press after resuming paints");
+  setButton(fixture, KeyCode::MouseLeft, false);
+  fixture.module.update(0.0);
+}
+
 static int
 runEditorCase(void (*testFunction)())
 {
@@ -1379,6 +1435,8 @@ registerEditorTests(IllumoTestRegistry& registry)
                []() { return runEditorCase(testActionBar); });
   registry.add("IllumoGame.Editor.ContextMenu",
                []() { return runEditorCase(testContextMenu); });
+  registry.add("IllumoGame.Editor.HeldPressesDoNotPaint",
+               []() { return runEditorCase(testHeldPressesDoNotPaint); });
   registry.add("IllumoGame.Editor.EditIcons",
                []() { return runEditorCase(testEditIcons); });
   registry.add("IllumoGame.Editor.ModeChromeTransition",

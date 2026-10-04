@@ -145,6 +145,8 @@ private:
   // Runs the edit toolbar and the selection's context menu for one frame and
   // performs what they chose.
   void updateEditTools(double dt);
+  // Treats buttons held when the canvas starts or resumes as already pressed.
+  void adoptHeldButtons();
   void openContextMenu(std::int64_t cellX, std::int64_t cellY);
   void runEditAction(CanvasEditAction action, bool fromContextMenu);
   bool isPointerOverEditTools() const;
@@ -330,6 +332,9 @@ private:
   // A press that began on the toolbar or menu, or that dismissed the menu,
   // keeps the canvas from painting until every mouse button is released.
   bool m_editToolsCapturing = false;
+  // An overlay (console, settings, workshop, exit dialog) or the main-menu
+  // return held the pointer last frame; a button still down then is its.
+  bool m_pointerWasBlocked = false;
   bool m_rightMouseWasDown = false;
   // The right button went down this frame (sampled by updateEditTools).
   bool m_rightPressEdge = false;

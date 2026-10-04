@@ -435,6 +435,7 @@ CanvasScene::start(IllumoContext& startContext)
   m_actionBar.prepare(ic->window, ic->renderer);
   m_contextMenu.prepare(ic->window, ic->renderer);
   m_editToolsCapturing = false;
+  m_pointerWasBlocked = false;
   m_rightMouseWasDown = false;
   m_rightPressEdge = false;
 
@@ -495,6 +496,7 @@ CanvasScene::start(IllumoContext& startContext)
   m_paintChipBrush = 0;
   m_paintPaletteStateOffset = 0u;
   m_paintRuleTag.clear();
+  adoptHeldButtons();
 
   canvasEntranceVisual.setRenderer(ic->renderer);
   canvasEntranceVisual.setWindow(ic->window);
@@ -2790,6 +2792,25 @@ CanvasScene::openContextMenu(std::int64_t cellX, std::int64_t cellY)
 }
 
 void
+CanvasScene::adoptHeldButtons()
+{
+  if (ic == nullptr || ic->inputManager == nullptr) {
+    return;
+  }
+  // Buttons still held from the click that opened or resumed the canvas
+  // belong to that click: none is a new press, and painting waits until
+  // every button is released.
+  const bool leftDown =
+    ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+  const bool rightDown =
+    ic->inputManager->isMouseButtonPressed(KeyCode::MouseRight);
+  m_editToolsCapturing = m_editToolsCapturing || leftDown || rightDown;
+  m_chromeMouseWasDown = m_chromeMouseWasDown || leftDown;
+  m_paintPaletteMouseWasDown = m_paintPaletteMouseWasDown || leftDown;
+  m_rightMouseWasDown = m_rightMouseWasDown || rightDown;
+}
+
+void
 CanvasScene::updateEditTools(double dt)
 {
   ILLUMO_PROFILE_ZONE("CanvasScene.updateEditTools");
@@ -2816,6 +2837,13 @@ CanvasScene::updateEditTools(double dt)
     currentState == CellState::EDIT && !overlaysOpen && !mainMenuReturnPending;
   const bool reducedMotion = ic->envVars != nullptr &&
                              ic->envVars->getVar("reducedUiMotion").valueAsBool;
+  // A button held while an overlay is open, or still held from the press that
+  // closed one, belongs to the overlay: it never paints when the overlay goes.
+  const bool pointerBlocked = overlaysOpen || mainMenuReturnPending;
+  if ((pointerBlocked || m_pointerWasBlocked) && (leftDown || rightDown)) {
+    m_editToolsCapturing = true;
+  }
+  m_pointerWasBlocked = pointerBlocked;
 
   // The menu belongs to a live selection in EDIT mode.
   if (m_contextMenu.isOpen() && (!editActive || !clipboard.hasSelection())) {
@@ -5460,6 +5488,7 @@ CanvasScene::enter()
     }
   }
   registerConsoleCommands();
+  adoptHeldButtons();
   // The canvas comes back as it first came in, under a dissolving veil.
   canvasEntranceElapsed = 0.0;
   mainMenuReturnPending = false;
