@@ -113,7 +113,8 @@ protected:
         engine.inputManager->isMouseButtonPressed(KeyCode::MouseLeft),
       settings().getVar("reducedUiMotion").valueAsBool,
       shape,
-      ColorRgba{ hint.red, hint.green, hint.blue, 255 });
+      ColorRgba{ hint.red, hint.green, hint.blue, 255 },
+      ColorRgba{ hint.eraseRed, hint.eraseGreen, hint.eraseBlue, 255 });
 
     // The corner performance readout (Video settings). Memory is this
     // store's linear memory, which only grows.

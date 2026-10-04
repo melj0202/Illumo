@@ -4854,10 +4854,16 @@ CanvasScene::updateEditorCursor(double dt)
   if (!hoverValid) {
     return;
   }
-  // Over paintable canvas the software pointer becomes a pencil in the brush
-  // color.
+  // Over paintable canvas the software pointer becomes a pencil: its point in
+  // the brush color, its eraser in the background state the right button
+  // paints.
   const ColorRgba brush = paintBrushColor();
-  GuiPointerHint::markBrush(brush.r, brush.g, brush.b);
+  unsigned char erase[3]{ brush.r, brush.g, brush.b };
+  if (cellContext->getRuleSet() != nullptr) {
+    cellContext->getRuleSet()->evalCell(SparseCellGrid::BackgroundState, erase);
+  }
+  GuiPointerHint::markBrush(
+    brush.r, brush.g, brush.b, erase[0], erase[1], erase[2]);
   editorCursor.setCellSize(16.0f);
   editorCursor.setFromCell(cellX, cellY);
 }

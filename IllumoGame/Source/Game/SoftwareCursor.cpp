@@ -10,12 +10,18 @@
 // triangular head and a tail. Both are convex, so each is one primitive.
 // Each shape is a few convex parts of 3, 4, 6 or 8 points. A part with more
 // than four points is drawn as a fan of quads around its first point.
+// Which tint a part wears when the cursor is tinted.
+enum class PartTint
+{
+  None,
+  Brush,
+  Eraser
+};
 struct ShapePart
 {
   int count;
   float point[8][2];
-  // Takes the brush color when the cursor is tinted.
-  bool tinted = false;
+  PartTint tint = PartTint::None;
 };
 static const ShapePart kArrowParts[2] = {
   { 3, { { 0.0f, 0.0f }, { 0.0f, 16.5f }, { 11.7f, 11.7f } } },
@@ -85,13 +91,14 @@ static const ShapePart kHandParts[kHandPartCount] = {
 static const float kHandHeight = 21.0f;
 // The pencil shown over paintable canvas: its point is the tip and the body
 // rises up and to the right at 45 degrees, clear of the cell it paints. The
-// lead cone and the eraser cap wear the brush color.
+// lead cone wears the brush color and the eraser cap the color erasing
+// paints.
 static const int kBrushPartCount = 3;
 static const ShapePart kBrushParts[kBrushPartCount] = {
   // Lead cone.
   { 3,
     { { 0.0f, 0.0f }, { 1.06f, -3.75f }, { 3.75f, -1.06f } },
-    true },
+    PartTint::Brush },
   // Body.
   { 4,
     { { 0.99f, -3.82f },
@@ -104,7 +111,7 @@ static const ShapePart kBrushParts[kBrushPartCount] = {
       { 13.43f, -10.6f },
       { 15.55f, -12.73f },
       { 12.73f, -15.55f } },
-    true }
+    PartTint::Eraser }
 };
 // Gradients run from this local y down `span` pixels, per shape.
 static const float kBrushTop = -15.55f;
@@ -137,6 +144,7 @@ struct ArrowPose
   // Set for the body only: glow, halo and rim copies stay untinted.
   bool useTint = false;
   ColorRgba tint{ 255, 255, 255, 255 };
+  ColorRgba eraserTint{ 255, 255, 255, 255 };
   // The pencil's flip, 0 point-down to 1 cap-down (it may overshoot).
   float flip = 0.0f;
 
@@ -175,12 +183,14 @@ drawArrow(GameVisual& visual,
   }
   for (int part = 0; part < partCount; ++part) {
     const ShapePart& shape = parts[part];
-    const bool tinted = pose.useTint && shape.tinted;
-    // The brush color, lit toward the tip and deeper toward the far end.
+    const bool tinted = pose.useTint && shape.tint != PartTint::None;
+    const ColorRgba tint =
+      shape.tint == PartTint::Eraser ? pose.eraserTint : pose.tint;
+    // The part's color, lit toward the tip and deeper toward the far end.
     const ColorRgba partTop =
-      tinted ? UiTheme::mix(pose.tint, UiTheme::textPrimary(), 0.25f) : top;
+      tinted ? UiTheme::mix(tint, UiTheme::textPrimary(), 0.25f) : top;
     const ColorRgba partBottom =
-      tinted ? UiTheme::mix(pose.tint, UiTheme::glassBottom(), 0.35f) : bottom;
+      tinted ? UiTheme::mix(tint, UiTheme::glassBottom(), 0.35f) : bottom;
     float px[8];
     float py[8];
     ColorRgba colors[8];
@@ -265,7 +275,8 @@ SoftwareCursor::update(float deltaSeconds,
                        bool pressed,
                        bool reducedMotion,
                        Shape shape,
-                       ColorRgba tint)
+                       ColorRgba tint,
+                       ColorRgba eraserTint)
 {
   ILLUMO_PROFILE_ZONE("SoftwareCursor.update");
   m_reducedMotion = reducedMotion;
@@ -318,6 +329,7 @@ SoftwareCursor::update(float deltaSeconds,
   m_shape = shape;
   m_flip.setTarget(shape == Shape::Eraser ? 1.0f : 0.0f);
   m_tint = tint;
+  m_eraserTint = eraserTint;
   m_swap.setTarget(1.0f);
   m_lean.tick(step, reducedMotion);
   m_press.tick(step, reducedMotion);
@@ -395,6 +407,7 @@ SoftwareCursor::rebuild()
   pose.shape = m_shape == Shape::Eraser ? Shape::Brush : m_shape;
   pose.flip = m_flip.value();
   pose.tint = m_tint;
+  pose.eraserTint = m_eraserTint;
 
   // A holographic afterimage: ghost arrows where the tip was a moment ago,
   // each split into cyan and magenta-violet copies across the motion and

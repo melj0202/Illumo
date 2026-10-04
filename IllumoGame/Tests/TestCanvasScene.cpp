@@ -14,6 +14,7 @@
 #include <Illumo/Content/SceneDirector.h>
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Gui/GuiKit.h>
+#include <Illumo/Gui/GuiPointerHint.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
@@ -1796,6 +1797,36 @@ testSoftwareCursor()
            cursor.lean() == 0.0f && cursor.tipX() == 400.0f &&
              cursor.getVisual().shapeCount() <= stillShapes,
            "reduced motion keeps it upright, without an afterimage");
+
+  // The pencil's point wears the brush color and its eraser cap, drawn last,
+  // the color erasing paints.
+  const ColorRgba red{ 230, 20, 20, 255 };
+  const ColorRgba green{ 20, 210, 40, 255 };
+  cursor.update(1.0f / 60.0f,
+                400.0f,
+                50.0f,
+                true,
+                false,
+                true,
+                SoftwareCursor::Shape::Brush,
+                red,
+                green);
+  const GameVisual& pencil = cursor.getVisual();
+  const ShapePrimitive* cap = pencil.getShape(pencil.shapeCount() - 1u);
+  testTrue(g,
+           cap != nullptr && cap->vertexColors[0].g > cap->vertexColors[0].r &&
+             cap->vertexColors[2].g > cap->vertexColors[2].r,
+           "the eraser cap wears the erase color, not the brush color");
+
+  GuiPointerHint::take();
+  GuiPointerHint::markBrush(230, 20, 20, 20, 210, 40);
+  const GuiPointerHintState both = GuiPointerHint::take();
+  GuiPointerHint::markBrush(230, 20, 20);
+  const GuiPointerHintState single = GuiPointerHint::take();
+  testTrue(g,
+           both.red == 230 && both.eraseRed == 20 && both.eraseGreen == 210 &&
+             single.eraseRed == 230 && single.eraseGreen == 20,
+           "the pointer hint carries the erase color, the brush's by default");
 }
 
 static void

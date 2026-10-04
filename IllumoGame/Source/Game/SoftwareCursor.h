@@ -19,7 +19,8 @@ class SoftwareCursor
 {
 public:
   // The arrow, the pointing hand over pressable things, and the pencil over
-  // paintable canvas (its tip and cap wear the brush color).
+  // paintable canvas (its tip wears the brush color, its eraser cap the
+  // color erasing paints).
   // The eraser is the pencil flipped over, its blunt end on the pointer; the
   // flip is animated.
   enum class Shape
@@ -42,7 +43,8 @@ public:
   // pointerX/Y are in the visual's (UI-scale) pixels. A hidden cursor
   // forgets its motion so it reappears still, at the pointer.
   // `shape` swaps the arrow for a hand or pencil; the fingertip or pencil
-  // point is the tip. `tint` colors the pencil.
+  // point is the tip. `tint` colors the pencil's point and `eraserTint` its
+  // eraser cap.
   void update(float deltaSeconds,
               float pointerX,
               float pointerY,
@@ -50,7 +52,8 @@ public:
               bool pressed,
               bool reducedMotion,
               Shape shape = Shape::Arrow,
-              ColorRgba tint = ColorRgba{ 255, 255, 255, 255 });
+              ColorRgba tint = ColorRgba{ 255, 255, 255, 255 },
+              ColorRgba eraserTint = ColorRgba{ 255, 255, 255, 255 });
 
   GameVisual& getVisual() { return m_visual; }
   bool isVisible() const { return m_visual.isVisible(); }
@@ -86,6 +89,7 @@ private:
   GuiSpring m_flip;
   Shape m_shape = Shape::Arrow;
   ColorRgba m_tint{ 255, 255, 255, 255 };
+  ColorRgba m_eraserTint{ 255, 255, 255, 255 };
   // Where the tip was and when, newest first, for the afterimage.
   std::array<float, kHistoryLength> m_historyX{};
   std::array<float, kHistoryLength> m_historyY{};
