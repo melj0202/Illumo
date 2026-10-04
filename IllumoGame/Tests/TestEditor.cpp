@@ -5,6 +5,7 @@
 #include "Game/CanvasScene.h"
 #include "Game/CellPattern.h"
 #include "Game/ConfigurationMenu.h"
+#include "Game/ExitConfirmDialog.h"
 #include "Game/IllumoCodec.h"
 #include "Game/PatternCodec.h"
 #include "Game/RuleCatalogLoader.h"
@@ -425,22 +426,108 @@ testPasteDrainsSimulation()
     g, cellContext->getGrid()->getCell(CellAddress{ 2, 2 }), 0, "pasted");
 }
 
+// Presses `key` for one frame, with `modifiers` (1 Shift, 2 Control), then
+// releases it for one more.
 static void
-testCDoesNotClearWorld()
+tapKey(EditorFixture& fixture, KeyCode key, int modifiers)
 {
-  testSection("Editor: C no longer clears the world");
-  EditorFixture fixture;
-  CellContext* cellContext =
-    CanvasSceneTestAccess::getCellContext(fixture.module);
-  SparseCellGrid* grid = cellContext->getGrid();
-  const unsigned char before = grid->getCell(CellAddress{ 0, 0 });
-  InputManagerTestAccess::setAction(
-    fixture.input, KeyCode::C, InputAction::Press);
+  InputManagerTestAccess::setModifierFlags(fixture.input, modifiers);
+  InputManagerTestAccess::setAction(fixture.input, key, InputAction::Press);
   fixture.module.update(0.016);
-  testEqUChar(g,
-              grid->getCell(CellAddress{ 0, 0 }),
-              before,
-              "C does not clear the canvas");
+  InputManagerTestAccess::setAction(fixture.input, key, InputAction::Release);
+  InputManagerTestAccess::setModifierFlags(fixture.input, 0);
+  fixture.module.update(0.016);
+}
+
+// The published world's cell count. Running swaps the published grid, so
+// it is looked up each time.
+static std::size_t
+storedCells(EditorFixture& fixture)
+{
+  return CanvasSceneTestAccess::getCellContext(fixture.module)
+    ->getGrid()
+    ->getStoredCellCount();
+}
+
+static void
+testClearResetKeys()
+{
+  testSection("Editor: C clears and Shift+R resets the canvas");
+  EditorFixture fixture;
+  ExitConfirmDialog* confirm =
+    CanvasSceneTestAccess::getExitConfirmDialog(fixture.module);
+  const std::size_t seeded = storedCells(fixture);
+  testTrue(g, seeded > 0u, "the canvas opens with its starting pattern");
+
+  // Confirm clearing on: the key asks first and the world stays.
+  fixture.env.setVar("confirmClear", true);
+  tapKey(fixture, KeyCode::C, 2);
+  testTrue(g,
+           storedCells(fixture) == seeded && !confirm->isOpen(),
+           "Ctrl+C copies and never clears");
+  tapKey(fixture, KeyCode::C, 0);
+  testTrue(g,
+           confirm->isOpen() && storedCells(fixture) == seeded,
+           "C asks before clearing while Confirm clearing is on");
+  confirm->close();
+  fixture.module.update(0.016);
+
+  // Confirm clearing off: the keys act at once, in either mode.
+  fixture.env.setVar("confirmClear", false);
+  tapKey(fixture, KeyCode::C, 0);
+  testEqSize(g, storedCells(fixture), 0u, "C clears the canvas");
+  tapKey(fixture, KeyCode::R, 0);
+  testEqSize(g,
+             storedCells(fixture),
+             0u,
+             "plain R leaves the world alone (it rotates the buffer)");
+  tapKey(fixture, KeyCode::R, 1);
+  testEqSize(
+    g, storedCells(fixture), seeded, "Shift+R puts the starting pattern back");
+  tapKey(fixture, KeyCode::E, 0);
+  testTrue(g,
+           CanvasSceneTestAccess::getState(fixture.module) == CellState::NORMAL,
+           "E switches to Normal mode");
+  tapKey(fixture, KeyCode::C, 0);
+  testEqSize(g, storedCells(fixture), 0u, "C clears in Normal mode");
+  tapKey(fixture, KeyCode::R, 1);
+  testEqSize(g, storedCells(fixture), seeded, "Shift+R resets in Normal mode");
+}
+
+static void
+testModeButton()
+{
+  testSection("Editor: the corner mode button switches Edit and Normal");
+  EditorFixture fixture;
+  fixture.env.setVar("reducedUiMotion", true);
+  // The third corner button: 12 from the right edge, beneath settings and
+  // the workshop.
+  const double x = static_cast<double>(fixture.window.width) - 12.0 - 16.0;
+  const double y = 92.0 + 16.0;
+  testTrue(g,
+           CanvasSceneTestAccess::getState(fixture.module) == CellState::EDIT,
+           "the canvas starts in Edit mode");
+  fixture.window.mouseX = x;
+  fixture.window.mouseY = y;
+  fixture.module.update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.update(0.016);
+  testTrue(g,
+           CanvasSceneTestAccess::getState(fixture.module) == CellState::NORMAL,
+           "clicking the button switches to Normal mode");
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Press);
+  fixture.module.update(0.016);
+  InputManagerTestAccess::setAction(
+    fixture.input, KeyCode::MouseLeft, InputAction::Release);
+  fixture.module.update(0.016);
+  testTrue(g,
+           CanvasSceneTestAccess::getState(fixture.module) == CellState::EDIT,
+           "clicking it again switches back to Edit mode");
 }
 
 static void
@@ -1460,8 +1547,10 @@ registerEditorTests(IllumoTestRegistry& registry)
                []() { return runEditorCase(testStampGlider); });
   registry.add("IllumoGame.Editor.PasteDrainsSimulation",
                []() { return runEditorCase(testPasteDrainsSimulation); });
-  registry.add("IllumoGame.Editor.CDoesNotClearWorld",
-               []() { return runEditorCase(testCDoesNotClearWorld); });
+  registry.add("IllumoGame.Editor.ClearResetKeys",
+               []() { return runEditorCase(testClearResetKeys); });
+  registry.add("IllumoGame.Editor.ModeButton",
+               []() { return runEditorCase(testModeButton); });
   registry.add("IllumoGame.Editor.InspectorPreference",
                []() { return runEditorCase(testInspectorPreference); });
   registry.add("IllumoGame.Editor.InspectorTokens",

@@ -112,6 +112,12 @@ private:
   // Whether the pointer is over a corner button that can take a click.
   bool isChromeButtonHovered() const;
   void toggleSettingsMenu();
+  // Switches between NORMAL and EDIT (E or the mode button).
+  void toggleCanvasMode();
+  // Clear and reset, asking first while Confirm clearing is on (the
+  // toolbar, C and Shift+R).
+  void requestClearCanvas();
+  void requestResetCanvas();
   // Drains the simulation and opens the workshop on the active rule (F2 or
   // the workshop button).
   void openRulesetWorkshop();
@@ -224,6 +230,8 @@ private:
   CanvasChromeButton m_workshopButton{ CanvasChromeIcon::Rules,
                                        "Ruleset Workshop",
                                        "F2" };
+  // Beneath them, the mode switch (E): it shows the mode it switches to.
+  CanvasChromeButton m_modeButton{ CanvasChromeIcon::Edit, "Edit mode", "E" };
   bool m_chromeMouseWasDown = false;
   // The paint drawer draws in three layers so its breathing drop can redraw
   // alone: the blob, header and cards; the chosen brush's drop; then the
@@ -351,6 +359,8 @@ private:
   bool flipHeld;
   bool inspectHeld;
   bool deleteHeld;
+  bool clearHeld = false;
+  bool resetHeld = false;
   std::string initialSaveFile;
   std::optional<NewSimulationConfiguration> initialCanvas;
   // Platform completions hold a weak reference and are dropped after Exit.

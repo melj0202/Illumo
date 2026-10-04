@@ -164,7 +164,10 @@ Lenia definitions show their compiled interaction contract and retain their
 parameters through JSON import/export.
 The glider button under the canvas's settings button (`CanvasChromeButton`,
 the settings button's tile, springs and hint with its own glyph) opens the
-workshop like F2; both corner buttons hide while a menu, the console or a
+workshop like F2. Beneath it a mode button switches Edit and Normal like E,
+showing the mode it switches to (a pencil for Edit, a play triangle for
+Normal; D-UI18). A click splashes and dips the tile, and the new glyph
+springs in. All three corner buttons hide while a menu, the console or a
 dialog is open, and the FPS readout sits below them. The page reads Start From
 (cell family and starter rule as New Canvas's drop-down lists, which Left/Right
 still step, then the ruleset name), Behavior, Preview, then Cell States
@@ -477,10 +480,11 @@ Modal overlays and the console hide hints and selection outlines and stop
 active strokes. Explicit console pattern commands remain mode-independent.
 Pattern text is a clipboard/console side path and does not bump the sparse v3
 save format (D-G1). `Ctrl+C`/`Ctrl+X`/`Ctrl+V` are editor clipboard keys; a
-full clear is `clear_canvas` or the toolbar's Clear, and `reset_canvas` or
-the toolbar's Reset puts back the active rule's starting pattern (the one a
+full clear is C, `clear_canvas` or the toolbar's Clear, and Shift+R,
+`reset_canvas` or the toolbar's Reset puts back the active rule's starting pattern (the one a
 new canvas opens with), restarts the generation count and returns to the home
-view (D-UI16). In Edit mode a toolbar (`CanvasActionBar`, wearing the
+view (D-UI16). The C and Shift+R keys work in either mode and ask first while
+Confirm clearing is on (D-UI18). In Edit mode a toolbar (`CanvasActionBar`, wearing the
 settings button's tile and bouncy springs through `CanvasChromeStyle`, as the
 collapsed paint bubble does) rides the edit chrome along the top edge with
 Save, Load (the platform pickers, as `save_dialog`/`load_dialog`), Paste,

@@ -3670,6 +3670,28 @@ or save-format change.\\
 \textbf{Extends:} D-UI8, D-UI12, D-GC3
 \end{decisionbox}
 
+\subsection*{D-UI18 --- A mode button and clear and reset keys}
+\begin{decisionbox}[title={D-UI18 \quad 2026-10-03}]
+\textbf{Decision:} A third corner button, stacked under the settings and
+workshop buttons, switches the canvas between EDIT and NORMAL as E does. Its
+glyph shows the mode it switches to: a pencil for EDIT, a play triangle for
+NORMAL (\texttt{CanvasChromeIcon::Edit} and \texttt{Run}, swapped with
+\texttt{CanvasChromeButton::setIcon}). The click that switches never paints;
+it throws a liquid splash and dips the tile (\texttt{pulse}), and each new
+glyph springs in from nothing, whether the click or E switched.
+In either mode C clears the canvas and Shift+R resets it to the rule's
+starting pattern, through the toolbar's \texttt{requestClearCanvas} and
+\texttt{requestResetCanvas}, so Confirm clearing asks first. Ctrl+C stays
+copy and plain R still rotates the pattern buffer.\\
+\textbf{Why:} The owner asked for an on-screen mode switch and for R and C to
+reset and clear. R already rotated the buffer in EDIT, and the owner chose
+Shift+R over moving the rotation.\\
+\textbf{Consequences:} C clearing the world returns, guarded now by the
+confirmation the toolbar uses. The FPS readout moves down beneath the third
+button. No engine, ABI or save-format change.\\
+\textbf{Extends:} D-UI16
+\end{decisionbox}
+
 \subsection*{D-E32 --- Looping music over the sound seam}
 \begin{decisionbox}[title={D-E32 \quad 2026-09-27}]
 \textbf{Decision:} Music is a looping sound, not a separate streaming

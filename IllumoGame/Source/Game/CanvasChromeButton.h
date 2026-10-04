@@ -8,12 +8,15 @@
 class IRenderWindow;
 class Renderer;
 
-// The glyph a canvas corner button wears: the settings menu's three bars, or
-// a glider on a 3x3 neighborhood for the Ruleset Workshop.
+// The glyph a canvas corner button wears: the settings menu's three bars, a
+// glider on a 3x3 neighborhood for the Ruleset Workshop, or the mode the
+// mode button switches to (a pencil for EDIT, a play triangle for NORMAL).
 enum class CanvasChromeIcon
 {
   Settings,
-  Rules
+  Rules,
+  Edit,
+  Run
 };
 
 // One of the canvas's top-right icon buttons, in the CanvasChromeStyle look:
@@ -44,6 +47,13 @@ public:
               bool reducedMotion);
   // Hides the button and arms its pop-in for when it next updates.
   void hide();
+  // Swaps the glyph and the hint's action. A new glyph springs in from
+  // nothing while the tile dips and boings back.
+  void setIcon(CanvasChromeIcon icon, std::string label);
+  // A click's feedback: a liquid splash leaps from the tile and the tile dips
+  // and boings back.
+  void pulse();
+  CanvasChromeIcon icon() const { return m_icon; }
 
   bool isVisible() const { return m_tile.isVisible(); }
   bool isHovered() const { return m_hovered; }
@@ -84,7 +94,11 @@ private:
   GuiSpring m_pop;
   GuiSpring m_hover;
   GuiSpring m_tip;
+  // The glyph's scale, which a new icon springs up from zero.
+  GuiSpring m_glyphPop;
   std::array<GuiSpring, 3> m_rows;
+  static constexpr float kSplashSeconds = 0.5f;
+  float m_splashElapsed = kSplashSeconds;
   double m_hoverClock = 0.0;
   double m_clock = 0.0;
 };

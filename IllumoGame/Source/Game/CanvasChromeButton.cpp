@@ -39,9 +39,12 @@ CanvasChromeButton::prepare(IRenderWindow* window, Renderer* renderer)
   m_pop.configure(GuiMotion::kBoing);
   m_hover.configure(GuiMotion::kJelly);
   m_tip.configure(GuiMotion::kBoing);
+  m_glyphPop.configure(GuiMotion::kBoing);
+  m_glyphPop.snapTo(1.0f);
   for (GuiSpring& row : m_rows) {
     row.configure(GuiMotion::kBoing);
   }
+  m_splashElapsed = kSplashSeconds;
   m_hovered = false;
   m_shown = false;
 }
@@ -59,6 +62,28 @@ CanvasChromeButton::hide()
   m_tile.setVisible(false);
   m_hovered = false;
   m_shown = false;
+}
+
+void
+CanvasChromeButton::setIcon(CanvasChromeIcon icon, std::string label)
+{
+  if (icon == m_icon && label == m_label) {
+    return;
+  }
+  m_icon = icon;
+  m_label = std::move(label);
+  m_tileKey.invalidate();
+  if (m_shown) {
+    m_glyphPop.snapTo(0.0f);
+    m_pop.snapTo(0.86f);
+  }
+}
+
+void
+CanvasChromeButton::pulse()
+{
+  m_splashElapsed = 0.0f;
+  m_pop.snapTo(0.8f);
 }
 
 bool
@@ -100,6 +125,7 @@ CanvasChromeButton::update(double dt,
     m_pop.snapTo(0.0f);
     m_hover.snapTo(0.0f);
     m_tip.snapTo(0.0f);
+    m_glyphPop.snapTo(1.0f);
     for (GuiSpring& row : m_rows) {
       row.snapTo(0.0f);
     }
@@ -107,6 +133,14 @@ CanvasChromeButton::update(double dt,
   }
   m_pop.setTarget(1.0f);
   m_pop.tick(step, reducedMotion);
+  m_glyphPop.setTarget(1.0f);
+  m_glyphPop.tick(step, reducedMotion);
+  // Reduced motion keeps the click's feedback to the tile's dip.
+  m_splashElapsed = reducedMotion
+                      ? kSplashSeconds
+                      : std::min(kSplashSeconds, m_splashElapsed + step);
+  const float splash =
+    m_splashElapsed < kSplashSeconds ? m_splashElapsed / kSplashSeconds : -1.0f;
 
   m_hover.setTarget(m_hovered ? 1.0f : 0.0f);
   m_hover.tick(step, reducedMotion);
@@ -158,7 +192,7 @@ CanvasChromeButton::update(double dt,
   // breathes at rest and blooms on hover.
   m_haloKey.begin().add(
     { tileShown ? 1.0f : 0.0f, tileX, tileY, tileWidth, tileHeight, radius });
-  m_haloKey.add({ isPressed ? 1.0f : 0.0f, hover, breathe, pop });
+  m_haloKey.add({ isPressed ? 1.0f : 0.0f, hover, breathe, pop, splash });
   if (m_haloKey.changed()) {
     ILLUMO_PROFILE_ZONE("CanvasChromeButton.rebuildHalo");
     m_halo.clearPrimitives();
@@ -185,6 +219,15 @@ CanvasChromeButton::update(double dt,
         UiTheme::fade(halo,
                       CanvasChromeStyle::haloOpacity(breathe, hover) * pop),
         UiTheme::transparentOf(halo));
+    }
+    if (splash >= 0.0f) {
+      // Behind the tile, so the ring swells out from under its edges.
+      GuiKit::drawSplash(m_halo,
+                         centerX,
+                         centerY,
+                         splash,
+                         0.7f,
+                         ColorRgba{ 170, 240, 255, 255 });
     }
   }
   m_halo.setVisible(true);
@@ -218,7 +261,8 @@ CanvasChromeButton::update(double dt,
                           isPressed ? 1.0f : 0.0f,
                           grow,
                           squash });
-  m_tileKey.add({ rowGrowth[0], rowGrowth[1], rowGrowth[2] });
+  const float glyphScale = std::max(0.0f, m_glyphPop.value());
+  m_tileKey.add({ rowGrowth[0], rowGrowth[1], rowGrowth[2], glyphScale });
   m_tileKey.add({ tipDrawn ? 1.0f : 0.0f,
                   tipDrawn ? tipSpring : 0.0f,
                   tipDrawn ? tipSquash : 0.0f });
@@ -263,7 +307,8 @@ CanvasChromeButton::update(double dt,
                              UiTheme::applyOpacity(violet, crownOpacity),
                              UiTheme::applyOpacity(cyan, crownOpacity));
     }
-    drawGlyph(centerX, centerY, grow, squash, hover, isPressed, rowGrowth);
+    drawGlyph(
+      centerX, centerY, grow * glyphScale, squash, hover, isPressed, rowGrowth);
   }
 
   if (tipDrawn) {
@@ -313,6 +358,88 @@ CanvasChromeButton::drawGlyph(float centerX,
                               barHeight,
                               barHeight * 0.5f,
                               rowColor(i));
+    }
+    return;
+  }
+
+  if (m_icon == CanvasChromeIcon::Edit) {
+    // A pencil pointing down-left, as the canvas pointer draws it. Its point,
+    // body and cap lengthen in turn on hover (cap first, like the rows).
+    // Lengths run along the pencil, measured from the tile's centre.
+    const float alongX = 0.70710678f * wide;
+    const float alongY = -0.70710678f * tall;
+    const float acrossX = 0.70710678f * grow;
+    const float acrossY = 0.70710678f * grow;
+    const float half = 2.1f;
+    const float lengths[3] = { 4.0f, 9.0f, 3.5f };
+    const float gap = 1.2f;
+    float along = -0.5f * (lengths[0] + lengths[1] + lengths[2] + 2.0f * gap);
+    for (std::size_t i = 0; i < 3u; ++i) {
+      const float length = lengths[i] * (1.0f + 0.12f * rowGrowth[2u - i]);
+      const float x0 = centerX + along * alongX;
+      const float y0 = centerY + along * alongY;
+      const float x1 = centerX + (along + length) * alongX;
+      const float y1 = centerY + (along + length) * alongY;
+      const ColorRgba color = rowColor(2u - i);
+      if (i == 0u) {
+        // The point tapers to the tip.
+        m_tile.addGradientTriangle(x0,
+                                   y0,
+                                   x1 + acrossX * half,
+                                   y1 + acrossY * half,
+                                   x1 - acrossX * half,
+                                   y1 - acrossY * half,
+                                   color,
+                                   color,
+                                   color);
+      } else {
+        m_tile.addGradientQuad(x0 + acrossX * half,
+                               y0 + acrossY * half,
+                               x1 + acrossX * half,
+                               y1 + acrossY * half,
+                               x1 - acrossX * half,
+                               y1 - acrossY * half,
+                               x0 - acrossX * half,
+                               y0 - acrossY * half,
+                               color,
+                               color,
+                               color,
+                               color);
+      }
+      along += length + gap;
+    }
+    return;
+  }
+
+  if (m_icon == CanvasChromeIcon::Run) {
+    // A play triangle cut into three bands, top to bottom, each lighting and
+    // reaching further right on hover.
+    const float height = 16.0f * tall;
+    const float width = 14.0f * wide;
+    const float left = centerX - width * 0.4f;
+    const float top = centerY - height * 0.5f;
+    for (std::size_t i = 0; i < 3u; ++i) {
+      const float bandTop = top + height * static_cast<float>(i) / 3.0f;
+      const float bandBottom = top + height * static_cast<float>(i + 1u) / 3.0f;
+      const float reach = width * (1.0f + 0.15f * rowGrowth[i]);
+      // The right edge meets the tip at mid-height; a band that spans the
+      // middle is drawn as two quads so the tip stays sharp.
+      const float middle = std::clamp(centerY, bandTop, bandBottom);
+      const float spans[3] = { bandTop, middle, bandBottom };
+      const ColorRgba color = rowColor(i);
+      for (std::size_t part = 0; part < 2u; ++part) {
+        const float y0 = spans[part];
+        const float y1 = spans[part + 1u];
+        if (y1 <= y0) {
+          continue;
+        }
+        const float x0 =
+          left + reach * (1.0f - std::fabs(y0 - centerY) / (height * 0.5f));
+        const float x1 =
+          left + reach * (1.0f - std::fabs(y1 - centerY) / (height * 0.5f));
+        m_tile.addGradientQuad(
+          left, y0, x0, y0, x1, y1, left, y1, color, color, color, color);
+      }
     }
     return;
   }

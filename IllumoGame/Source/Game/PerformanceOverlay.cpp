@@ -9,10 +9,10 @@
 #include <cmath>
 #include <cstdio>
 
-// Sits under the canvas's settings and workshop buttons (12 + 32 + 8 + 32,
-// then a margin), clear of the inspector (top left).
+// Sits under the canvas's settings, workshop and mode buttons (12, then three
+// 32-pixel buttons 8 apart, then a margin), clear of the inspector (top left).
 static const float kMargin = 12.0f;
-static const float kTopOffset = 96.0f;
+static const float kTopOffset = 136.0f;
 static const float kPadding = 10.0f;
 static const float kLineHeight = 17.0f;
 static const float kTextSize = 11.5f;

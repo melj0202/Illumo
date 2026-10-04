@@ -1,4 +1,5 @@
 #include "Game/CSimSounds.h"
+#include "Game/CanvasChromeButton.h"
 #include "Game/CanvasCoordinatePolicy.h"
 #include "Game/CSimScenes.h"
 #include "Game/CanvasScene.h"
@@ -1827,6 +1828,61 @@ testSoftwareCursor()
            both.red == 230 && both.eraseRed == 20 && both.eraseGreen == 210 &&
              single.eraseRed == 230 && single.eraseGreen == 20,
            "the pointer hint carries the erase color, the brush's by default");
+}
+
+// How far the last `count` tile shapes reach from the tile's centre (16, 16).
+static float
+glyphReach(CanvasChromeButton& button, std::size_t count)
+{
+  const GameVisual& tile = button.getVisual();
+  float reach = 0.0f;
+  for (std::size_t index = tile.shapeCount() - count; index < tile.shapeCount();
+       ++index) {
+    const ShapePrimitive* shape = tile.getShape(index);
+    for (const float x : { shape->x0, shape->x1, shape->x2, shape->x3 }) {
+      reach = std::max(reach, std::abs(x - 16.0f));
+    }
+  }
+  return reach;
+}
+
+static void
+testChromeButtonFeedback()
+{
+  testSection("CanvasChromeButton: a click splashes, a new glyph pops in");
+  CanvasChromeButton button(CanvasChromeIcon::Edit, "Edit mode", "E");
+  button.prepare(nullptr, nullptr);
+  const float frame = 1.0f / 60.0f;
+  for (int step = 0; step < 90; ++step) {
+    button.update(frame, 0.0f, 0.0f, 32.0f, 500.0f, 500.0f, false, false);
+  }
+  const std::size_t restingHalo = button.getHaloVisual().shapeCount();
+  button.pulse();
+  button.update(frame, 0.0f, 0.0f, 32.0f, 500.0f, 500.0f, false, false);
+  button.update(frame, 0.0f, 0.0f, 32.0f, 500.0f, 500.0f, false, false);
+  testTrue(g,
+           button.getHaloVisual().shapeCount() > restingHalo,
+           "a click throws a splash from the tile");
+  for (int step = 0; step < 90; ++step) {
+    button.update(frame, 0.0f, 0.0f, 32.0f, 500.0f, 500.0f, false, false);
+  }
+  testEqSize(g,
+             button.getHaloVisual().shapeCount(),
+             restingHalo,
+             "the splash fades away");
+
+  // The play triangle is four quads (only its middle band is split at the
+  // tip), drawn last while no hint shows.
+  button.setIcon(CanvasChromeIcon::Run, "Normal mode");
+  button.update(frame, 0.0f, 0.0f, 32.0f, 500.0f, 500.0f, false, false);
+  const float popping = glyphReach(button, 4u);
+  for (int step = 0; step < 90; ++step) {
+    button.update(frame, 0.0f, 0.0f, 32.0f, 500.0f, 500.0f, false, false);
+  }
+  const float settled = glyphReach(button, 4u);
+  testTrue(g,
+           button.icon() == CanvasChromeIcon::Run && popping < settled * 0.6f,
+           "a new glyph springs in from small");
 }
 
 static void
@@ -4305,6 +4361,8 @@ registerCanvasSceneTests(IllumoTestRegistry& registry)
                []() { return runCanvasSceneCase(testPaintPalette); });
   registry.add("IllumoGame.CellGame.SoftwareCursor",
                []() { return runCanvasSceneCase(testSoftwareCursor); });
+  registry.add("IllumoGame.CellGame.ChromeButtonFeedback",
+               []() { return runCanvasSceneCase(testChromeButtonFeedback); });
   registry.add("IllumoGame.CellGame.ModeBadge",
                []() { return runCanvasSceneCase(testModeBadge); });
   registry.add("IllumoGame.CellGame.PaintPaletteBubbleMorph", []() {

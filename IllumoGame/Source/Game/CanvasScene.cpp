@@ -441,6 +441,7 @@ CanvasScene::start(IllumoContext& startContext)
 
   m_settingsButton.prepare(ic->window, ic->renderer);
   m_workshopButton.prepare(ic->window, ic->renderer);
+  m_modeButton.prepare(ic->window, ic->renderer);
   m_chromeMouseWasDown = false;
 
   for (GameVisual* visual : { &m_paintBubbleHaloVisual,
@@ -1923,6 +1924,8 @@ CanvasScene::update(double dt)
   const bool workshopClicked = chromePressEdge &&
                                m_workshopButton.isVisible() &&
                                m_workshopButton.isHovered();
+  const bool modeClicked =
+    chromePressEdge && m_modeButton.isVisible() && m_modeButton.isHovered();
 
   if (!consoleOpen && !exitConfirmOpen &&
       (rulesetWorkshopMenu == nullptr || !rulesetWorkshopMenu->isOpen()) &&
@@ -2230,29 +2233,17 @@ CanvasScene::update(double dt)
     }
   }
 
-  // Toggle between NORMAL and EDIT states with 'E' key (only when console is
-  // closed)
+  // Toggle between NORMAL and EDIT with E or the mode button (only when the
+  // console is closed).
   if (!ic->commandLine->isOpen &&
-      ic->inputManager->isActionActive("ToggleState")) {
-    if (currentState == CellState::NORMAL) {
-      drainSimulation();
-      currentState = CellState::EDIT;
-      showModeSplash("EDIT");
-      Logger::LogInfo("State changed to EDIT");
-    } else {
-      currentState = CellState::NORMAL;
-      simAccum = 0.0;
-      achievedSimulationTps = 0.0;
-      showModeSplash("NORMAL");
-      Logger::LogInfo("State changed to NORMAL");
+      (ic->inputManager->isActionActive("ToggleState") || modeClicked)) {
+    if (modeClicked) {
+      CSimSounds::play(CSimSound::MenuSelect);
+      m_modeButton.pulse();
+      // The click belongs to the button: it never paints in the new mode.
+      m_editToolsCapturing = true;
     }
-    clipboard.clearSelection();
-    selectionVisual.setVisible(false);
-    lastSimulationSteps = 0;
-    simulationDebtDropped = false;
-    simulationDebtFrames = 0;
-    simulationDebtReported = false;
-    simulationBudgetLimited = false;
+    toggleCanvasMode();
   }
 
   updateEditHintsVisual(dt);
@@ -2678,7 +2669,14 @@ CanvasScene::handleEditorHotkeys()
     return;
   }
   const bool control = ic->inputManager->isControlPressed();
-  const bool copyDown = control && ic->inputManager->isKeyPressed(KeyCode::C);
+  const bool shift = ic->inputManager->isShiftPressed();
+  const bool cDown = ic->inputManager->isKeyPressed(KeyCode::C);
+  const bool copyDown = control && cDown;
+  // C clears and Shift+R resets the canvas in either mode, asking first while
+  // Confirm clearing is on; Ctrl+C stays copy and plain R rotates the buffer.
+  const bool clearDown = !control && cDown;
+  const bool resetDown =
+    shift && !control && ic->inputManager->isKeyPressed(KeyCode::R);
   const bool cutDown = control && ic->inputManager->isKeyPressed(KeyCode::X);
   const bool pasteDown = control && ic->inputManager->isKeyPressed(KeyCode::V);
   const bool rotateDown = ic->inputManager->isKeyPressed(KeyCode::R);
@@ -2700,8 +2698,14 @@ CanvasScene::handleEditorHotkeys()
     pasteAtCursor();
   }
   if (currentState == CellState::EDIT && rotateDown && !rotateHeld &&
-      !control) {
+      !control && !shift) {
     clipboard.rotateCw();
+  }
+  if (clearDown && !clearHeld) {
+    requestClearCanvas();
+  }
+  if (resetDown && !resetHeld) {
+    requestResetCanvas();
   }
   if (currentState == CellState::EDIT && flipDown && !flipHeld && !control) {
     clipboard.flipHorizontal();
@@ -2721,6 +2725,8 @@ CanvasScene::handleEditorHotkeys()
   flipHeld = flipDown;
   inspectHeld = inspectDown;
   deleteHeld = deleteDown;
+  clearHeld = clearDown;
+  resetHeld = resetDown;
 }
 
 bool
@@ -2956,24 +2962,10 @@ CanvasScene::runEditAction(CanvasEditAction action, bool fromContextMenu)
       clipboard.clearSelection();
       break;
     case CanvasEditAction::ClearCanvas:
-      // With Confirm clearing on, the canvas asks first (as clear_canvas does).
-      if (exitConfirmDialog != nullptr &&
-          SimulatorSettings::flag(ic->envVars, "confirmClear", true)) {
-        ic->inputManager->clearCharQueue();
-        exitConfirmDialog->openClearCanvas();
-      } else {
-        clearCanvas();
-      }
+      requestClearCanvas();
       break;
     case CanvasEditAction::ResetCanvas:
-      // Confirm clearing guards a reset too: both discard the current world.
-      if (exitConfirmDialog != nullptr &&
-          SimulatorSettings::flag(ic->envVars, "confirmClear", true)) {
-        ic->inputManager->clearCharQueue();
-        exitConfirmDialog->openResetCanvas();
-      } else {
-        resetCanvas();
-      }
+      requestResetCanvas();
       break;
     case CanvasEditAction::Save:
       openSaveDialog();
@@ -3112,7 +3104,7 @@ CanvasScene::buildEditHints(float width,
     "Left drag: paint", "Right drag: erase", "Shift+Left drag: select",
     "Middle drag: pan", "Wheel: zoom",       "Ctrl+V: paste",
     "E: run",           "I: inspector",      "F1: settings",
-    "F2: rules"
+    "F2: rules",        "C: clear",          "Shift+R: reset"
   };
   if (clipboard.hasSelection()) {
     hints.emplace_back("Ctrl+C/X: copy/cut");
@@ -4724,7 +4716,58 @@ bool
 CanvasScene::isChromeButtonHovered() const
 {
   return (m_settingsButton.isVisible() && m_settingsButton.isHovered()) ||
-         (m_workshopButton.isVisible() && m_workshopButton.isHovered());
+         (m_workshopButton.isVisible() && m_workshopButton.isHovered()) ||
+         (m_modeButton.isVisible() && m_modeButton.isHovered());
+}
+
+void
+CanvasScene::toggleCanvasMode()
+{
+  if (currentState == CellState::NORMAL) {
+    drainSimulation();
+    currentState = CellState::EDIT;
+    showModeSplash("EDIT");
+    Logger::LogInfo("State changed to EDIT");
+  } else {
+    currentState = CellState::NORMAL;
+    simAccum = 0.0;
+    achievedSimulationTps = 0.0;
+    showModeSplash("NORMAL");
+    Logger::LogInfo("State changed to NORMAL");
+  }
+  clipboard.clearSelection();
+  selectionVisual.setVisible(false);
+  lastSimulationSteps = 0;
+  simulationDebtDropped = false;
+  simulationDebtFrames = 0;
+  simulationDebtReported = false;
+  simulationBudgetLimited = false;
+}
+
+void
+CanvasScene::requestClearCanvas()
+{
+  // With Confirm clearing on, the canvas asks first (as clear_canvas does).
+  if (exitConfirmDialog != nullptr &&
+      SimulatorSettings::flag(ic->envVars, "confirmClear", true)) {
+    ic->inputManager->clearCharQueue();
+    exitConfirmDialog->openClearCanvas();
+  } else {
+    clearCanvas();
+  }
+}
+
+void
+CanvasScene::requestResetCanvas()
+{
+  // Confirm clearing guards a reset too: both discard the current world.
+  if (exitConfirmDialog != nullptr &&
+      SimulatorSettings::flag(ic->envVars, "confirmClear", true)) {
+    ic->inputManager->clearCharQueue();
+    exitConfirmDialog->openResetCanvas();
+  } else {
+    resetCanvas();
+  }
 }
 
 void
@@ -4758,6 +4801,7 @@ CanvasScene::updateChromeButtons(double dt)
   if (ic == nullptr || ic->window == nullptr) {
     m_settingsButton.hide();
     m_workshopButton.hide();
+    m_modeButton.hide();
     return;
   }
   const bool consoleOpen =
@@ -4771,6 +4815,7 @@ CanvasScene::updateChromeButtons(double dt)
   if (consoleOpen || exitConfirmOpen || settingsOpen || workshopOpen) {
     m_settingsButton.hide();
     m_workshopButton.hide();
+    m_modeButton.hide();
     return;
   }
 
@@ -4789,14 +4834,21 @@ CanvasScene::updateChromeButtons(double dt)
   const bool reducedMotion = ic->envVars != nullptr &&
                              ic->envVars->getVar("reducedUiMotion").valueAsBool;
 
-  // Settings in the corner; the workshop stacked just beneath it. The FPS
-  // readout (PerformanceOverlay) sits below both.
+  // Settings in the corner, then the workshop and the mode switch stacked
+  // beneath it. The FPS readout (PerformanceOverlay) sits below all three.
   const float size = 32.0f;
   const float x = std::max(0.0f, virtualWidth - size - 12.0f);
   m_settingsButton.update(
     dt, x, 12.0f, size, pointerX, pointerY, mouseDown, reducedMotion);
   m_workshopButton.update(
     dt, x, 52.0f, size, pointerX, pointerY, mouseDown, reducedMotion);
+  if (currentState == CellState::EDIT) {
+    m_modeButton.setIcon(CanvasChromeIcon::Run, "Normal mode");
+  } else {
+    m_modeButton.setIcon(CanvasChromeIcon::Edit, "Edit mode");
+  }
+  m_modeButton.update(
+    dt, x, 92.0f, size, pointerX, pointerY, mouseDown, reducedMotion);
 }
 
 void
@@ -5751,7 +5803,8 @@ CanvasScene::dispatch(DrawList& frame)
   if (modeBadge.isVisible()) {
     scene->AddDrawable(&modeBadge.getVisual(), RenderLayerId::UI);
   }
-  for (CanvasChromeButton* button : { &m_settingsButton, &m_workshopButton }) {
+  for (CanvasChromeButton* button :
+       { &m_settingsButton, &m_workshopButton, &m_modeButton }) {
     if (button->isVisible()) {
       scene->AddDrawable(&button->getHaloVisual(), RenderLayerId::UI);
       scene->AddDrawable(&button->getVisual(), RenderLayerId::UI);
