@@ -156,104 +156,13 @@ without it. A new screen composes those rather than restating them.
 Preserve the existing drawable owners and DrawList layers; do not introduce a
 retained UI tree for this surface.
 
-Canvas truth (verify here before trusting older notes):
+Canvas and simulation internals (sparse chunks, frontier/halo evaluation,
+simulation lanes, `CanvasView` caching) are described in
+`docs/architecture-consensus.md`; their binding rules are under
+"Project-wide invariants".
 
-- Production domain: `SparseCellGrid` owns signed 64-bit world cells in a
-  hash map of non-background 16x16 chunks with separate stored-cell occupancy
-  and neighbor-counting masks. Sparse chunks accumulate non-background cells
-  and neighbors of counted cells in retained
-  contiguous per-chunk scratch records with fixed candidate masks and neighbor
-  counts. Candidate target discovery tests edge and corner bits directly. The
-  serial builder remains source-centric, while large or explicitly parallel
-  preparation assigns independent target records to the reusable worker pool;
-  neighbor counters are initialized only when their candidate bit is first set.
-  A retained generation-stamped flat index maps chunk addresses directly to
-  scratch records without sorting or binary searches. Next-generation output
-  uses a retained inactive chunk map and recycled `unordered_map` node handles,
-  avoiding steady-state chunk-node allocation. At 16,384 or more candidate
-  cells, candidate evaluation uses the reusable worker pool with coarse ranges
-  of roughly 2,048 candidate cells and up to four automatic workers; small
-  candidate sets remain direct and serial. Current and inactive chunk maps
-  maintain transactional aggregate stored-cell, counted-cell, and
-  candidate-preferred-chunk totals, so path selection and settled statistics do
-  not rescan all allocated chunks. A retained changed-chunk frontier
-  retains up to 16,384 changed addresses and expands them by one chunk; the
-  work comparison still selects frontier versus complete evaluation, and only
-  tracking overflow or allocation failure discards the journal. Exact
-  local candidate preparation/evaluation work is compared with a cached-total
-  complete-path estimate; cheaper frontiers patch the prior map, while broad
-  changes fall back. Sparse frontier targets use candidate masks or halos by
-  counted-neighbor work, and settled worlds evaluate no chunks. Complete mixed
-  worlds select candidate
-  or deterministic 18x18 halo evaluation independently per target from actual
-  counted-neighbor contribution work; Wireworld conductors are stored but only
-  heads contribute. All-dense counted chunks bypass scratch construction. At
-  32 or more halo targets, a grid-owned reusable pool uses up to eight workers.
-  Histogram, directional, extended-range and Lenia kernels share one
-  chunk-parallel driver on that pool (per-worker halo windows, serial in-order
-  journal and publication), and elementary 1D rows split into pool ranges.
-  Complete-halo targets use a retained generation-stamped flat index and
-  retained result storage instead of a local hash set, sorting, and disposable
-  vectors. All evaluators index a per-ruleset 256x9 transition table; dense
-  halo targets build rolling rows directly from chunk counting masks without
-  materializing an 18x18 byte halo. A persistent `SimulationRunner` advances a
-  spare sparse grid while the main thread reads the published one. Completed
-  generations publish only at frame boundaries with `SparseGenerationDelta`;
-  journals of at least 2,048 presentation chunks carry a lightweight
-  replacement marker instead of per-chunk payloads. The former display grid
-  consumes the delta before reuse. Only one start may be outstanding (it may
-  publish several generations as one delta), due whole steps beyond what it
-  accepts are dropped, and state mutations, persistence, ruleset changes,
-  manual stepping, and shutdown drain first. In the package, serial starts
-  run as many generations as fit 4 ms of the frame; once that cannot deliver
-  the requested rate, blocks of up to 32 generations run on up to eight
-  isolated simulation lanes (`CSimWorkerGuest.wasm` stores each owning a
-  contiguous, chunk-balanced run of lines with a two-line halo; D-E34) and
-  the control store merges one exact delta per block; there a drain retires
-  the outstanding block instead of waiting for it.
-  Status derives achieved TPS from published completions and reports rolling
-  generation latency. The default `0 x 0` topology is infinite and
-  non-toroidal; positive chunk width and height select a finite torus with
-  canonical wrapped cells, stepped on the same frontier and halo paths with
-  wrapped neighbour chunks (D-P35). Mixed zero/positive axes are invalid. The
-  grid's revision changes only when cell contents actually change.
-- Production presentation: `CanvasView` separates visible diagnostics from a
-  globally aligned cache padded by two 16-cell chunks on every side. Camera
-  motion inside it changes only the MVP. Aligned origin shifts copy retained
-  CPU texels and resample newly exposed strips. Near zoom is one exact nearest-filtered
-  texel per cell; far zoom uses integer density LOD with immediate coarsening
-  and 80% refinement hysteresis. One-revision changes map changed chunks to
-  deduplicated exact or overview bins; revision gaps, non-aligned jumps, LOD/resize,
-  palette changes, torus wrap, and replacement refill the bounded cache. Dirty 16x16-texel
-  tiles merge into at most eight rectangles or their AABB. Uploads through
-  64 KiB are direct; larger requests use a non-waiting three-PBO/fence ring and
-  direct fallback. Re-enrollment and destruction delete GL textures, buffers,
-  and fences. Exact-cell LOD fades changing colors; density overviews snap.
-  Dense visible revisions that dirty a quarter of the cache resample the
-  complete cache. Changed-bin marking stops once that threshold is reached.
-  Overview resamples walk occupied cells and snap-convert sampled RGB in one
-  pass. A retained active-texel set makes remaining fade/snap work
-  proportional to changing colors. It owns one reusable RGB texture plus one
-  world-space quad.
-  Finite worlds draw only their centered canonical rectangle; presentation and
-  editor-facing bounds stay blank outside it even though simulation neighbors
-  wrap across opposite edges.
-  `RenderWindow` defaults to monitor-synchronized swapping; persisted `vsync=0`
-  remains the explicit uncapped profiling mode. Debug FPS output separates
-  paced swap completions from CPU submissions.
-- Persistence always writes sparse version 4 with family/ruleset identity and
-  topology, and reads versions 4, 3, and 2 plus the prior dense format.
-  Version 2 and legacy dense files select infinite topology.
-  Legacy `CellGrid`/`Canvas` remain compatibility fixtures,
-  not a second production runtime path.
+Ruleset encodings:
 
-Ruleset truth:
-
-- Active catalogs include Life-like, Generations, Wireworld, elementary 1D,
-  cyclic/CCA (including long-range Griffeath rules), colorized Life,
-  Larger-than-Life (with decay trails), Hodgepodge chemistry, directional
-  Turmites, HPP lattice gas, five-species dominance, Golly-table
-  self-replicating loops, Abelian sandpile rules, and quantized Lenia.
 - Binary rules encode `0` as alive and `1` as dead.
 - Wireworld encodes head `0`, empty `1`, tail `2`, conductor `3`.
 - Lenia encodes intensity levels: `1` is level 0, `2..n-1` are levels
@@ -261,21 +170,6 @@ Ruleset truth:
   every platform (integer taps, deterministic exp).
 - Rule 90 and Rule 184 are elementary 1D space-time diagrams: source row is the
   maximum counted Y, destination is Y+1, older rows stay history.
-- Count-based `RuleSet` transitions (`nextState`) build a cached 256x9 table;
-  full-state histograms, extended counts, and north/east/south/west directional
-  neighborhoods use isolated contracts. Palette
-  evaluation (`evalCell`) supplies colors. Production hot loops index the table
-  instead of making virtual transition calls and use separate stored/counting masks,
-  retained chunk-local candidate scratch, and a generation-stamped flat address
-  index. Mixed targets independently select candidate or halo evaluation, with
-  bounded worker-pool evaluation for large work sets. Counting-dense centers
-  skip neighbor-count scratch preparation and evaluate as halo.
-  Dense-majority and large frontiers skip candidate scratch. Both
-  result paths share retained transactional chunk-map node storage; a local
-  changed-region path patches the retained prior generation. Dense
-  `calcGeneration` support remains only for compatibility tests.
-  Headless benches: `IllumoGame.Sim.MicroBench`,
-  `IllumoGame.Sim.SparseMicroBench`.
 
 ## Source map
 
@@ -577,6 +471,7 @@ Subsystem rules live in:
 
 - `Illumo/Source/Engine/AGENTS.md`, `Illumo/Source/Foundation/AGENTS.md`, and
   `Illumo/Source/Scene/AGENTS.md`, `Illumo/Source/Gui/AGENTS.md`,
+  `Illumo/Source/Content/AGENTS.md`,
   `Illumo/Source/Audio/AGENTS.md`, and
   `Illumo/Source/Platform/AGENTS.md` plus
   its Windows and Linux child guidance;

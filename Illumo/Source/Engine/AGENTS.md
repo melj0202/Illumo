@@ -59,8 +59,7 @@ Rulesets and the Wasm library.
   callbacks.
 - The program, and any `SceneDirector` with its scenes, must be stopped and
   destroyed before `Illumo::shutdown`: their content still holds engine
-  assets (the old registry destroyed modules inside shutdown; nothing does
-  now). Detach logger sinks and
+  assets, and shutdown does not destroy them. Detach logger sinks and
   callbacks before destroying the objects they target. Shutdown must be safe
   after partial initialization and must release the graphics context after
   dependent resources.
