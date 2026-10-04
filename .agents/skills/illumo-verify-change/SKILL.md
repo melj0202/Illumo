@@ -19,19 +19,24 @@ Verify the requested outcome, not merely that a command returned zero.
 Use repository-provided commands from the repository root. A normal behavior change generally requires:
 
 ```powershell
-cmake -S Illumo -B build
+cmake -S . -B build
 cmake --build build --config Release
-ctest --test-dir build -C Release -L Illumo --output-on-failure
+ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
 ```
 
 For focused work, discover and run exact tests before or alongside the full suite:
 
 ```powershell
-cmake --build build --config Release --target IllumoTests
-ctest --test-dir build -C Release -N -L Illumo
+cmake --build build --config Release --target IllumoTests IllumoGameTests IllEdTests IllMeshViewerTests
+ctest --test-dir build -C Release -N -L IllumoWorkspace
 build/Release/IllumoTests.exe --list
 build/Release/IllumoTests.exe --run <exact-test-name>
 ```
+
+The other runners (`IllumoGameTests`, `IllEdTests`, `IllMeshViewerTests`)
+take the same `--list` and `--run` flags. Package-level cases such as
+`IllumoGame.Wasm.GamePackage` live in separate package test executables
+(e.g. `IllumoGameWasmPackageTests`); run them by name with `ctest -R`.
 
 Add checks according to risk:
 
