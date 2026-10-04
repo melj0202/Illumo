@@ -94,6 +94,7 @@ Put them under `Illumo/Tests/Wasm/` beside the closest existing file
 ## 6. Finish
 
 Build the guests and runtime, then run the focused `Illumo.Wasm.*` tests and
-the affected package tests, then the full labeled suite (`illumo-verify-change`).
+the affected package tests (`illumo-verify-change`). The full labeled suite
+runs before the push, not here.
 Update `docs/wasm-game-runtime-design.md` and the package docs, and record
 the decision.
