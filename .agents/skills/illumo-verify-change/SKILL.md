@@ -42,7 +42,7 @@ take the same `--list` and `--run` flags. Package-level cases such as
 
 Add checks according to risk:
 
-- Check formatting on every modified C++ source or header without rewriting it. Run `clang-format -i` only when the active task already authorizes edits to those files.
+- Check formatting of the changed lines of every modified C++ source or header without rewriting it (`clang-format --dry-run --lines=<start>:<end>`). Fix formatting only when the active task already authorizes edits to those files, and then only on changed lines (`--lines`, or the Claude Code format hook); never reformat whole existing files.
 - Build documentation only when documentation writes are authorized and source changes make the PDF stale.
 - Run coverage when the change creates meaningful untested production paths or the user requests the configured gate.
 - Benchmark performance-sensitive changes against a reproducible baseline.

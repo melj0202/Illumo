@@ -309,8 +309,16 @@ Documentation, formatting, and clang-tidy:
 
 ```powershell
 ./docs/build.ps1
-clang-format -i <modified-cpp-or-header-files>
+clang-format -i --lines=<start>:<end> <modified-cpp-or-header-file>
 ```
+
+Format only the lines a change touches. Under Claude Code the PostToolUse
+hook in `.claude/settings.json` does this after every edit
+(`.claude/hooks/format_changed_lines.py`: lines differing from HEAD,
+untracked files whole). Without the hook, pass the changed ranges to
+`clang-format -i --lines=<start>:<end>`. Whole-file `clang-format -i` only
+on new files or files already clean, since most files are not and it churns
+unrelated lines (the `strip-format-churn` skill undoes that).
 
 `ILLUMO_ENABLE_CLANG_TIDY` defaults to ON and attaches LLVM `clang-tidy` to
 first-party C++ compilation. `.clang-tidy` treats diagnostics as errors.
@@ -442,8 +450,8 @@ suite passes.
 ## Code, documentation, and generated material
 
 Follow `docs/contributing.md`: avoid `auto`, namespaces, and recursion; use the
-documented names; run the Mozilla-based `clang-format` on every modified C++ or
-header file. The host and guests build without C++ exceptions (D-F3): no
+documented names; format the changed lines of every modified C++ or header file
+with the Mozilla-based `clang-format` (see the formatting note above). The host and guests build without C++ exceptions (D-F3): no
 `try`/`catch`/`throw`, failures return errors, and a programming error or
 exhausted memory or threads ends the process through `illumoFatal`. Prefer explicit ownership and narrow dependencies. Owning types
 must define or delete copy/move operations deliberately.
