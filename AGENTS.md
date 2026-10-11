@@ -271,7 +271,9 @@ visual checks. Real-GPU capture is checked with `python
 tools/verify_capture.py build-workspace/Release/IllumoRuntime.exe
 --output-dir <dir>`. Performance is measured with `--bench-frames`,
 `IllumoGame.Sim.RunnerBench` and `IllumoGame.Wasm.PackageBench` (label
-`IllumoBenchmark`; see `docs/frame-capture.md`).
+`IllumoBenchmark`; see `docs/frame-capture.md`). `tools/perf_bench.py` runs
+the benchmark cases repeatedly, records medians and compares two builds with
+a noise-aware keep/reject gate.
 
 Focused test work:
 

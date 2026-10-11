@@ -132,6 +132,17 @@ repeatable measurements are `IllumoGame.Sim.RunnerBench` (native reference
 runner) and `IllumoGame.Wasm.PackageBench` (label `IllumoBenchmark`, not part
 of `IllumoWorkspace`).
 
+`python tools/perf_bench.py run --suite <sim|topology|canvas|render|package>
+--runs 3 --out base.json` runs those and the other in-runner benchmark cases
+(`*Bench`) several times and records the median and spread of every metric
+they print (`BENCH-JSON` lines, JSON reports, `key=value` pairs). `compare
+base.json new-1.json new-2.json --target <metric>` reports changes that beat
+the threshold, the run-to-run spread and run overlap in every new
+measurement, and passes its gate when the target improves and nothing
+regresses. Two new measurements are needed: with about 180 metrics, one
+lets chance through. A metric that changes between two measurements of the
+same build is drifting on that machine and is no evidence either way.
+
 ## Public API and ownership
 
 `FrameCapture::render(options, producer)` in
