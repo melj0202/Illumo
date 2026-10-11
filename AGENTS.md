@@ -8,7 +8,13 @@ file as an architecture catalog.
 ## Project identity and boundaries
 
 This C++23 workspace contains the product-agnostic `Illumo` static library and
-the in-tree applications that consume it. `IllumoGame` is the
+the in-tree applications that consume it. The game, CSim (CMake target
+`IllumoGame`), is a separate repository cloned into the ignored `CSim/` folder
+at the engine root (D-F5). It is optional: the engine configures, builds and
+passes its suite without it, and the root `CMakeLists.txt` adds it only when
+`CSim/CMakeLists.txt` exists. `CSim/ENGINE_MIN_COMMIT` names the oldest engine
+commit the game builds against; an engine change the game needs lands here
+first, then CSim raises that pin in the commit that uses it. CSim is the
 cellular-automata learning sandbox; it ships only as the isolated
 `IllumoGame.wasm` package played by the generic `IllumoRuntime` host (Windows
 x64). `IllEd` is the SceneGraph world editor
@@ -156,104 +162,13 @@ without it. A new screen composes those rather than restating them.
 Preserve the existing drawable owners and DrawList layers; do not introduce a
 retained UI tree for this surface.
 
-Canvas truth (verify here before trusting older notes):
+Canvas and simulation internals (sparse chunks, frontier/halo evaluation,
+simulation lanes, `CanvasView` caching) are described in
+`docs/architecture-consensus.md`; their binding rules are under
+"Project-wide invariants".
 
-- Production domain: `SparseCellGrid` owns signed 64-bit world cells in a
-  hash map of non-background 16x16 chunks with separate stored-cell occupancy
-  and neighbor-counting masks. Sparse chunks accumulate non-background cells
-  and neighbors of counted cells in retained
-  contiguous per-chunk scratch records with fixed candidate masks and neighbor
-  counts. Candidate target discovery tests edge and corner bits directly. The
-  serial builder remains source-centric, while large or explicitly parallel
-  preparation assigns independent target records to the reusable worker pool;
-  neighbor counters are initialized only when their candidate bit is first set.
-  A retained generation-stamped flat index maps chunk addresses directly to
-  scratch records without sorting or binary searches. Next-generation output
-  uses a retained inactive chunk map and recycled `unordered_map` node handles,
-  avoiding steady-state chunk-node allocation. At 16,384 or more candidate
-  cells, candidate evaluation uses the reusable worker pool with coarse ranges
-  of roughly 2,048 candidate cells and up to four automatic workers; small
-  candidate sets remain direct and serial. Current and inactive chunk maps
-  maintain transactional aggregate stored-cell, counted-cell, and
-  candidate-preferred-chunk totals, so path selection and settled statistics do
-  not rescan all allocated chunks. A retained changed-chunk frontier
-  retains up to 16,384 changed addresses and expands them by one chunk; the
-  work comparison still selects frontier versus complete evaluation, and only
-  tracking overflow or allocation failure discards the journal. Exact
-  local candidate preparation/evaluation work is compared with a cached-total
-  complete-path estimate; cheaper frontiers patch the prior map, while broad
-  changes fall back. Sparse frontier targets use candidate masks or halos by
-  counted-neighbor work, and settled worlds evaluate no chunks. Complete mixed
-  worlds select candidate
-  or deterministic 18x18 halo evaluation independently per target from actual
-  counted-neighbor contribution work; Wireworld conductors are stored but only
-  heads contribute. All-dense counted chunks bypass scratch construction. At
-  32 or more halo targets, a grid-owned reusable pool uses up to eight workers.
-  Histogram, directional, extended-range and Lenia kernels share one
-  chunk-parallel driver on that pool (per-worker halo windows, serial in-order
-  journal and publication), and elementary 1D rows split into pool ranges.
-  Complete-halo targets use a retained generation-stamped flat index and
-  retained result storage instead of a local hash set, sorting, and disposable
-  vectors. All evaluators index a per-ruleset 256x9 transition table; dense
-  halo targets build rolling rows directly from chunk counting masks without
-  materializing an 18x18 byte halo. A persistent `SimulationRunner` advances a
-  spare sparse grid while the main thread reads the published one. Completed
-  generations publish only at frame boundaries with `SparseGenerationDelta`;
-  journals of at least 2,048 presentation chunks carry a lightweight
-  replacement marker instead of per-chunk payloads. The former display grid
-  consumes the delta before reuse. Only one start may be outstanding (it may
-  publish several generations as one delta), due whole steps beyond what it
-  accepts are dropped, and state mutations, persistence, ruleset changes,
-  manual stepping, and shutdown drain first. In the package, serial starts
-  run as many generations as fit 4 ms of the frame; once that cannot deliver
-  the requested rate, blocks of up to 32 generations run on up to eight
-  isolated simulation lanes (`CSimWorkerGuest.wasm` stores each owning a
-  contiguous, chunk-balanced run of lines with a two-line halo; D-E34) and
-  the control store merges one exact delta per block; there a drain retires
-  the outstanding block instead of waiting for it.
-  Status derives achieved TPS from published completions and reports rolling
-  generation latency. The default `0 x 0` topology is infinite and
-  non-toroidal; positive chunk width and height select a finite torus with
-  canonical wrapped cells, stepped on the same frontier and halo paths with
-  wrapped neighbour chunks (D-P35). Mixed zero/positive axes are invalid. The
-  grid's revision changes only when cell contents actually change.
-- Production presentation: `CanvasView` separates visible diagnostics from a
-  globally aligned cache padded by two 16-cell chunks on every side. Camera
-  motion inside it changes only the MVP. Aligned origin shifts copy retained
-  CPU texels and resample newly exposed strips. Near zoom is one exact nearest-filtered
-  texel per cell; far zoom uses integer density LOD with immediate coarsening
-  and 80% refinement hysteresis. One-revision changes map changed chunks to
-  deduplicated exact or overview bins; revision gaps, non-aligned jumps, LOD/resize,
-  palette changes, torus wrap, and replacement refill the bounded cache. Dirty 16x16-texel
-  tiles merge into at most eight rectangles or their AABB. Uploads through
-  64 KiB are direct; larger requests use a non-waiting three-PBO/fence ring and
-  direct fallback. Re-enrollment and destruction delete GL textures, buffers,
-  and fences. Exact-cell LOD fades changing colors; density overviews snap.
-  Dense visible revisions that dirty a quarter of the cache resample the
-  complete cache. Changed-bin marking stops once that threshold is reached.
-  Overview resamples walk occupied cells and snap-convert sampled RGB in one
-  pass. A retained active-texel set makes remaining fade/snap work
-  proportional to changing colors. It owns one reusable RGB texture plus one
-  world-space quad.
-  Finite worlds draw only their centered canonical rectangle; presentation and
-  editor-facing bounds stay blank outside it even though simulation neighbors
-  wrap across opposite edges.
-  `RenderWindow` defaults to monitor-synchronized swapping; persisted `vsync=0`
-  remains the explicit uncapped profiling mode. Debug FPS output separates
-  paced swap completions from CPU submissions.
-- Persistence always writes sparse version 4 with family/ruleset identity and
-  topology, and reads versions 4, 3, and 2 plus the prior dense format.
-  Version 2 and legacy dense files select infinite topology.
-  Legacy `CellGrid`/`Canvas` remain compatibility fixtures,
-  not a second production runtime path.
+Ruleset encodings:
 
-Ruleset truth:
-
-- Active catalogs include Life-like, Generations, Wireworld, elementary 1D,
-  cyclic/CCA (including long-range Griffeath rules), colorized Life,
-  Larger-than-Life (with decay trails), Hodgepodge chemistry, directional
-  Turmites, HPP lattice gas, five-species dominance, Golly-table
-  self-replicating loops, Abelian sandpile rules, and quantized Lenia.
 - Binary rules encode `0` as alive and `1` as dead.
 - Wireworld encodes head `0`, empty `1`, tail `2`, conductor `3`.
 - Lenia encodes intensity levels: `1` is level 0, `2..n-1` are levels
@@ -261,23 +176,11 @@ Ruleset truth:
   every platform (integer taps, deterministic exp).
 - Rule 90 and Rule 184 are elementary 1D space-time diagrams: source row is the
   maximum counted Y, destination is Y+1, older rows stay history.
-- Count-based `RuleSet` transitions (`nextState`) build a cached 256x9 table;
-  full-state histograms, extended counts, and north/east/south/west directional
-  neighborhoods use isolated contracts. Palette
-  evaluation (`evalCell`) supplies colors. Production hot loops index the table
-  instead of making virtual transition calls and use separate stored/counting masks,
-  retained chunk-local candidate scratch, and a generation-stamped flat address
-  index. Mixed targets independently select candidate or halo evaluation, with
-  bounded worker-pool evaluation for large work sets. Counting-dense centers
-  skip neighbor-count scratch preparation and evaluate as halo.
-  Dense-majority and large frontiers skip candidate scratch. Both
-  result paths share retained transactional chunk-map node storage; a local
-  changed-region path patches the retained prior generation. Dense
-  `calcGeneration` support remains only for compatibility tests.
-  Headless benches: `IllumoGame.Sim.MicroBench`,
-  `IllumoGame.Sim.SparseMicroBench`.
 
 ## Source map
+
+Paths under `CSim/` belong to the CSim repository and exist only when it is
+cloned.
 
 | Concern | Primary files |
 |---|---|
@@ -285,15 +188,15 @@ Ruleset truth:
 | Public library API | `Illumo/Include/Illumo/*` |
 | Host, services, frame phases | `Illumo/Source/Engine/Illumo.cpp`, public Engine headers, `Illumo/Source/Wasm/RuntimeShell.cpp` |
 | Persistent scene hierarchy | `Illumo/Include/Illumo/Scene/*`, `Illumo/Source/Scene/*` |
-| CA modes and editor | `IllumoGame/Source/Game/CanvasScene.*`, `TitleScene.*`, `CSimScenes.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
+| CA modes and editor (CSim repo) | `CSim/Source/Game/CanvasScene.*`, `TitleScene.*`, `CSimScenes.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
 | World editor | `IllEd/Source/EditorScene*.cpp`, `EditorDocument.*`, `EditorHistory.*`, `EditorSelection.*`, `EditorShortcuts.*`, `EditorGizmo.*`, `EditorInspector.*`, `EditorClipboard.*`, `EditorAssetBrowser.*`, `EditorToolbar.*` |
 | Scene format, packages, virtual file tree | `Illumo/Include/Illumo/Content/*`, `Illumo/Source/Content/*`, `Illumo/tools/IllumoPack.cpp` |
 | OS clipboard text | `Illumo/Include/Illumo/Platform/Clipboard.h`, platform `*Clipboard.cpp` |
-| Sound effects and looping music (miniaudio kept private) | `Illumo/Include/Illumo/Audio/*`, `Illumo/Source/Audio/*`, `IllumoGuest/Include/IllumoGuest/Audio.h`, `IllumoGame/Source/Game/CSimSounds.*` |
-| Domain cell storage | `IllumoGame/Source/Game/SparseCellGrid.*` |
-| Bounded view, fade, dirty upload | `IllumoGame/Source/Game/CanvasView.*`, `Illumo/Shader/canvas_*` |
-| Compatibility dense storage | `IllumoGame/Source/Game/CellGrid.*`, `Canvas.*` |
-| CA behavior | `IllumoGame/Source/Rulesets/*` (`nextState`/palette) |
+| Sound effects and looping music (miniaudio kept private) | `Illumo/Include/Illumo/Audio/*`, `Illumo/Source/Audio/*`, `IllumoGuest/Include/IllumoGuest/Audio.h`, `CSim/Source/Game/CSimSounds.*` |
+| Domain cell storage (CSim repo) | `CSim/Source/Game/SparseCellGrid.*` |
+| Bounded view, fade, dirty upload (CSim repo, engine shaders) | `CSim/Source/Game/CanvasView.*`, `Illumo/Shader/canvas_*` |
+| Compatibility dense storage (CSim repo) | `CSim/Source/Game/CellGrid.*`, `Canvas.*` |
+| CA behavior (CSim repo) | `CSim/Source/Rulesets/*` (`nextState`/palette) |
 | Renderer and tokens | `Illumo/Include/Illumo/Rendering/*`, `Illumo/Source/Rendering/*` |
 | Resource handles and file assets | `Illumo/Include/Illumo/Rendering/ResourceHandle*`, `Illumo/Source/Rendering/AssetManager.cpp` |
 | World meshes, overlay primitives, animation | `Illumo/Source/Rendering/Primitives/*` (`MeshVisual`, `GameVisual`) |
@@ -310,19 +213,20 @@ Ruleset truth:
 | WASM host, ABI decoders, runtime | `Illumo/Source/Wasm/*`, `Illumo/Include/Illumo/Wasm/*`, `cmake/IllumoWasm.cmake` |
 | A program's WASM module and package | `<Program>/GuestTargets.cmake`, `<Program>/PackageTargets.cmake`, listed in the root `ILLUMO_PROGRAMS` |
 | Guest SDK, guest-side engine, wire headers | `IllumoGuest/Include/IllumoGuest/*`, `IllumoGuest/Source/*` |
-| IllumoGame package entry and platform adapter | `IllumoGame/Source/Wasm/*`, `IllumoGame/illumo.json` |
+| IllumoGame package entry and platform adapter (CSim repo) | `CSim/Source/Wasm/*`, `CSim/illumo.json` |
 | IllEd package entry and platform seam | `IllEd/Source/Wasm/EditorApplication.cpp`, `IllEd/Source/IllEdPlatform.h`, `IllEd/illumo.json` |
 | IllMeshViewer package entry and platform seam | `IllMeshViewer/Source/Wasm/ViewerApplication.cpp`, `IllMeshViewer/Source/MeshViewerPlatform.h`, `IllMeshViewer/illumo.json` |
 | Runtime command line and capture mode | `Illumo/Source/Wasm/RuntimeApplication.cpp` |
-| Tests | `Illumo/Tests/*`, `IllumoGame/Tests/*`, `IllEd/Tests/*`, `IllMeshViewer/Tests/*`, `Playground/Tests/*` |
+| Tests | `Illumo/Tests/*`, `CSim/Tests/*`, `IllEd/Tests/*`, `IllMeshViewer/Tests/*`, `Playground/Tests/*` |
 | Canonical architecture | `docs/architecture-consensus.md` |
 | Formal decisions | `docs/latex/sections/09-design-decision-log.tex` |
 
 ## Build and verification commands
 
 Run from the repository root on Windows. The default Windows configure
-builds `IllumoRuntime` and stages every app package (`apps/game`,
-`apps/illed`, `apps/meshviewer`), which requires the pinned toolchain from
+builds `IllumoRuntime` and stages every app package (`apps/illed`,
+`apps/meshviewer`, `apps/playground`, and `apps/game` when `CSim/` is
+cloned), which requires the pinned toolchain from
 `tools/bootstrap-wasm.ps1` (or `python build.py wasm-tools`) in
 `build-wasm-tools/` (`-DILLUMO_BUILD_WASM_RUNTIME=OFF` builds without them;
 there are then no runnable applications).
@@ -340,7 +244,8 @@ doctor` reports the toolchain, an `apps` check, and stale native pre-WASM
 outputs (`IllumoGame.exe`, `IllEd.exe`, `IllMeshViewer.exe`,
 `IllumoCapture.exe`, an old `game/` folder) to delete. `python build.py play
 --app game|illed|meshviewer [-- runtime args]` builds the runtime and runs
-one app (`--no-build` skips building). `python build.py test` builds every
+one app (`--no-build` skips building); without `CSim/`, `doctor` and `play
+--app game` say how to clone it. `python build.py test` builds every
 executable CTest runs; `tools/test_build.py` covers the orchestrator.
 `python build.py dist` assembles a distribution in `<build>/dist/<config>/`
 with the engine as `engine.ilpk` and each app as `apps/<name>.ilpk` (D-E38);
@@ -353,7 +258,11 @@ Debug is the AddressSanitizer profile (`ILLUMO_ENABLE_ASAN`, default ON),
 whose WASM guests also use explicit bounds checks; play and measure with the
 `dev` profile (RelWithDebInfo) or `debug-noasan`, not Debug.
 
-Package-level checks drive each real package through the generic host:
+Package-level checks drive each real package through the generic host. The
+`IllumoGame.*` cases come from the CSim repository and run only when `CSim/`
+is cloned; they exercise the host hardest (packages, lanes, audio, frame
+allocations), so the full suite before an engine push runs with `CSim/`
+cloned and current.
 `IllumoGame.Wasm.GamePackage` (menu, setup, edit, step, save/load, 3D mode),
 `IllumoGame.Wasm.GamePackageAudio` (packaged sound cues and the chunked,
 looping menu music reach a recording audio output),
@@ -377,7 +286,9 @@ visual checks. Real-GPU capture is checked with `python
 tools/verify_capture.py build-workspace/Release/IllumoRuntime.exe
 --output-dir <dir>`. Performance is measured with `--bench-frames`,
 `IllumoGame.Sim.RunnerBench` and `IllumoGame.Wasm.PackageBench` (label
-`IllumoBenchmark`; see `docs/frame-capture.md`).
+`IllumoBenchmark`; see `docs/frame-capture.md`). `tools/perf_bench.py` runs
+the benchmark cases repeatedly, records medians and compares two builds with
+a noise-aware keep/reject gate.
 
 Focused test work:
 
@@ -393,6 +304,8 @@ build/Release/IllumoGameTests.exe --run <IllumoGame.exact-name>
 build/Release/IllEdTests.exe --run <IllEd.exact-name>
 build/Release/IllMeshViewerTests.exe --run <IllMeshViewer.exact-name>
 ```
+
+`IllumoGameTests` exists only when `CSim/` is cloned.
 
 Clang/LLVM coverage:
 
@@ -415,8 +328,16 @@ Documentation, formatting, and clang-tidy:
 
 ```powershell
 ./docs/build.ps1
-clang-format -i <modified-cpp-or-header-files>
+clang-format -i --lines=<start>:<end> <modified-cpp-or-header-file>
 ```
+
+Format only the lines a change touches. Under Claude Code the PostToolUse
+hook in `.claude/settings.json` does this after every edit
+(`.claude/hooks/format_changed_lines.py`: lines differing from HEAD,
+untracked files whole). Without the hook, pass the changed ranges to
+`clang-format -i --lines=<start>:<end>`. Whole-file `clang-format -i` only
+on new files or files already clean, since most files are not and it churns
+unrelated lines (the `strip-format-churn` skill undoes that).
 
 `ILLUMO_ENABLE_CLANG_TIDY` defaults to ON and attaches LLVM `clang-tidy` to
 first-party C++ compilation. `.clang-tidy` treats diagnostics as errors.
@@ -431,13 +352,21 @@ cmake --build build-tidy --target IllumoTidy
 
 `python build.py tidy` configures the same tree under `build-workspace-tidy`.
 
-The default workspace build compiles both runners, runs every granular
-`Illumo.*` and `IllumoGame.*` case through `IllumoRunTests`, and builds
-`IllumoDocs` when PowerShell and
-`latexmk` are available. Headless tests do not prove the live OpenGL window,
+The default workspace build compiles every test runner and builds
+`IllumoDocs` when PowerShell and `latexmk` are available. It does not run
+the suite: `IllumoRunTests`, `ctest` or `python build.py test` do, and
+`-DILLUMO_RUN_TESTS_ON_BUILD=ON` adds the suite back to every default build. Headless tests do not prove the live OpenGL window,
 native dialogs, or non-Windows ports. Use Debug or Release GUI smoke tests and
 sanitizers when the affected risk requires them. When static analysis is
 requested beyond `IllumoTidy`, report the extra checks and translation units.
+
+When to run what: the full suite is slow, so it runs once, before a push.
+While working and when committing, build only the targets the change needs
+(`IllumoRuntime`, an app with `build.py play`, or the affected test runners)
+and run the exact cases and package tests that cover it. Before any push,
+build Release and run the full `IllumoWorkspace` label on the commit being
+pushed. A failure blocks the push until it is fixed in a new commit and the
+suite passes.
 
 ## Project-wide invariants
 
@@ -540,8 +469,8 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
 ## Code, documentation, and generated material
 
 Follow `docs/contributing.md`: avoid `auto`, namespaces, and recursion; use the
-documented names; run the Mozilla-based `clang-format` on every modified C++ or
-header file. The host and guests build without C++ exceptions (D-F3): no
+documented names; format the changed lines of every modified C++ or header file
+with the Mozilla-based `clang-format` (see the formatting note above). The host and guests build without C++ exceptions (D-F3): no
 `try`/`catch`/`throw`, failures return errors, and a programming error or
 exhausted memory or threads ends the process through `illumoFatal`. Prefer explicit ownership and narrow dependencies. Owning types
 must define or delete copy/move operations deliberately.
@@ -562,7 +491,9 @@ than rewriting history when current implementation changes.
 A change is complete only when its scope is reviewed for accidental edits and:
 
 - affected targets build and relevant exact tests pass;
-- behavior changes pass the full Release build and labeled CTest suite above;
+- behavior changes pass the full Release build and labeled CTest suite above
+  before they are pushed (not on every edit or commit; see "When to run
+  what");
 - configured formatting, analysis (`IllumoTidy` when the change warrants
   clang-tidy), sanitizer, coverage, benchmark, or manual checks relevant to
   the risk pass, with environment and limitations reported;
@@ -571,27 +502,47 @@ A change is complete only when its scope is reviewed for accidental edits and:
 - matching canonical documentation is synchronized in the same change;
 - the final handoff states what was verified, what was not, and why.
 
+Test and visual-check hygiene:
+
+- Automated tests never read or write the user's settings or saved state.
+  `EnvVars` persists to `envvars.json`, so each fixture gives it a fresh
+  file in a temp or test directory (as the IllEd and IllMeshViewer scene
+  fixtures do), and no case may depend on another's saved toggles or
+  layouts.
+- Live runs and captures write the window size (`WinX`/`WinY`) into the
+  runtime's `envvars.json`; record and restore it, and use a scratch
+  `--storage` for app state.
+- A skipped or environment-gated test reports why it skipped, and the
+  handoff names every skip; a skip is not a pass.
+- Visual evidence (captures, screenshots, live-window checks) comes from a
+  build of the configuration being shown, made after the last edit. Confirm
+  the executable is newer than the change before citing it.
+- Window, focus, input and presentation changes are checked in windowed mode
+  and in fullscreen (F11, a monitor-owned GLFW window), on the backend the
+  user reported.
+
 ## Nested guidance
 
 Subsystem rules live in:
 
 - `Illumo/Source/Engine/AGENTS.md`, `Illumo/Source/Foundation/AGENTS.md`, and
   `Illumo/Source/Scene/AGENTS.md`, `Illumo/Source/Gui/AGENTS.md`,
+  `Illumo/Source/Content/AGENTS.md`,
   `Illumo/Source/Audio/AGENTS.md`, and
   `Illumo/Source/Platform/AGENTS.md` plus
   its Windows and Linux child guidance;
-- `IllumoGame/Source/Game/AGENTS.md` and
-  `IllumoGame/Source/Rulesets/AGENTS.md`;
 - `IllEd/Source/AGENTS.md` and `IllEd/Tests/AGENTS.md`;
 - `IllMeshViewer/Source/AGENTS.md` and `IllMeshViewer/Tests/AGENTS.md`;
-- `Illumo/Source/Services/AGENTS.md`, `Illumo/Tests/AGENTS.md`, and
-  `IllumoGame/Tests/AGENTS.md`;
+- `Illumo/Source/Services/AGENTS.md` and `Illumo/Tests/AGENTS.md`;
 - `Illumo/Source/Rendering/AGENTS.md` plus
   `Illumo/Source/Rendering/OpenGL/AGENTS.md`,
   `Illumo/Source/Rendering/Vulkan/AGENTS.md`,
   `Illumo/Source/Rendering/D3D12/AGENTS.md`,
   `Illumo/Source/Rendering/Primitives/AGENTS.md`; test-only MockBackend guidance
   lives in `Illumo/TestSupport/AGENTS.md`.
+
+The game's guidance lives in the CSim repository, starting at
+`CSim/AGENTS.md`.
 
 Child guidance specializes this file and does not weaken it.
 

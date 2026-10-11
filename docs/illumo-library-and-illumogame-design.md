@@ -79,6 +79,9 @@ A mechanical `Source/Game` move did not establish the requested boundary:
 ### Non-goals
 
 - No shared DLL, installed package, stable binary ABI, or separate repository.
+  (The separate-repository non-goal is superseded by D-F5 on 2026-10-11: the
+  game is now the CSim repository, cloned into the engine's ignored `CSim/`
+  folder.)
 - No ECS, scene graph, render graph, new backend, or new dependency.
 - No change to sparse generation algorithms, published-grid threading,
   rendering tokens, resource-handle semantics, UI architecture, or performance

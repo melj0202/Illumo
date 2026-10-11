@@ -17,7 +17,7 @@
    out of memory or threads ends the process with `illumoFatal`
    (`Foundation/Fatal.h`). The `Illumo.Build.NoExceptions` test enforces the
    first rule.
-6. **Code Formatting:** The project uses `clang-format` based on Mozilla style (80-column limit, 2-space indent). You must run `clang-format` on your changes before finalizing them.
+6. **Code Formatting:** The project uses `clang-format` based on Mozilla style (80-column limit, 2-space indent). You must run `clang-format` on your changes before finalizing them: format the lines you changed (`clang-format -i --lines=<start>:<end>`, or the Claude Code hook in `.claude/settings.json`, which does it after every edit), not whole files, since reformatting a whole file churns lines you did not touch. New files are formatted whole.
 7. **Static analysis:** First-party C++ is linted by `clang-tidy` during the
    normal build (`ILLUMO_ENABLE_CLANG_TIDY` defaults to ON). The check set is
    `.clang-tidy`; diagnostics are errors. Disable with

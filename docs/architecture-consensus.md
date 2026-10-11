@@ -14,7 +14,7 @@ This file **merges and supersedes** scattered design memory into one coherent st
 | Grok architecture reviews + local code review | Strengths, bugs, debt |
 | In-repo LaTeX design notes + decision log | Formal decision IDs (D-\*) |
 | `docs/current-issues.md` | Product/correctness punch list |
-| **Current code under `Illumo/`, `IllumoGame/`, `IllEd/`, and `IllMeshViewer/`** | Current-state evidence; resolve conflicts with approved intent explicitly |
+| **Current code under `Illumo/`, `CSim/`, `IllEd/`, and `IllMeshViewer/`** | Current-state evidence; resolve conflicts with approved intent explicitly |
 
 **Rule:** If this document and the code disagree, **code wins** until this file is updated in the same change set.
 
@@ -117,13 +117,15 @@ up on jelly springs that bounce past their slots (the footer continues below
 the screen edge so a lifted bar never opens a gap); on exit, the palette leads
 the bar and both ease away without ringing. The canvas inset tracks the
 visible portion of the moving footer, clamped so it never bounces. Reduced UI motion snaps this transition. The palette travels by
-its visible height plus the full footer height before it is removed. See [game controls](packages/game.md).
+its visible height plus the full footer height before it is removed. See [game controls](../CSim/docs/game.md).
 
 **The workspace separates the reusable `Illumo` static library from in-tree
 applications. Illumo owns the generic application runner, platform
 entry/dialogs, BuildInfo, SysCmdLine, host, services, rendering, persistent
 scene hierarchy, assets, and the frame phases; `IllumoRuntime` runs each
-package as one WASM program that manages its own scenes (D-E31). `IllumoGame`
+package as one WASM program that manages its own scenes (D-E31). The game,
+CSim (target `IllumoGame`), is a separate repository cloned into the ignored
+`CSim/` folder; the engine builds and passes its suite without it (D-F5). It
 owns CA policy and
 `.csim` persistence (with legacy `.illumo` loading). The optional
 `Illumo::Content` layer owns the one scene format every program reads
@@ -332,8 +334,8 @@ authorizes evidence-backed generic facilities, not speculative framework work.
 |---------|------|
 | **Illumo/Source/Engine/** | Generic application runner, host services and frame phases, the debug-tool `DebugOverlay`, and frozen `IllumoContext`; supported contracts are under `Illumo/Include/Illumo/Engine`. |
 | **Illumo/Source/Scene/** | Persistent nodes, hierarchy, cached transforms, subtree state, and render attachment extraction; supported contracts are under `Illumo/Include/Illumo/Scene`. |
-| **IllumoGame/Source/Game/** | CA configuration, scenes (`TitleScene`, `CanvasScene`, `CSimScenes`), domain + presentation (`SparseCellGrid`, `CanvasView`, `CellContext`); dense Canvas types are compatibility-only. |
-| **IllumoGame/Source/Rulesets/** | CA rules (GoL family, Wireworld, …). |
+| **CSim/Source/Game/** | CA configuration, scenes (`TitleScene`, `CanvasScene`, `CSimScenes`), domain + presentation (`SparseCellGrid`, `CanvasView`, `CellContext`); dense Canvas types are compatibility-only. |
+| **CSim/Source/Rulesets/** | CA rules (GoL family, Wireworld, …). |
 | **Illumo/Source/Rendering/** | Reusable world-mesh and 2D front end, cubemaps, offscreen passes, managed assets, the per-frame `DrawList`, tokens, and private OpenGL implementation; supported contracts are under `Illumo/Include/Illumo/Rendering`. |
 | **Illumo/Source/Content/** | Optional `Illumo::Content` layer above the engine: virtual paths, `illumo.json` manifests, `.ilpk` archives, the virtual file tree and its console/asset/tree adapters, package mounting, the `.ilsc` format 2 codec plus `SceneInstance` (D-E18), and program scenes (`ProgramScene`, `SceneDirector`; D-E31). Guests link the serial-safe mirror `IllumoGuestContent`. Core Illumo never includes it. |
 | **IllEd/Source/** | SceneGraph world editor over a `SceneInstance` document: patch history, selection set, shortcut table, gizmos, typed inspector, clipboard, hierarchy, asset browser and project commands (D-E25); shipped as `IllEd.wasm` (`Wasm/`), with `IllEdCore` as native test oracle (D-E14). |
@@ -343,7 +345,16 @@ authorizes evidence-backed generic facilities, not speculative framework work.
 | **Illumo/Source/Foundation/** | BuildInfo, macros, and implementation support; public aliases/utilities are under `Illumo/Include/Illumo/Foundation`. |
 | **Illumo/Source/Platform/** | OS entry, public SaveLoad implementation boundary, and native dialogs. |
 | **`Illumo/Assets/`** | Runtime files outside `Illumo/Source/`; there is no `Source/Assets` package. |
-| **Illumo/Tests, IllumoGame/Tests, IllEd/Tests, IllMeshViewer/Tests** | Four independent library and product runners. |
+| **Illumo/Tests, CSim/Tests, IllEd/Tests, IllMeshViewer/Tests** | Four independent library and product runners. |
+
+The `CSim/` rows are the CSim repository (D-F5), present only when it is
+cloned into the engine root. The engine stays the CMake root: the root
+`CMakeLists.txt` adds `ILLUMO_GAME_DIR` (`CSim`) only when its
+`CMakeLists.txt` exists, appends it last to `ILLUMO_PROGRAMS` and adds its
+test runner to `IllumoRunTests`; `build.py` reads the same setting. CSim
+refuses to configure on its own and warns when the engine checkout is older
+than `CSim/ENGINE_MIN_COMMIT`. A change that needs both repositories is an
+engine commit followed by a CSim commit that raises that pin.
 
 `Illumo::Illumo` exports supported public headers and a GLM-only generated include
 directory. GLM types and `<glm/...>` paths are intentional public math contracts;
@@ -1637,7 +1648,7 @@ carries `id`, `version`, `title` (the window title) and `kind: "app"`; its
 `workerDeadlineMilliseconds`. Requests are clamped to host ceilings (lanes:
 at most 8 and two fewer than the hardware threads). The decoder is
 `decodePackageManifest` (`Illumo/Content/PackageManifest.h`). The manifests
-live in the source tree as `IllumoGame/illumo.json`, `IllEd/illumo.json` and
+live in the source tree as `CSim/illumo.json`, `IllEd/illumo.json` and
 `IllMeshViewer/illumo.json`; all three are epoch-metered, and the game requests
 eight lanes. A package may be a directory or an `.ilpk` archive; the host
 mounts it at `/app` of its virtual file tree (with `packages/`, `--mount`
@@ -1729,7 +1740,7 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   open/edit/save dialogs and read/write by opaque location. Dialog requests
   are version 2 (adds `edit`, an open whose selection stays writable for
   save-in-place); results add a base-name-only `label`.
-- **Product** (`IllumoGame/Source/Wasm`): the package program
+- **Product** (`CSim/Source/Wasm`): the package program
   (`IllumoGameGuest`, a `GuestProgram`) bootstraps
   storage settings plus packaged defaults, reads catalogs through
   `CSimCatalogBootstrap`, installs `GuestCSimPlatform`, loads its sound cues
@@ -1906,7 +1917,7 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   ready, so serial generations continue meanwhile. Each lane owns one
   contiguous run of chunk lines, cut so lanes hold equal stored-chunk
   counts, plus a halo two lines deep (`SimulationLanePartition`; D-E34),
-  speaks the `CSL1` protocol version 3 (`IllumoGame/Source/Wasm/SimulationLanes.*`:
+  speaks the `CSL1` protocol version 3 (`CSim/Source/Wasm/SimulationLanes.*`:
   multipart sync, advance blocks with halo patches, owned-change replies)
   and advances a block of up to `16 * H / radius` generations (32 for
   Life-like rules) exactly with the unchanged `SparseCellGrid` kernels;
@@ -2046,8 +2057,8 @@ must also work silently.
   runs on every mode change (`showModeSplash`) and on start, enter, leave,
   the return to the title and stop, so running the simulation or leaving
   fades it out and pausing back into EDIT starts it over. The sound sources in
-  `IllumoGame/Assets` are
-  deliberately not tracked in git (`IllumoGame/.gitignore` ignores the whole
+  `CSim/Assets` are
+  deliberately not tracked in git (`CSim/.gitignore` ignores the whole
   directory, owner decision); CMake stages the ones present, and a package
   without them plays silently. Tests: `Illumo.Audio.*`,
   `Illumo.Wasm.AudioServiceDecoder`, `Illumo.Wasm.AudioServices`,
@@ -2094,6 +2105,7 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-UI13** | In-application restart for settings read only at startup (today MSAA). `IRenderWindow::requestRestart()` is a close request that remembers a relaunch; a deferred close (`Illumo::processCloseRequest`) drops it, and `RunIllumoApplication` relaunches after the engine and logger have shut down (`RelaunchCurrentProcess`: `CreateProcessW` with the original command line on Windows; `posix_spawn` of `/proc/self/exe` on Linux, unverified). Guests ask with `GuestUpdateFlags::RequestRestart` (4) beside `RequestClose`; `WasmGameModule` honours it only for a Display-granted guest when the runtime allows it (`setRestartAllowed`, off for captures, benchmarks and tests), else it is an ordinary close. Display wire version 4 appends `msaa` (saved to the host `msaa` for its next window) and `activeMsaa` (the running window's samples, `IRenderWindow::getMsaaSamples`, unknown for capture windows); before it, CSim's MSAA setting never reached the host. After Apply, CSim compares the applied MSAA with `activeMsaa` and, when they differ, asks "Restart CSim?" (Later / Restart now) in the canvas and the main menu. |
 | **D-UI14** | The engine's brand (`docs/brand`) belongs to Illumo, not to products. `GuiEngineBrand` (`Illumo/Gui`) draws it from images in `Illumo/Assets/Branding` (`/engine/Branding` in a guest), pre-sized by `tools/make_brand_assets.py` because guest textures have no mipmaps. `RuntimeShell` plays `GuiEngineSplash` on every interactive launch (`RuntimeShellOptions::splashImage`): the neon logo on the brand's dark ground strikes like a neon tube (a plain fade with reduced motion), holds and fades in 2.3 s; any key but Grave, or a fresh click, skips it; the console stays usable. The program is started first but neither updated nor drawn until the splash's last frame has shown, so its first scene enters afterwards, and a close during the splash ends the run without asking it. Capture and benchmark runs, and a missing logo, have no splash. `GuiEngineBadge` is a "Powered by" label over the flat wordmark; every `GuestProgram` preloads its image, and CSim's title screen draws it in the lower left corner. `IllumoRuntime.exe` also embeds the brand icon as its `GLFW_ICON` resource. |
 | **D-UI16** | The canvas toolbar gains Reset beside Clear, and the console `reset_canvas [yes]`: the world goes back to the active rule's starting pattern (the same `seedInitialPattern` a new canvas opens with), the generation count starts over and the camera returns to the home view. Topology, ruleset and mode are kept. `confirmClear` guards it too (`ExitConfirmDialog::openResetCanvas`). No engine, ABI or save-format change. |
+| **D-UI18** | Canvas mode button and clear/reset keys (2026-10-03, owner request). A third corner `CanvasChromeButton`, beneath settings and the workshop, switches EDIT and NORMAL like E and shows the mode it switches to (`CanvasChromeIcon::Edit` pencil, `Run` play triangle, through `setIcon`); its click never paints. A click throws a liquid splash and dips the tile (`pulse`), and each new glyph springs in from nothing on a `kBoing` spring, for E as well. C clears and Shift+R resets the canvas in either mode through `requestClearCanvas`/`requestResetCanvas`, the toolbar's path, so `confirmClear` asks first; Ctrl+C stays copy and plain R still rotates the buffer (the owner chose Shift+R over moving rotate). Reverses the earlier "C no longer clears" rule, now with confirmation. The FPS readout moves down beneath the third button. |
 | **D-UI17** | `GuiDropdownList` joins `Illumo/Gui` for glass-menu fields that pick one of many values: it opens below its field (above when more rows fit there), shows up to eight rows scrolled by the arrows, Page Up/Down, Home/End, the wheel and type-ahead, marks the current value, and chooses with Enter or a click; Escape or a press elsewhere closes it. It pops open on a `kBoing` spring, highlights with `drawLiquidSelection`, draws into three caller-owned layers above the menu and follows its field as the panel tilts. CSim's F1 settings and New Canvas screen use it for Cell family (with rule counts) and Ruleset, replacing the left/right steppers as the primary picker (Left/Right still step). No ABI or save-format change. |
 | **D-DOC1** | Established one first-party documentation tree; refined by D-DOC2. |
 | **D-DOC2** | Canonical technical documentation remains under `docs/`; `illumo.tex` is the prose book and `architecture-map.tex` the chart pack. Root/nested `AGENTS.md` and `.agent/` are operational-guidance exceptions. |
@@ -2290,6 +2302,7 @@ disabled.
 | **D-F2** | Builds are versioned `vYY.MM_B`. `VERSION.txt` holds the release (`YY.MM`, changed only by `python build.py version --set`); `B` counts first-parent commits since it last changed. `cmake/IllumoVersion.cmake` stamps `BuildInfo` and the staged `illumo.json` manifests on every build; CSim's main menu shows `v26.09_12` from its manifest, and logs and `--version` add the commit and a dirty flag. |
 | **D-F3** | No C++ exceptions (2026-09-29, `.agent/no-exceptions-plan.md`). The host builds with `/EHs-c- _HAS_EXCEPTIONS=0` (MSVC) or `-fno-exceptions` for every C++ target, vendored ones included; first-party MSVC targets make C4530 an error; guests build with `-fno-exceptions` against the WASI SDK's no-exceptions libc++, and Wasmtime runs with the exception proposal off, so a module using exception opcodes is refused. Failures return errors (`bool`/error strings, sticky `GuestWireWriter::failed()`, recorder `fail()`), numbers parse with `Foundation/ParseNumber.h`, JSON reads use `allow_exceptions=false`, paths convert through `Platform/PathText.h`. Programming errors and running out of memory or threads end the process through `illumoFatal` (`Foundation/Fatal.h`); the former allocation-failure recovery in `SparseCellGrid`, `SceneGraphCompile` and `SceneQueryIndex` is removed. `Illumo.Build.NoExceptions` fails on any `try`/`catch`/`throw` in first-party C++. |
 | **D-F4** | Release and MinSizeRel `IllumoRuntime` builds link as Windows programs (`/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup`), so launching one opens no console window; Debug and RelWithDebInfo keep their console. Started from a terminal with unredirected output, the runtime attaches to that console for `--help` and capture/bench results. |
+| **D-F5** | The game is a separate repository (2026-10-11): CSim, formerly `IllumoGame/`, is cloned into the engine's ignored `CSim/` folder and is optional. The root `CMakeLists.txt` adds `ILLUMO_GAME_DIR` only when it exists; without it the engine configures, builds and passes its suite (the game's 237 cases drop out). CSim refuses a standalone configure and pins its oldest supported engine commit in `ENGINE_MIN_COMMIT`. Target and test names keep `IllumoGame`. Open: the game package carries the engine's version (D-F2). Supersedes the separate-repository non-goal of `docs/illumo-library-and-illumogame-design.md`. |
 
 ---
 
@@ -2349,7 +2362,7 @@ From `gpt_illumo_arch_assessment.pdf` and later boundary-consolidation work:
   first-party compiles by default (D-T3); `IllumoTidy` is the optional batch
   compile-database run.
 - Runtime configuration is one `envvars.json` beside IllumoGame; CMake seeds
-  it from tracked `IllumoGame/envvars.json` only when absent, so launch working
+  it from tracked `CSim/envvars.json` only when absent, so launch working
   directories cannot select or overwrite a different configuration. The F1
   product menu updates supported simulation, topology, and display values in
   both Release and Debug.
@@ -2516,13 +2529,13 @@ Resolved highlights (do not re-open without a new decision ID):
 | Public library API | `Illumo/Include/Illumo/*` |
 | Host / services / frame phases / debug overlay | `Illumo/Source/Engine/Illumo.cpp`, `DebugOverlay.cpp` plus public Engine headers |
 | Programs and scenes | `Illumo/Include/Illumo/Content/ProgramScene.h`, `SceneDirector.h`, `IllumoGuest/Include/IllumoGuest/Program.h`, `SceneWorlds.h` |
-| CSim program (package entry) | `IllumoGame/Source/Wasm/GameApplication.cpp` |
+| CSim program (package entry) | `CSim/Source/Wasm/GameApplication.cpp` |
 | Persistent scene hierarchy | `Illumo/Include/Illumo/Scene/*`, `Illumo/Source/Scene/*` |
-| CA scenes / modes | `IllumoGame/Source/Game/CanvasScene.*`, `TitleScene.*`, `CSimScenes.*`, `CellContext.h` |
-| Sparse domain cell storage | `IllumoGame/Source/Game/SparseCellGrid.*` |
-| Bounded world-space view + fade | `IllumoGame/Source/Game/CanvasView.*` |
-| Compatibility dense storage | `IllumoGame/Source/Game/CellGrid.*`, `Canvas.*` |
-| Rules | `IllumoGame/Source/Rulesets/*` |
+| CA scenes / modes | `CSim/Source/Game/CanvasScene.*`, `TitleScene.*`, `CSimScenes.*`, `CellContext.h` |
+| Sparse domain cell storage | `CSim/Source/Game/SparseCellGrid.*` |
+| Bounded world-space view + fade | `CSim/Source/Game/CanvasView.*` |
+| Compatibility dense storage | `CSim/Source/Game/CellGrid.*`, `Canvas.*` |
+| Rules | `CSim/Source/Rulesets/*` |
 | Tokens / Renderer / resources | `Illumo/Include/Illumo/Rendering/*`, `Illumo/Source/Rendering/*` |
 | 2D primitives, animation, and debug 3D | `Illumo/Source/Rendering/Primitives/*` |
 | Debug renderer assets | `Illumo/Assets/RendererDemo/*` |
@@ -2532,9 +2545,9 @@ Resolved highlights (do not re-open without a new decision ID):
 | Shared explicit-API pieces | `Illumo/Source/Rendering/Gpu/*` (GLSL to SPIR-V, OpenGL program state, texels) |
 | Mock/test support | `Illumo/TestSupport/Include/Illumo/Testing/*` |
 | Console / system CLI | `Illumo/Source/Services/CommandLine.*`, `SysCmdLine.cpp` |
-| Sound effects | `Illumo/Include/Illumo/Audio/*`, `Illumo/Source/Audio/*`, `IllumoGuest/Include/IllumoGuest/Audio.h`, `IllumoGame/Source/Game/CSimSounds.*` |
+| Sound effects | `Illumo/Include/Illumo/Audio/*`, `Illumo/Source/Audio/*`, `IllumoGuest/Include/IllumoGuest/Audio.h`, `CSim/Source/Game/CSimSounds.*` |
 | Platform bootstrap/dialogs | `Illumo/Source/Platform/*` |
-| Headless tests | `Illumo/Tests/*`, `IllumoGame/Tests/*` |
+| Headless tests | `Illumo/Tests/*`, `CSim/Tests/*` |
 | Dead experiments | `archive/dead-engine/`, `archive/dead-render/`, `archive/old-states/` |
 
 ### Appendix B — What not to do next

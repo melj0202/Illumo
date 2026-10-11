@@ -3,8 +3,13 @@
 \label{sec:layout}
 
 The canonical workspace is configured from the repository root. Responsibility
-is divided between the reusable Illumo project and three products:
-IllumoGame, IllEd, and IllMeshViewer.
+is divided between the reusable Illumo project and its products: IllEd,
+IllMeshViewer and Playground in this repository, and the game, CSim (target
+IllumoGame), in its own repository cloned into the ignored \pathref{CSim/}
+folder (D-F5). The \pathref{CSim/} rows below exist only when it is cloned;
+the engine configures, builds and passes its suite without it, and
+\pathref{CSim/ENGINE\_MIN\_COMMIT} names the oldest engine commit the game builds
+against.
 
 \begin{center}
 \begin{tabularx}{\linewidth}{@{}l X@{}}
@@ -24,10 +29,10 @@ IllumoGame, IllEd, and IllMeshViewer.
 \pathref{Illumo/Tests/Content/} & \texttt{Illumo.Content.*} cases and the \pathref{Fixtures/archive} package that CMake zips as a reader fixture. \\
 \pathref{IllumoGuest/Include/IllumoGuest/} & Guest SDK, including \texttt{FileTree.h} (\texttt{GuestFileTree}), \texttt{VfsAssets.h} (\texttt{GuestVfsAssets}), and \texttt{SceneFetches.h} (\texttt{GuestSceneFetches}). \\
 \pathref{Illumo/TestSupport/Include/} & Test-only \texttt{Illumo::TestSupport} headers, including MockBackend. \\
-\pathref{IllumoGame/Source/Game/} & Application definition, CA defaults, canvas, sparse simulation, editor, and game module. \\
-\pathref{IllumoGame/Source/Rulesets/} & Cellular-automata rules and palettes. \\
-\pathref{IllumoGame/Scenes/} & Packaged scenes; \pathref{render3d-test.ilsc} is the \texttt{render3dTest} diagnostic. \\
-\pathref{IllumoGame/Tests/} & Product-owned \texttt{IllumoGame.*} cases. \\
+\pathref{CSim/Source/Game/} & Application definition, CA defaults, canvas, sparse simulation, editor, and game module. \\
+\pathref{CSim/Source/Rulesets/} & Cellular-automata rules and palettes. \\
+\pathref{CSim/Scenes/} & Packaged scenes; \pathref{render3d-test.ilsc} is the \texttt{render3dTest} diagnostic. \\
+\pathref{CSim/Tests/} & Product-owned \texttt{IllumoGame.*} cases. \\
 \pathref{IllEd/Source/}, \pathref{IllEd/Tests/} & World editor (document over \texttt{SceneInstance}, history, selection, shortcuts, gizmo, inspector, clipboard, asset browser) and \texttt{IllEd.*} cases. \\
 \pathref{IllMeshViewer/Source/}, \pathref{IllMeshViewer/Tests/} & Mesh and scene viewer and \texttt{IllMeshViewer.*} cases. \\
 \bottomrule
@@ -39,10 +44,10 @@ IllumoGame, IllEd, and IllMeshViewer.
   \item \pathref{Illumo/Shader/} and \pathref{Illumo/Assets/} are library-owned
         runtime data staged beside consuming applications by the supplied CMake helper.
   \item \pathref{Illumo/thirdparty/} holds vendored dependencies and licenses.
-  \item \pathref{IllumoGame/envvars.json} is product-owned default configuration
+  \item \pathref{CSim/envvars.json} is product-owned default configuration
         and is seeded separately from library assets.
-  \item \pathref{IllumoGame/illumo.json}, \pathref{IllEd/illumo.json}, and
-        \pathref{IllMeshViewer/illumo.json} are the package manifests staged
+  \item \pathref{IllEd/illumo.json}, \pathref{IllMeshViewer/illumo.json}, and
+        \pathref{CSim/illumo.json} are the package manifests staged
         into \pathref{apps/<name>/} (D-E22); \texttt{app.json} no longer exists.
   \item \pathref{archive/} is historical code and is not built.
   \item \pathref{docs/} is the canonical technical-documentation tree.

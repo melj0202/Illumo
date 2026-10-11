@@ -457,7 +457,7 @@ if(BUILD_TESTING)
     LABELS "Illumo;IllumoWorkspace")
 
   if(NOT ILLUMO_WORKSPACE_BUILD)
-    add_custom_target(IllumoRunTests ALL
+    add_custom_target(IllumoRunTests ${ILLUMO_RUN_TESTS_ALL}
       COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG>
         -L Illumo --output-on-failure
       DEPENDS IllumoTestsDiscover IllumoPublicHeaderSmoke

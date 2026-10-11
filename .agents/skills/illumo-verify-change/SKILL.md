@@ -16,26 +16,33 @@ Verify the requested outcome, not merely that a command returned zero.
 
 ## Select proportional checks
 
-Use repository-provided commands from the repository root. A normal behavior change generally requires:
+Use repository-provided commands from the repository root. The full suite runs once, before a push (root `AGENTS.md`, "When to run what"):
 
 ```powershell
-cmake -S Illumo -B build
+cmake -S . -B build
 cmake --build build --config Release
-ctest --test-dir build -C Release -L Illumo --output-on-failure
+ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
 ```
 
-For focused work, discover and run exact tests before or alongside the full suite:
+The default build only builds the runners (`ILLUMO_RUN_TESTS_ON_BUILD` is `OFF`); if a tree was configured with it `ON`, the build already ran the suite, so do not run `ctest` again.
+
+Short of a push, build only the affected targets and run the exact cases and package tests that cover the change:
 
 ```powershell
-cmake --build build --config Release --target IllumoTests
-ctest --test-dir build -C Release -N -L Illumo
+cmake --build build --config Release --target IllumoTests IllumoGameTests IllEdTests IllMeshViewerTests
+ctest --test-dir build -C Release -N -L IllumoWorkspace
 build/Release/IllumoTests.exe --list
 build/Release/IllumoTests.exe --run <exact-test-name>
 ```
 
+The other runners (`IllumoGameTests`, `IllEdTests`, `IllMeshViewerTests`)
+take the same `--list` and `--run` flags. Package-level cases such as
+`IllumoGame.Wasm.GamePackage` live in separate package test executables
+(e.g. `IllumoGameWasmPackageTests`); run them by name with `ctest -R`.
+
 Add checks according to risk:
 
-- Check formatting on every modified C++ source or header without rewriting it. Run `clang-format -i` only when the active task already authorizes edits to those files.
+- Check formatting of the changed lines of every modified C++ source or header without rewriting it (`clang-format --dry-run --lines=<start>:<end>`). Fix formatting only when the active task already authorizes edits to those files, and then only on changed lines (`--lines`, or the Claude Code format hook); never reformat whole existing files.
 - Build documentation only when documentation writes are authorized and source changes make the PDF stale.
 - Run coverage when the change creates meaningful untested production paths or the user requests the configured gate.
 - Benchmark performance-sensitive changes against a reproducible baseline.

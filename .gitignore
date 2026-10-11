@@ -2,7 +2,6 @@
 *.illumo
 *.ilsc
 # Shipped product scenes are source, not runtime data.
-!IllumoGame/Scenes/*.ilsc
 !Playground/Scenes/*.ilsc
 # So is the scene packed into the CMake zip test fixture.
 !Illumo/Tests/Content/Fixtures/archive/scenes/*.ilsc
@@ -125,3 +124,6 @@ secrets*.json
 /Illumo/Source/all.txt
 /Illumo/illumo_source.zip
 /archive/*cppcheck-build-dir/
+
+# The game is its own repository (CSim), cloned here; see README.md.
+/CSim/

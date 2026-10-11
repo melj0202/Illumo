@@ -1,6 +1,9 @@
 \section{Key file map}
 \label{sec:file-map}
 
+Paths under \path{CSim/} belong to the separate CSim repository and exist only
+when it is cloned into the engine root (D-F5).
+
 \begin{table}[h]
 \centering
 \scriptsize
@@ -48,7 +51,7 @@
 \path{IllumoGuest/Include/IllumoGuest/Audio.h} & Audio service wire record and guest \texttt{GuestAudio} \\
 \path{IllumoGuest/Include/IllumoGuest/Launcher.h} & LaunchApp service wire records and guest \texttt{GuestLauncher} (D-E36) \\
 \path{Illumo/Include/Illumo/Wasm/RuntimeAppLauncher.h}, \path{Platform/ChildProcess.h} & Runtime app launcher and the owned child process (D-E36) \\
-\path{IllumoGame/Source/Game/CSimSounds.*} & CSim sound cues and the \texttt{soundVolume} setting \\
+\path{CSim/Source/Game/CSimSounds.*} & CSim sound cues and the \texttt{soundVolume} setting \\
 \path{Illumo/Include/Illumo/Content/} & \texttt{Illumo::Content} public API: paths, manifests, archives, file tree, scenes \\
 \path{Illumo/Source/Content/IlscCodec.cpp} & \texttt{.ilsc} format 2 strict parser and canonical encoder \\
 \path{Illumo/Source/Content/SceneInstance.cpp} & Live graph, attachments, lighting, skybox, picking from a document \\
@@ -82,17 +85,17 @@
 \path{IllumoGuest/Include/IllumoGuest/PlayProgram.h} & \texttt{GuestPlayProgram}: plays a launched or default scene with its behaviours (D-E35) \\
 \path{Illumo/Include/Illumo/Content/BehaviourSchema.h}, \path{SceneBehaviours.h}, \path{ScenePlay.h} & Behaviour descriptions, the behaviour driver and the \texttt{illumo.play} extension (D-E35, D-E36) \\
 \path{IllumoGuest/Include/IllumoGuest/SceneWorlds.h} & One host render world per scene, frame schema v8 (D-R30) \\
-\path{IllumoGame/CMakeLists.txt} & Product core (native test oracle), tests, runtime seed \\
-\path{IllumoGame/Source/Wasm/GameApplication.cpp} & The CSim program: bootstrap, catalogs, sounds, pointer, first scene \\
-\path{IllumoGame/Source/Game/IllumoGameConfig.*} & CA defaults \\
-\path{IllumoGame/Source/Game/TitleScene.*}, \path{CSimScenes.*} & Title scene and CSim's scene flow (kept canvas, resume) \\
-\path{IllumoGame/Source/Game/CanvasScene.*} & Canvas scene: modes, input, commands, simulation orchestration \\
-\path{IllumoGame/Source/Game/SparseCellGrid.*} & Signed-coordinate sparse domain \\
-\path{IllumoGame/Source/Game/CanvasView.*} & Bounded presentation, fade, dirty upload \\
-\path{IllumoGame/Source/Rulesets/} & Cellular-automata transitions and palettes \\
-\path{IllumoGame/Scenes/render3d-test.ilsc} & Scene behind the \texttt{render3dTest} diagnostic \\
-\path{IllumoGame/Tests/} & \texttt{IllumoGame.*} product cases \\
-\path{IllumoGame/illumo.json}, \path{IllEd/illumo.json}, \path{IllMeshViewer/illumo.json} & Package manifests (replace \texttt{app.json}) \\
+\path{CSim/CMakeLists.txt} & Product core (native test oracle), tests, runtime seed \\
+\path{CSim/Source/Wasm/GameApplication.cpp} & The CSim program: bootstrap, catalogs, sounds, pointer, first scene \\
+\path{CSim/Source/Game/IllumoGameConfig.*} & CA defaults \\
+\path{CSim/Source/Game/TitleScene.*}, \path{CSimScenes.*} & Title scene and CSim's scene flow (kept canvas, resume) \\
+\path{CSim/Source/Game/CanvasScene.*} & Canvas scene: modes, input, commands, simulation orchestration \\
+\path{CSim/Source/Game/SparseCellGrid.*} & Signed-coordinate sparse domain \\
+\path{CSim/Source/Game/CanvasView.*} & Bounded presentation, fade, dirty upload \\
+\path{CSim/Source/Rulesets/} & Cellular-automata transitions and palettes \\
+\path{CSim/Scenes/render3d-test.ilsc} & Scene behind the \texttt{render3dTest} diagnostic \\
+\path{CSim/Tests/} & \texttt{IllumoGame.*} product cases \\
+\path{CSim/illumo.json}, \path{IllEd/illumo.json}, \path{IllMeshViewer/illumo.json} & Package manifests (replace \texttt{app.json}) \\
 \path{IllEd/Source/EditorDocument.*} & The single mutation gateway over the editor scene's \texttt{SceneInstance} \\
 \path{IllEd/Source/EditorHistory.*}, \path{EditorSelection.*}, \path{EditorShortcuts.*} & Patch undo/redo, selection set, the one key table \\
 \path{IllEd/Source/EditorGizmo.*}, \path{EditorInspector.*}, \path{EditorClipboard.*} & Transform gizmos, typed inspector, fragment copy/paste \\
