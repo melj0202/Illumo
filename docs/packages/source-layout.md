@@ -7,6 +7,10 @@ dependency on these products or their domain code. The optional
 includes `<Illumo/Content/...>`, and guests compile its serial-safe subset as
 `IllumoGuestContent`.
 
+The game (`IllumoGame`, the CSim repository) is cloned into the ignored
+`CSim/` folder and is optional; the `CSim/` rows below exist only when it is
+present (D-F5).
+
 | Path | Role |
 |---|---|
 | `Illumo/Include/Illumo/` | Supported public headers consumed as `<Illumo/...>` |
@@ -20,9 +24,9 @@ includes `<Illumo/Content/...>`, and guests compile its serial-safe subset as
 | `Illumo/Source/Platform/` | OS entry points, native save/load dialogs, and clipboard text |
 | `Illumo/TestSupport/Include/` | Test-only `Illumo::TestSupport` API |
 | `Illumo/Tests/` | `Illumo.*` library cases (`Tests/Content/` holds `Illumo.Content.*` and the archive fixture) |
-| `IllumoGame/Source/Game/` | CA defaults, the title and canvas scenes (`TitleScene`, `CanvasScene`, `CSimScenes`), simulation, presentation, editor, persistence |
-| `IllumoGame/Source/Rulesets/` | CA transitions and palettes |
-| `IllumoGame/Tests/` | `IllumoGame.*` product cases |
+| `CSim/Source/Game/` | CA defaults, the title and canvas scenes (`TitleScene`, `CanvasScene`, `CSimScenes`), simulation, presentation, editor, persistence |
+| `CSim/Source/Rulesets/` | CA transitions and palettes |
+| `CSim/Tests/` | `IllumoGame.*` product cases |
 | `IllEd/Source/` | The editor scene (`EditorScene`), document model over its `SceneInstance`, history, menu bar and dock panels |
 | `IllEd/Assets/` | Editor UI atlas and other product runtime files |
 | `IllEd/Tests/` | `IllEd.*` product cases |
@@ -31,7 +35,7 @@ includes `<Illumo/Content/...>`, and guests compile its serial-safe subset as
 | `Playground/` | The sample game for scene behaviours (D-E35): `Playground.wasm` (a `GuestPlayProgram`), its `behaviours.json`, demo scene and `Playground.Wasm.*` package tests |
 
 `Illumo/Shader`, `Illumo/Assets`, notices, dependencies, and licenses remain
-library-owned. `IllumoGame/envvars.json`, `IllEd/envvars.json`, and
+library-owned. `CSim/envvars.json`, `IllEd/envvars.json`, and
 `IllMeshViewer/envvars.json` (and `Playground/envvars.json`) are product-owned, as are each product's
 `illumo.json` package manifest (which replaced `app.json`). Historical
 material under `archive/` is not built.

@@ -142,7 +142,7 @@ ctest --test-dir build-linux -L IllumoWorkspace -E "Bench|Oracle" --output-on-fa
 
 After a successful Debug build, `build-linux/Debug/` should contain the
 test executables and staged runtime files (Ninja puts them in a config folder
-so they do not collide with CMake's `IllumoGame/` binary directory):
+so they do not collide with source-named binary directories such as `IllEd/`):
 
 - Applications: none on Linux (see above)
 - Tests: `IllumoTests`, `IllumoGameTests`, `IllEdTests`,

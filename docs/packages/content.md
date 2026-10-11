@@ -60,8 +60,8 @@ base directory; `parent`, `fileName`, `mountName`, `isWithin` and
 ## `illumo.json`
 
 Every package, loose directory or `.ilpk`, carries `illumo.json` at its root
-(`PackageManifest::kFileName`). It replaces the former `app.json`; the three
-in-tree manifests are `IllumoGame/illumo.json` (id `csim`),
+(`PackageManifest::kFileName`). It replaces the former `app.json`; the
+manifests are `CSim/illumo.json` (id `csim`, in the separate CSim repository),
 `IllEd/illumo.json` (`illed`) and `IllMeshViewer/illumo.json` (`meshviewer`).
 `decodePackageManifest` is strict: an unknown key, wrong type or invalid value
 rejects the whole manifest, because it requests budgets. Top-level keys are

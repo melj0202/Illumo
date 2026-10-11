@@ -4061,6 +4061,43 @@ shell no longer waits for a Release runtime; scripts pipe its output or use
 launches and restarts run the same executable, and the module compiler
 already starts with \texttt{CREATE\_NO\_WINDOW}.
 \end{decisionbox}
+
+\subsection*{D-F5 --- The game is a separate repository}
+\begin{decisionbox}[title={D-F5 \quad 2026-10-11}]
+\textbf{Decision:} CSim, the cellular-automata game formerly in
+\pathref{IllumoGame/}, lives in its own repository, cloned into the
+\texttt{CSim/} folder at the engine root, which the engine's
+\pathref{.gitignore} ignores. The engine stays the CMake root: the root
+\pathref{CMakeLists.txt} adds \texttt{ILLUMO\_GAME\_DIR} (\texttt{CSim}) only
+when that folder holds a \texttt{CMakeLists.txt}, appending it last to
+\texttt{ILLUMO\_PROGRAMS} and its test runner to \texttt{IllumoRunTests}.
+Without \texttt{CSim/} the engine configures, builds and passes its suite.
+CSim refuses to configure outside the engine workspace and names the oldest
+engine commit it builds against in \texttt{CSim/ENGINE\_MIN\_COMMIT}, which
+configure checks with \texttt{git merge-base --is-ancestor}; an older engine
+warns. Target and test names (\texttt{IllumoGame}, \texttt{IllumoGameCore},
+\texttt{IllumoGameTests}, \texttt{IllumoGame.*}) are unchanged. The game's
+history since it entered Illumo moved with it through \texttt{git
+filter-repo}; the older \texttt{glfw\_app/} and first \texttt{CSim/} eras stay
+in the engine repository.\\
+\textbf{Why:} The engine is a product-agnostic framework
+(\pathref{docs/charter-direction.md}) and the game is one consumer of it.
+Separate repositories keep game commits and policy out of engine history and
+make the engine-only build a tested configuration. Keeping the engine as the
+CMake root leaves every \texttt{CMAKE\_SOURCE\_DIR} path in
+\pathref{cmake/IllumoWasm.cmake} unchanged.\\
+\textbf{Consequences:} A change that needs both repositories is an engine
+commit first, then a CSim commit that raises \texttt{ENGINE\_MIN\_COMMIT}.
+Without \texttt{CSim/} the suite drops the game's 237 cases, including the
+package, lane, audio and frame-allocation tests that drive the host hardest;
+worker jobs stay covered by \texttt{Illumo.Wasm} (\texttt{CompatibilityGuest}).
+\pathref{build.py} follows \texttt{ILLUMO\_GAME\_DIR}; \texttt{doctor} and
+\texttt{play} explain a missing game. The pin warns falsely on a shallow or
+Git-less engine checkout. Open: \texttt{BuildInfo} and the staged
+\texttt{illumo.json} versions come from the engine's Git state (D-F2), so the
+game package carries the engine's version. This supersedes the ``no separate
+repository'' non-goal of \pathref{docs/illumo-library-and-illumogame-design.md}.
+\end{decisionbox}
 \subsection*{D-PL1 --- Retire the macOS scaffold (2026-09-19)}
 macOS is not a current product target. Remove the first-party Apple platform
 files, Cocoa framework/source selection, and dedicated scaffold package map.

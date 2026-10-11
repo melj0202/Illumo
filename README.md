@@ -8,8 +8,9 @@
 Illumo is a reusable C++23 static runtime and rendering library. This
 repository is a source workspace: the library, the `IllumoRuntime` host built
 on it, and the in-tree applications, which run on that host as WASM programs.
-It is not an installable SDK or a stable DLL ABI. Moving a product to a
-downstream repository is a separate packaging step.
+It is not an installable SDK or a stable DLL ABI. The game, CSim, is a
+separate repository cloned into the ignored `CSim/` folder; the engine builds,
+runs its other applications and passes its suite without it.
 
 Illumo owns the generic application runner, platform entry and native
 dialogs, BuildInfo, SysCmdLine, host, services, persistent `SceneGraph`,
@@ -21,7 +22,7 @@ Rulesets, or IllEd. Application policy stays in the consuming product.
 | Piece | Role |
 |---|---|
 | `Illumo/` | Static library: runner, platform, services, SceneGraph, OpenGL token renderer, assets |
-| `IllumoGame/` | Cellular-automata sandbox, shipped only as the isolated `IllumoGame.wasm` package. Saves write sparse `.csim` version 4; loads versions 4, 3, and 2 plus legacy dense / `.illumo` |
+| `CSim/` | Optional, a separate repository (see [Get the build running](#get-the-build-running)). Cellular-automata sandbox, shipped only as the isolated `IllumoGame.wasm` package. Saves write sparse `.csim` version 4; loads versions 4, 3, and 2 plus legacy dense / `.illumo` |
 | `IllumoRuntime` | Generic native host (Windows x64): window, OpenGL, Vulkan or Direct3D 12, services and a Wasmtime sandbox. Runs every interactive client program as a WASM package staged beside it in `apps/<name>/`, and captures PNG frames with `--capture` ([docs/wasm-game-runtime-design.md](docs/wasm-game-runtime-design.md), [docs/frame-capture.md](docs/frame-capture.md)) |
 | `IllumoGuest/` | Guest SDK and WASI build tree: ABI wire headers, guest-side engine and program (`GuestProgram`), recording backend |
 | `IllEd/` | SceneGraph world editor, shipped as the `IllEd.wasm` package (`--app illed`). Writes `.ilsc` format 2 scenes for later Illumo applications; its Hierarchy, Assets, Tools and Inspector panels dock or pop out into their own windows |
@@ -66,7 +67,7 @@ illumo/
     Tests/               # Illumo.* library cases
     Shader/ Assets/      # Runtime files staged beside executables
     thirdparty/          # Vendored dependencies
-  IllumoGame/            # CA simulator sources, catalogs and illumo.json manifest
+  CSim/                  # Optional: the CSim game repository, cloned here and ignored
   IllumoGuest/           # WASM guest SDK and guest build tree (WASI SDK)
   IllEd/                 # SceneGraph world editor and illumo.json manifest
   IllMeshViewer/         # Mesh viewer and illumo.json manifest
@@ -85,6 +86,20 @@ Clone and work from the repository root:
 git clone https://github.com/melj0202/Illumo.git
 cd Illumo
 ```
+
+The game, CSim, is a separate repository. To build and play it, clone it into
+`CSim/` at the engine root (the engine's `.gitignore` ignores that folder) and
+keep building from the engine root:
+
+```bash
+git clone https://github.com/melj0202/CSim.git CSim
+```
+
+Without `CSim/` the engine and its other applications (IllEd, the mesh viewer,
+Playground) configure, build and pass their tests; `python build.py doctor`
+says the game is not cloned. `CSim/ENGINE_MIN_COMMIT` names the oldest engine
+commit the game builds against, and configure warns when the engine checkout is
+older. CSim cannot be configured on its own.
 
 `ILLUMO_ENABLE_CLANG_TIDY` defaults **ON**. Configure fails if `clang-tidy`
 is not on `PATH`. This repository also defaults `ILLUMO_BUILD_DOCUMENTATION`
@@ -252,7 +267,7 @@ cmake --build build-linux --parallel
 ```
 
 Ninja stages runtimes under `build-linux/RelWithDebInfo/` (or `Debug/`) so
-executables do not collide with CMake directories named `IllumoGame/`.
+executables do not collide with source-named CMake directories such as `IllEd/`.
 
 **Run.** There is nothing to launch on Linux yet: IllumoGame, IllEd,
 IllMeshViewer and frame capture run only as WASM packages inside the Windows
@@ -349,7 +364,7 @@ Installed packages live in `apps\<name>\` (or `apps\<name>.ilpk`), each with an
 
 | `--app` | Module | Manifest notes | Private storage |
 |---|---|---|---|
-| `game` (default) | `IllumoGame.wasm` | | `storage\csim\` |
+| `game` (default; needs `CSim/`) | `IllumoGame.wasm` | | `storage\csim\` |
 | `illed` | `IllEd.wasm` | `launchAccess: "edit"`, `launchApps: true` (Play); preloads `Assets/IllEd/editor-ui-atlas.jpg` | `storage\illed\` |
 | `meshviewer` | `IllMeshViewer.wasm` | `launchAccess: "read"`; preloads the engine's `/engine/Skybox/skybox-daylight.png` | `storage\meshviewer\` |
 | `playground` | `Playground.wasm` | `launchAccess: "read"`; ships `behaviours.json` and `Scenes/demo.ilsc` | `storage\playground\` |
@@ -424,12 +439,14 @@ them.
 
 ### IllumoGame
 
-Cellular-automata sandbox. The whole product (menus, canvas, editor, console
+Needs the CSim repository cloned into `CSim/` (see
+[Get the build running](#get-the-build-running)). Cellular-automata sandbox.
+The whole product (menus, canvas, editor, console
 commands, save/load, clipboard, ruleset workshop and the 3D diagnostic)
 executes inside `IllumoGame.wasm`; `IllumoRuntime` supplies only the window,
 input, rendering, file, dialog, clipboard, display and console services.
 Catalogs may add ruleset IDs; F2 on the canvas edits a rule. See
-[IllumoGame/docs/game.md](IllumoGame/docs/game.md) and
+[CSim/docs/game.md](CSim/docs/game.md) and
 [docs/wasm-game-cutover-plan.md](docs/wasm-game-cutover-plan.md).
 
 `apps\game\illumo.json` names the module and the simulation lane worker and
@@ -462,7 +479,7 @@ Saves append `.csim` when no extension is given. Writes are sparse version 4
 before replacing the canvas.
 
 Set `"render3dTest": "1"` in `storage\csim\envvars.json` for an opt-in 3D
-diagnostic scene (`IllumoGame/Scenes/render3d-test.ilsc`, not the normal
+diagnostic scene (`CSim/Scenes/render3d-test.ilsc`, not the normal
 canvas). Set it back to `0` to
 restore the orthographic CA view. Its lit meshes cast into the runtime's
 shared shadow pass through frame schema version 2.
@@ -477,7 +494,7 @@ Editing, loading or saving while running discards at most the block in
 flight. `status` shows where generations execute. Overdue whole steps are
 dropped. The visible viewport is a padded, integer-LOD
 cache with tiled uploads. Timing, fade, and upload details:
-[IllumoGame/docs/game.md](IllumoGame/docs/game.md).
+[CSim/docs/game.md](CSim/docs/game.md).
 
 ### IllEd
 
@@ -599,7 +616,7 @@ ctest --test-dir build -C Release -N -L IllumoWorkspace
 # viewer:   build/Release/IllMeshViewerTests.exe --list
 ```
 
-See `Illumo/Tests/README.md`, `IllumoGame/Tests/README.md`,
+See `Illumo/Tests/README.md`, `CSim/Tests/README.md`,
 `IllEd/Tests/README.md`, and `IllMeshViewer/Tests/README.md`.
 
 Clang/LLVM coverage (85% production-line gate and HTML report):

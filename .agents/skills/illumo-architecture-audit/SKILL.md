@@ -37,7 +37,7 @@ For the requested subsystem, determine ownership, lifetime, dependency direction
 
 ## Apply architectural discipline
 
-- Preserve Illumo as a cellular-automata learning sandbox, not a general-purpose engine.
+- Preserve Illumo as a modular C++ game framework centered on rendering (`docs/charter-direction.md`); application behavior and content meaning stay in consuming products such as CSim.
 - Preserve App composition, Engine service ownership, renderer-token execution, sparse-domain versus bounded-view separation, primitive-composed UI, and compatibility-fixture boundaries unless change is explicitly authorized.
 - Add abstraction only for demonstrated consumers or volatility. Do not propose an ECS, render graph, scene graph, backend, or framework for completeness.
 - Treat ownership, lifetime, threading, persistence, dependency direction, subsystem boundaries, and public contracts as architectural changes requiring explicit authorization.

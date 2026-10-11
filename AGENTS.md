@@ -8,7 +8,13 @@ file as an architecture catalog.
 ## Project identity and boundaries
 
 This C++23 workspace contains the product-agnostic `Illumo` static library and
-the in-tree applications that consume it. `IllumoGame` is the
+the in-tree applications that consume it. The game, CSim (CMake target
+`IllumoGame`), is a separate repository cloned into the ignored `CSim/` folder
+at the engine root (D-F5). It is optional: the engine configures, builds and
+passes its suite without it, and the root `CMakeLists.txt` adds it only when
+`CSim/CMakeLists.txt` exists. `CSim/ENGINE_MIN_COMMIT` names the oldest engine
+commit the game builds against; an engine change the game needs lands here
+first, then CSim raises that pin in the commit that uses it. CSim is the
 cellular-automata learning sandbox; it ships only as the isolated
 `IllumoGame.wasm` package played by the generic `IllumoRuntime` host (Windows
 x64). `IllEd` is the SceneGraph world editor
@@ -173,21 +179,24 @@ Ruleset encodings:
 
 ## Source map
 
+Paths under `CSim/` belong to the CSim repository and exist only when it is
+cloned.
+
 | Concern | Primary files |
 |---|---|
 | Application runner and main loop | `Illumo/Source/Engine/Application.cpp` |
 | Public library API | `Illumo/Include/Illumo/*` |
 | Host, services, frame phases | `Illumo/Source/Engine/Illumo.cpp`, public Engine headers, `Illumo/Source/Wasm/RuntimeShell.cpp` |
 | Persistent scene hierarchy | `Illumo/Include/Illumo/Scene/*`, `Illumo/Source/Scene/*` |
-| CA modes and editor | `IllumoGame/Source/Game/CanvasScene.*`, `TitleScene.*`, `CSimScenes.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
+| CA modes and editor (CSim repo) | `CSim/Source/Game/CanvasScene.*`, `TitleScene.*`, `CSimScenes.*`, `CellContext.h`, `CellPattern.*`, `PatternCodec.*`, `BuiltinPatterns.*` |
 | World editor | `IllEd/Source/EditorScene*.cpp`, `EditorDocument.*`, `EditorHistory.*`, `EditorSelection.*`, `EditorShortcuts.*`, `EditorGizmo.*`, `EditorInspector.*`, `EditorClipboard.*`, `EditorAssetBrowser.*`, `EditorToolbar.*` |
 | Scene format, packages, virtual file tree | `Illumo/Include/Illumo/Content/*`, `Illumo/Source/Content/*`, `Illumo/tools/IllumoPack.cpp` |
 | OS clipboard text | `Illumo/Include/Illumo/Platform/Clipboard.h`, platform `*Clipboard.cpp` |
-| Sound effects and looping music (miniaudio kept private) | `Illumo/Include/Illumo/Audio/*`, `Illumo/Source/Audio/*`, `IllumoGuest/Include/IllumoGuest/Audio.h`, `IllumoGame/Source/Game/CSimSounds.*` |
-| Domain cell storage | `IllumoGame/Source/Game/SparseCellGrid.*` |
-| Bounded view, fade, dirty upload | `IllumoGame/Source/Game/CanvasView.*`, `Illumo/Shader/canvas_*` |
-| Compatibility dense storage | `IllumoGame/Source/Game/CellGrid.*`, `Canvas.*` |
-| CA behavior | `IllumoGame/Source/Rulesets/*` (`nextState`/palette) |
+| Sound effects and looping music (miniaudio kept private) | `Illumo/Include/Illumo/Audio/*`, `Illumo/Source/Audio/*`, `IllumoGuest/Include/IllumoGuest/Audio.h`, `CSim/Source/Game/CSimSounds.*` |
+| Domain cell storage (CSim repo) | `CSim/Source/Game/SparseCellGrid.*` |
+| Bounded view, fade, dirty upload (CSim repo, engine shaders) | `CSim/Source/Game/CanvasView.*`, `Illumo/Shader/canvas_*` |
+| Compatibility dense storage (CSim repo) | `CSim/Source/Game/CellGrid.*`, `Canvas.*` |
+| CA behavior (CSim repo) | `CSim/Source/Rulesets/*` (`nextState`/palette) |
 | Renderer and tokens | `Illumo/Include/Illumo/Rendering/*`, `Illumo/Source/Rendering/*` |
 | Resource handles and file assets | `Illumo/Include/Illumo/Rendering/ResourceHandle*`, `Illumo/Source/Rendering/AssetManager.cpp` |
 | World meshes, overlay primitives, animation | `Illumo/Source/Rendering/Primitives/*` (`MeshVisual`, `GameVisual`) |
@@ -204,19 +213,20 @@ Ruleset encodings:
 | WASM host, ABI decoders, runtime | `Illumo/Source/Wasm/*`, `Illumo/Include/Illumo/Wasm/*`, `cmake/IllumoWasm.cmake` |
 | A program's WASM module and package | `<Program>/GuestTargets.cmake`, `<Program>/PackageTargets.cmake`, listed in the root `ILLUMO_PROGRAMS` |
 | Guest SDK, guest-side engine, wire headers | `IllumoGuest/Include/IllumoGuest/*`, `IllumoGuest/Source/*` |
-| IllumoGame package entry and platform adapter | `IllumoGame/Source/Wasm/*`, `IllumoGame/illumo.json` |
+| IllumoGame package entry and platform adapter (CSim repo) | `CSim/Source/Wasm/*`, `CSim/illumo.json` |
 | IllEd package entry and platform seam | `IllEd/Source/Wasm/EditorApplication.cpp`, `IllEd/Source/IllEdPlatform.h`, `IllEd/illumo.json` |
 | IllMeshViewer package entry and platform seam | `IllMeshViewer/Source/Wasm/ViewerApplication.cpp`, `IllMeshViewer/Source/MeshViewerPlatform.h`, `IllMeshViewer/illumo.json` |
 | Runtime command line and capture mode | `Illumo/Source/Wasm/RuntimeApplication.cpp` |
-| Tests | `Illumo/Tests/*`, `IllumoGame/Tests/*`, `IllEd/Tests/*`, `IllMeshViewer/Tests/*`, `Playground/Tests/*` |
+| Tests | `Illumo/Tests/*`, `CSim/Tests/*`, `IllEd/Tests/*`, `IllMeshViewer/Tests/*`, `Playground/Tests/*` |
 | Canonical architecture | `docs/architecture-consensus.md` |
 | Formal decisions | `docs/latex/sections/09-design-decision-log.tex` |
 
 ## Build and verification commands
 
 Run from the repository root on Windows. The default Windows configure
-builds `IllumoRuntime` and stages every app package (`apps/game`,
-`apps/illed`, `apps/meshviewer`), which requires the pinned toolchain from
+builds `IllumoRuntime` and stages every app package (`apps/illed`,
+`apps/meshviewer`, `apps/playground`, and `apps/game` when `CSim/` is
+cloned), which requires the pinned toolchain from
 `tools/bootstrap-wasm.ps1` (or `python build.py wasm-tools`) in
 `build-wasm-tools/` (`-DILLUMO_BUILD_WASM_RUNTIME=OFF` builds without them;
 there are then no runnable applications).
@@ -234,7 +244,8 @@ doctor` reports the toolchain, an `apps` check, and stale native pre-WASM
 outputs (`IllumoGame.exe`, `IllEd.exe`, `IllMeshViewer.exe`,
 `IllumoCapture.exe`, an old `game/` folder) to delete. `python build.py play
 --app game|illed|meshviewer [-- runtime args]` builds the runtime and runs
-one app (`--no-build` skips building). `python build.py test` builds every
+one app (`--no-build` skips building); without `CSim/`, `doctor` and `play
+--app game` say how to clone it. `python build.py test` builds every
 executable CTest runs; `tools/test_build.py` covers the orchestrator.
 `python build.py dist` assembles a distribution in `<build>/dist/<config>/`
 with the engine as `engine.ilpk` and each app as `apps/<name>.ilpk` (D-E38);
@@ -247,7 +258,11 @@ Debug is the AddressSanitizer profile (`ILLUMO_ENABLE_ASAN`, default ON),
 whose WASM guests also use explicit bounds checks; play and measure with the
 `dev` profile (RelWithDebInfo) or `debug-noasan`, not Debug.
 
-Package-level checks drive each real package through the generic host:
+Package-level checks drive each real package through the generic host. The
+`IllumoGame.*` cases come from the CSim repository and run only when `CSim/`
+is cloned; they exercise the host hardest (packages, lanes, audio, frame
+allocations), so the full suite before an engine push runs with `CSim/`
+cloned and current.
 `IllumoGame.Wasm.GamePackage` (menu, setup, edit, step, save/load, 3D mode),
 `IllumoGame.Wasm.GamePackageAudio` (packaged sound cues and the chunked,
 looping menu music reach a recording audio output),
@@ -289,6 +304,8 @@ build/Release/IllumoGameTests.exe --run <IllumoGame.exact-name>
 build/Release/IllEdTests.exe --run <IllEd.exact-name>
 build/Release/IllMeshViewerTests.exe --run <IllMeshViewer.exact-name>
 ```
+
+`IllumoGameTests` exists only when `CSim/` is cloned.
 
 Clang/LLVM coverage:
 
@@ -514,18 +531,18 @@ Subsystem rules live in:
   `Illumo/Source/Audio/AGENTS.md`, and
   `Illumo/Source/Platform/AGENTS.md` plus
   its Windows and Linux child guidance;
-- `IllumoGame/Source/Game/AGENTS.md` and
-  `IllumoGame/Source/Rulesets/AGENTS.md`;
 - `IllEd/Source/AGENTS.md` and `IllEd/Tests/AGENTS.md`;
 - `IllMeshViewer/Source/AGENTS.md` and `IllMeshViewer/Tests/AGENTS.md`;
-- `Illumo/Source/Services/AGENTS.md`, `Illumo/Tests/AGENTS.md`, and
-  `IllumoGame/Tests/AGENTS.md`;
+- `Illumo/Source/Services/AGENTS.md` and `Illumo/Tests/AGENTS.md`;
 - `Illumo/Source/Rendering/AGENTS.md` plus
   `Illumo/Source/Rendering/OpenGL/AGENTS.md`,
   `Illumo/Source/Rendering/Vulkan/AGENTS.md`,
   `Illumo/Source/Rendering/D3D12/AGENTS.md`,
   `Illumo/Source/Rendering/Primitives/AGENTS.md`; test-only MockBackend guidance
   lives in `Illumo/TestSupport/AGENTS.md`.
+
+The game's guidance lives in the CSim repository, starting at
+`CSim/AGENTS.md`.
 
 Child guidance specializes this file and does not weaken it.
 
