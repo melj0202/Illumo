@@ -183,8 +183,8 @@ them can be restored.
 
 ## Documentation and verification
 
-- `docs/packages/game.md`
-- `docs/latex/sections/07-game-and-rules.tex`
+- `IllumoGame/docs/game.md`
+- `IllumoGame/docs/07-game-and-rules.tex`
 - `docs/architecture-consensus.md`
 - Domain, boundary, simulation, canvas, and CanvasScene exact tests
 - `IllumoGame.Sim.MicroBench` and `IllumoGame.Sim.SparseMicroBench` for measured

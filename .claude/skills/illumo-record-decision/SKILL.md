@@ -46,7 +46,7 @@ instead.
   decision catalog line.
 - The matching LaTeX chapter in `docs/latex/sections/` (e.g.
   `05-rendering-current.tex`, `04-runtime-loop.tex`,
-  `08-services-platform.tex`, `07-game-and-rules.tex`).
+  `08-services-platform.tex`); game decisions also update the game's own `docs/`.
 - `docs/packages/<package>.md` if package ownership changed; the effort's
   design/plan doc (mark the milestone done, link the D-ID).
 - Closed open questions: remove or resolve them in `10-open-questions.tex`.

@@ -70,7 +70,7 @@ for legacy implementations until compatibility coverage no longer needs them.
 ## Documentation and verification
 
 Use `docs/packages/source-layout.md`,
-`docs/latex/sections/07-game-and-rules.tex`, and the formal decision log. Run
+`IllumoGame/docs/07-game-and-rules.tex`, and the formal decision log. Run
 exact ruleset tests plus sparse serial/parallel identity and
 persistence round trips. Include adversarial neighbor counts and every valid
 state. Update this file only for durable Rulesets contracts.

@@ -429,7 +429,7 @@ commands, save/load, clipboard, ruleset workshop and the 3D diagnostic)
 executes inside `IllumoGame.wasm`; `IllumoRuntime` supplies only the window,
 input, rendering, file, dialog, clipboard, display and console services.
 Catalogs may add ruleset IDs; F2 on the canvas edits a rule. See
-[docs/packages/game.md](docs/packages/game.md) and
+[IllumoGame/docs/game.md](IllumoGame/docs/game.md) and
 [docs/wasm-game-cutover-plan.md](docs/wasm-game-cutover-plan.md).
 
 `apps\game\illumo.json` names the module and the simulation lane worker and
@@ -477,7 +477,7 @@ Editing, loading or saving while running discards at most the block in
 flight. `status` shows where generations execute. Overdue whole steps are
 dropped. The visible viewport is a padded, integer-LOD
 cache with tiled uploads. Timing, fade, and upload details:
-[docs/packages/game.md](docs/packages/game.md).
+[IllumoGame/docs/game.md](IllumoGame/docs/game.md).
 
 ### IllEd
 

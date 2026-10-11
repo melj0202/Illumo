@@ -81,8 +81,43 @@ class AppPackage:
         return APP_LABELS.get(self.name, self.name)
 
 
+def game_directory_name(root: Path | None = None) -> str | None:
+    """The root CMakeLists.txt's ILLUMO_GAME_DIR: where the optional game repository goes."""
+    base = root or REPOSITORY_ROOT
+    try:
+        text = (base / "CMakeLists.txt").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = re.search(r"set\(\s*ILLUMO_GAME_DIR\s+\"?([^\")\s]+)\"?\s*\)", text)
+    return match[1] if match else None
+
+
+def game_directory(root: Path | None = None) -> Path | None:
+    """The optional game repository's folder, when it is cloned."""
+    base = root or REPOSITORY_ROOT
+    name = game_directory_name(base)
+    if name is None or not (base / name / "CMakeLists.txt").is_file():
+        return None
+    return base / name
+
+
+def game_missing_message(root: Path | None = None) -> str | None:
+    """Why the game is not in this workspace, or None when it is (or has no slot)."""
+    base = root or REPOSITORY_ROOT
+    name = game_directory_name(base)
+    if name is None or game_directory(base) is not None:
+        return None
+    return (f"The game is not in this workspace: clone its repository into "
+            f"{name}/ at the engine root (see README.md). The engine and its "
+            f"other applications build without it.")
+
+
 def program_directories(root: Path | None = None) -> tuple[Path, ...]:
-    """WASM program directories, in the root CMakeLists.txt's ILLUMO_PROGRAMS order."""
+    """WASM program directories, in the root CMakeLists.txt's ILLUMO_PROGRAMS order.
+
+    The optional game (ILLUMO_GAME_DIR) comes last, as the root CMakeLists.txt
+    appends it, and only when its folder holds a CMakeLists.txt.
+    """
     base = root or REPOSITORY_ROOT
     try:
         text = (base / "CMakeLists.txt").read_text(encoding="utf-8", errors="replace")
@@ -91,7 +126,11 @@ def program_directories(root: Path | None = None) -> tuple[Path, ...]:
     match = re.search(r"set\(\s*ILLUMO_PROGRAMS\s+([^)]*)\)", text)
     if match is None:
         return ()
-    return tuple(base / name.strip('"') for name in match[1].split())
+    programs = [base / name.strip('"') for name in match[1].split()]
+    game = game_directory(base)
+    if game is not None and game not in programs:
+        programs.append(game)
+    return tuple(programs)
 
 
 def installed_apps(root: Path | None = None) -> tuple[AppPackage, ...]:
@@ -4868,6 +4907,13 @@ def run_doctor(arguments: argparse.Namespace) -> None:
                    "run 'python build.py build'.")
         for retired in outputs.retired:
             record("stale output", "warning", retired_output_message(retired))
+    game = game_directory()
+    missing_game = game_missing_message()
+    if game is not None:
+        record("game", "ok", str(game))
+    elif missing_game:
+        # An engine-only workspace is complete; the game is optional.
+        record("game", "ok", missing_game)
     ok = not any(check["status"] == "error" for check in checks)
     if arguments.json:
         print(json.dumps({"ok": ok, "checks": checks}, indent=2))
@@ -5147,6 +5193,7 @@ def create_parser(
     )
 
     packages = app_names()
+    default_package = DEFAULT_APP if DEFAULT_APP in packages else packages[0]
     play_parser = subparsers.add_parser(
         "play",
         parents=[common],
@@ -5155,9 +5202,11 @@ def create_parser(
     play_parser.add_argument(
         "--app",
         dest="package",
-        choices=packages,
-        default=DEFAULT_APP if DEFAULT_APP in packages else packages[0],
-        help=f"installed application to run (default: {DEFAULT_APP}; "
+        # The game stays a valid choice without its repository, so asking for
+        # it explains how to add it instead of failing as an unknown name.
+        choices=packages if DEFAULT_APP in packages else (*packages, DEFAULT_APP),
+        default=default_package,
+        help=f"installed application to run (default: {default_package}; "
              f"{', '.join(packages)})",
     )
     play_parser.add_argument(
@@ -5836,6 +5885,12 @@ def run_application(arguments: argparse.Namespace) -> None:
             f"{WASM_RUNTIME_APPLICATION} is only built with the WASM runtime enabled; "
             "drop --no-wasm (or choose another --app)."
         )
+    packages = app_names()
+    package = getattr(arguments, "package", None) or (
+        DEFAULT_APP if DEFAULT_APP in packages else packages[0])
+    missing_game = game_missing_message()
+    if package == DEFAULT_APP and DEFAULT_APP not in packages and missing_game:
+        raise BuildError(missing_game)
     if not arguments.no_build:
         cmake = configure(arguments, runner)
         runner.run(build_command(arguments, cmake, app_name))
@@ -5850,7 +5905,6 @@ def run_application(arguments: argparse.Namespace) -> None:
     explicit_package = any(
         item.split("=", 1)[0] in ("--app", "--package", "--game") for item in app_arguments
     )
-    package = getattr(arguments, "package", None) or DEFAULT_APP
     if app_name == WASM_RUNTIME_APPLICATION and not explicit_package:
         app_arguments = ["--app", package, *app_arguments]
     if app_name == WASM_RUNTIME_APPLICATION and not runner.dry_run:

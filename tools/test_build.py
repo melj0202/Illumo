@@ -1037,10 +1037,48 @@ class WasmRuntimeTests(unittest.TestCase):
 
     def test_installed_apps_follow_cmake_staging(self):
         apps = build.installed_apps()
-        self.assertEqual([app.name for app in apps],
-                         ["game", "illed", "meshviewer", "playground"])
-        self.assertEqual(apps[0].module, "IllumoGame.wasm")
+        engine_apps = ["illed", "meshviewer", "playground"]
+        if build.game_directory() is None:
+            self.assertEqual([app.name for app in apps], engine_apps)
+        else:
+            self.assertEqual([app.name for app in apps], [*engine_apps, "game"])
+            self.assertEqual(apps[-1].module, "IllumoGame.wasm")
         self.assertEqual(build.app_names(self.root), (build.DEFAULT_APP,))
+
+    def write_game_workspace(self, with_game: bool):
+        (self.root / "CMakeLists.txt").write_text(
+            'set(ILLUMO_GAME_DIR "Game")\nset(ILLUMO_PROGRAMS Tool)\n')
+        for name, app in (("Tool", "tool"), ("Game", "game")):
+            if name == "Game" and not with_game:
+                continue
+            (self.root / name).mkdir()
+            (self.root / name / "CMakeLists.txt").write_text("")
+            (self.root / name / "PackageTargets.cmake").write_text(
+                f"illumo_stage_app({name}Package {app} MODULE {name}.wasm)\n")
+
+    def test_optional_game_comes_last_when_cloned(self):
+        self.write_game_workspace(with_game=True)
+        self.assertEqual(build.program_directories(self.root),
+                         (self.root / "Tool", self.root / "Game"))
+        self.assertEqual(build.app_names(self.root), ("tool", "game"))
+        self.assertIsNone(build.game_missing_message(self.root))
+
+    def test_missing_game_is_explained_not_listed(self):
+        self.write_game_workspace(with_game=False)
+        self.assertEqual(build.program_directories(self.root), (self.root / "Tool",))
+        self.assertEqual(build.app_names(self.root), ("tool",))
+        self.assertIsNone(build.game_directory(self.root))
+        self.assertIn("Game/", build.game_missing_message(self.root))
+
+    def test_play_without_the_game_explains_how_to_add_it(self):
+        arguments = build.create_parser().parse_args(
+            ["play", "--app", build.DEFAULT_APP, "--no-build", "--build-dir", str(self.root)])
+        with patch.object(build, "app_names", return_value=("illed",)), \
+             patch.object(build, "game_missing_message", return_value="clone the game"), \
+             patch.object(build.CommandRunner, "run") as run:
+            with self.assertRaisesRegex(build.BuildError, "clone the game"):
+                build.run_application(arguments)
+        run.assert_not_called()
 
     def test_runtime_outputs_and_retired_outputs(self):
         suffix = ".exe" if build.os.name == "nt" else ""
@@ -1127,7 +1165,11 @@ class WasmRuntimeTests(unittest.TestCase):
         state = build.DashboardState(applications=("illed", "game"))
         self.assertEqual((state.application, state.application_label), ("game", "IllumoGame"))
         state.selected = next(i for i, item in enumerate(build.DASHBOARD_ITEMS) if item[2] == "wasm")
-        with patch.object(build, "WASM_HOST_SUPPORTED", True):
+        # Installed as packages whether or not the game repository is cloned.
+        packages = (build.AppPackage("illed", "IllEd.wasm"),
+                    build.AppPackage("game", "IllumoGame.wasm"))
+        with patch.object(build, "WASM_HOST_SUPPORTED", True), \
+             patch.object(build, "installed_apps", return_value=packages):
             state.wasm_enabled = True
             build.adjust_dashboard_setting(state, 1)
             self.assertTrue(build.dashboard_settings(state)["no_wasm"])
@@ -1734,10 +1776,13 @@ class VersionTests(unittest.TestCase):
         self.assertNotEqual(stage().returncode, 0, "a source manifest may not set version")
 
     def test_shipped_manifests_leave_version_to_the_build(self):
-        for app in ("IllumoGame", "IllEd", "IllMeshViewer"):
-            manifest = json.loads(
-                (build.REPOSITORY_ROOT / app / "illumo.json").read_text(encoding="utf-8"))
-            self.assertNotIn("version", manifest, app)
+        # The game's manifest is checked only when its repository is cloned.
+        for directory in (build.game_directory(), build.REPOSITORY_ROOT / "IllEd",
+                          build.REPOSITORY_ROOT / "IllMeshViewer"):
+            if directory is None:
+                continue
+            manifest = json.loads((directory / "illumo.json").read_text(encoding="utf-8"))
+            self.assertNotIn("version", manifest, directory.name)
 
 
 if __name__ == "__main__":

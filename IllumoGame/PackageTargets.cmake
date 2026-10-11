@@ -32,7 +32,7 @@ illumo_stage_app(IllumoGamePackage game
     "${_game}/Scenes/render3d-test.ilsc"
     "Scenes/render3d-test.ilsc"
     # app.ico at the package root replaces the engine's window icon (D-E39).
-    "${CMAKE_SOURCE_DIR}/docs/brand/csim/ico/csim.ico"
+    "${_game}/Brand/ico/csim.ico"
     "app.ico"
     ${_game_sounds})
 illumo_guest_byproducts("${_guest_build}/CSimDomainGuest.wasm")

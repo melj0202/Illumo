@@ -117,7 +117,7 @@ up on jelly springs that bounce past their slots (the footer continues below
 the screen edge so a lifted bar never opens a gap); on exit, the palette leads
 the bar and both ease away without ringing. The canvas inset tracks the
 visible portion of the moving footer, clamped so it never bounces. Reduced UI motion snaps this transition. The palette travels by
-its visible height plus the full footer height before it is removed. See [game controls](packages/game.md).
+its visible height plus the full footer height before it is removed. See [game controls](../IllumoGame/docs/game.md).
 
 **The workspace separates the reusable `Illumo` static library from in-tree
 applications. Illumo owns the generic application runner, platform
