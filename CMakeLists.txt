@@ -10,7 +10,7 @@ add_subdirectory(Illumo)
 
 # The game is an optional nested repository; the engine builds without it.
 # A plain set(), not a cache entry, so a stale cache cannot keep an old folder.
-set(ILLUMO_GAME_DIR "IllumoGame")
+set(ILLUMO_GAME_DIR "CSim")
 set(ILLUMO_PROGRAMS IllEd IllMeshViewer Playground)
 set(_illumo_test_runners IllumoTestsDiscover IllEdTestsDiscover
   IllMeshViewerTestsDiscover IllumoPublicHeaderSmoke)
