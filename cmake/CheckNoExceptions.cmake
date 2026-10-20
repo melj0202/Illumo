@@ -3,15 +3,19 @@
 # MSVC only warns (C4530, an error for first-party targets), so this check
 # keeps both toolchains honest, including code no configuration compiles.
 #
-# cmake -DSOURCE_DIR=<workspace> [-DGAME_DIR=<game folder>] -P CheckNoExceptions.cmake
+# cmake -DSOURCE_DIR=<workspace> [-DGAME_DIR=<game folder>]
+#   [-DNESTED_DIRS=<folder>|<folder>...] -P CheckNoExceptions.cmake
 #
-# GAME_DIR is the optional game repository's folder (ILLUMO_GAME_DIR); a
+# GAME_DIR is the optional game repository's folder (ILLUMO_GAME_DIR) and
+# NESTED_DIRS the other optional program folders (ILLUMO_NESTED_PROGRAMS); a
 # missing folder contributes no files.
 if(NOT SOURCE_DIR)
   message(FATAL_ERROR "SOURCE_DIR is required")
 endif()
 
-set(_roots Illumo IllumoGuest IllEd IllMeshViewer Templates ${GAME_DIR})
+string(REPLACE "|" ";" _nested_dirs "${NESTED_DIRS}")
+set(_roots Illumo IllumoGuest IllEd IllMeshViewer Templates ${GAME_DIR}
+  ${_nested_dirs})
 set(_files)
 foreach(_root IN LISTS _roots)
   file(GLOB_RECURSE _found

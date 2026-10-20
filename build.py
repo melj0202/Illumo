@@ -115,8 +115,9 @@ def game_missing_message(root: Path | None = None) -> str | None:
 def program_directories(root: Path | None = None) -> tuple[Path, ...]:
     """WASM program directories, in the root CMakeLists.txt's ILLUMO_PROGRAMS order.
 
-    The optional game (ILLUMO_GAME_DIR) comes last, as the root CMakeLists.txt
-    appends it, and only when its folder holds a CMakeLists.txt.
+    The optional game (ILLUMO_GAME_DIR) and then the optional nested programs
+    (ILLUMO_NESTED_PROGRAMS) come last, as the root CMakeLists.txt appends
+    them, and only when their folders hold a CMakeLists.txt.
     """
     base = root or REPOSITORY_ROOT
     try:
@@ -130,7 +131,29 @@ def program_directories(root: Path | None = None) -> tuple[Path, ...]:
     game = game_directory(base)
     if game is not None and game not in programs:
         programs.append(game)
+    for nested in nested_program_directories(base):
+        if nested not in programs:
+            programs.append(nested)
     return tuple(programs)
+
+
+def nested_program_directories(root: Path | None = None) -> tuple[Path, ...]:
+    """The root CMakeLists.txt's ILLUMO_NESTED_PROGRAMS that hold a CMakeLists.txt.
+
+    Like the game, each is an optional folder at the engine root, and the root
+    CMakeLists.txt appends the present ones after it.
+    """
+    base = root or REPOSITORY_ROOT
+    try:
+        text = (base / "CMakeLists.txt").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ()
+    match = re.search(r"set\(\s*ILLUMO_NESTED_PROGRAMS\s+([^)]*)\)", text)
+    if match is None:
+        return ()
+    names = (name.strip('"') for name in match[1].split())
+    return tuple(base / name for name in names
+                 if (base / name / "CMakeLists.txt").is_file())
 
 
 def installed_apps(root: Path | None = None) -> tuple[AppPackage, ...]:

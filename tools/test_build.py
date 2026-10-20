@@ -1036,7 +1036,9 @@ class WasmRuntimeTests(unittest.TestCase):
         self.assertEqual(build.discover_workspace_projects(self.root).applications, ("App",))
 
     def test_installed_apps_follow_cmake_staging(self):
-        apps = build.installed_apps()
+        # Nested programs present in this checkout are covered separately.
+        with patch.object(build, "nested_program_directories", return_value=()):
+            apps = build.installed_apps()
         engine_apps = ["illed", "meshviewer", "playground"]
         if build.game_directory() is None:
             self.assertEqual([app.name for app in apps], engine_apps)
@@ -1062,6 +1064,18 @@ class WasmRuntimeTests(unittest.TestCase):
                          (self.root / "Tool", self.root / "Game"))
         self.assertEqual(build.app_names(self.root), ("tool", "game"))
         self.assertIsNone(build.game_missing_message(self.root))
+
+    def test_present_nested_programs_follow_the_game(self):
+        self.write_game_workspace(with_game=True)
+        with (self.root / "CMakeLists.txt").open("a") as cmake:
+            cmake.write("set(ILLUMO_NESTED_PROGRAMS Extra Absent)\n")
+        (self.root / "Extra").mkdir()
+        (self.root / "Extra" / "CMakeLists.txt").write_text("")
+        (self.root / "Extra" / "PackageTargets.cmake").write_text(
+            "illumo_stage_app(ExtraPackage extra MODULE Extra.wasm)\n")
+        self.assertEqual(build.nested_program_directories(self.root),
+                         (self.root / "Extra",))
+        self.assertEqual(build.app_names(self.root), ("tool", "game", "extra"))
 
     def test_missing_game_is_explained_not_listed(self):
         self.write_game_workspace(with_game=False)

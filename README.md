@@ -68,6 +68,7 @@ illumo/
     Shader/ Assets/      # Runtime files staged beside executables
     thirdparty/          # Vendored dependencies
   CSim/                  # Optional: the CSim game repository, cloned here and ignored
+  Saturn/                # Optional: another ignored program folder (ILLUMO_NESTED_PROGRAMS)
   IllumoGuest/           # WASM guest SDK and guest build tree (WASI SDK)
   IllEd/                 # SceneGraph world editor and illumo.json manifest
   IllMeshViewer/         # Mesh viewer and illumo.json manifest
@@ -100,6 +101,14 @@ Playground) configure, build and pass their tests; `python build.py doctor`
 says the game is not cloned. `CSim/ENGINE_MIN_COMMIT` names the oldest engine
 commit the game builds against, and configure warns when the engine checkout is
 older. CSim cannot be configured on its own.
+
+Other optional programs work the same way. The root `CMakeLists.txt` lists
+their folders in `ILLUMO_NESTED_PROGRAMS` (currently `Saturn/`, also ignored);
+a listed folder that holds a `CMakeLists.txt` is built after the game, its
+package is staged and playable with `python build.py play --app <id>`, and its
+`<Folder>TestsDiscover` runner joins the suite. `python tools/create_project.py
+<Folder> --name <Folder> --in-workspace` starts one from the spinning-cube
+template.
 
 `ILLUMO_ENABLE_CLANG_TIDY` defaults **ON**. Configure fails if `clang-tidy`
 is not on `PATH`. This repository also defaults `ILLUMO_BUILD_DOCUMENTATION`
@@ -187,6 +196,15 @@ ctest --test-dir build-workspace -C Release -L IllumoWorkspace --output-on-failu
 ```
 
 Headless tests do not prove the live OpenGL window or native Win32 dialogs.
+
+That same Release label also runs on GitHub for pushes to `main` and
+`release/**`, and for pull requests
+(`.github/workflows/windows-tests.yml`). The job passes `--no-tidy` and
+`--no-docs` because the runner has neither LLVM nor TeX. CSim is private, so
+game tests are included only after the Illumo secret `CSIM_READ_TOKEN` is set
+to a token that can read `melj0202/CSim`. Without it the job still runs the
+engine, IllEd, IllMeshViewer, and Playground cases. The optional repository
+variable `CSIM_REF` selects the CSim branch (default `main`).
 
 | Problem | What to do |
 |---|---|
@@ -617,7 +635,9 @@ ctest --test-dir build -C Release -N -L IllumoWorkspace
 ```
 
 See `Illumo/Tests/README.md`, `CSim/Tests/README.md`,
-`IllEd/Tests/README.md`, and `IllMeshViewer/Tests/README.md`.
+`IllEd/Tests/README.md`, and `IllMeshViewer/Tests/README.md`. GitHub runs
+this Release label from `.github/workflows/windows-tests.yml`; see the
+Windows **Test** section for the CSim secret.
 
 Clang/LLVM coverage (85% production-line gate and HTML report):
 

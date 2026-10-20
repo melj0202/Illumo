@@ -22,6 +22,24 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${ILLUMO_GAME_DIR}/CMakeLists.txt")
   list(APPEND _illumo_test_runners IllumoGameTestsDiscover)
 endif()
 
+# Other optional program folders, each a separately versioned project cloned
+# or created at the engine root and ignored here, like the game. A folder adds
+# itself only when it holds a CMakeLists.txt; its test runner is
+# <folder>TestsDiscover when it has one.
+set(ILLUMO_NESTED_PROGRAMS Saturn)
+foreach(_nested IN LISTS ILLUMO_NESTED_PROGRAMS)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_nested}/CMakeLists.txt")
+    add_subdirectory("${_nested}")
+    list(APPEND ILLUMO_PROGRAMS "${_nested}")
+    if(TARGET ${_nested}TestsDiscover)
+      list(APPEND _illumo_test_runners ${_nested}TestsDiscover)
+    endif()
+  endif()
+endforeach()
+unset(_nested)
+# A "|"-separated copy for the command-line scripts below.
+string(JOIN "|" _illumo_nested_dirs ${ILLUMO_NESTED_PROGRAMS})
+
 add_subdirectory(IllEd)
 add_subdirectory(IllMeshViewer)
 
@@ -30,6 +48,7 @@ if(BUILD_TESTING)
   add_test(NAME Illumo.Build.NoExceptions
     COMMAND ${CMAKE_COMMAND} "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
       "-DGAME_DIR=${ILLUMO_GAME_DIR}"
+      "-DNESTED_DIRS=${_illumo_nested_dirs}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CheckNoExceptions.cmake")
   set_tests_properties(Illumo.Build.NoExceptions PROPERTIES
     LABELS "Illumo;IllumoWorkspace")

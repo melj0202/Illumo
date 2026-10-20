@@ -127,3 +127,5 @@ secrets*.json
 
 # The game is its own repository (CSim), cloned here; see README.md.
 /CSim/
+# So are the other optional programs (ILLUMO_NESTED_PROGRAMS).
+/Saturn/

@@ -229,7 +229,7 @@ in a nested session, say so rather than calling the port done.
 
 ## Follow-up, not required to launch
 
-- Headless GitHub Actions on `ubuntu-24.04`
+- Headless GitHub Actions on `ubuntu-24.04` (Windows Release runs are `.github/workflows/windows-tests.yml`)
 - `QueryProcessMemoryStats` via `/proc/self/statm`
 - `QuerySystemInfo` via `uname`, `/proc/cpuinfo` and `sysinfo`
 - Native Wayland GLFW plus gtkmm re-smoke

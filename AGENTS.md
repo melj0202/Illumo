@@ -238,6 +238,14 @@ cmake --build build --config Release
 ctest --test-dir build -C Release -L IllumoWorkspace --output-on-failure
 ```
 
+GitHub Actions runs that Release `IllumoWorkspace` label on `windows-2022`
+for pushes to `main` and `release/**`, and for pull requests
+(`.github/workflows/windows-tests.yml`). The job passes `--no-tidy` and
+`--no-docs`. CSim is private, so game tests run only when the repository
+secret `CSIM_READ_TOKEN` can read `melj0202/CSim`; without it the engine,
+IllEd, IllMeshViewer, and Playground cases still run. Optional variable
+`CSIM_REF` selects the CSim branch.
+
 `build.py` passes `ILLUMO_BUILD_WASM_RUNTIME` explicitly (`--no-wasm` to
 skip), because `option()` keeps a stale cached `OFF`. `python build.py
 doctor` reports the toolchain, an `apps` check, and stale native pre-WASM

@@ -1,0 +1,94 @@
+# Release IllumoWorkspace on a clean Windows runner.
+#
+# Same command as a local `python build.py test`, with clang-tidy and the
+# LaTeX docs off because the runner has neither LLVM nor TeX. Benchmarks stay
+# off this label (IllumoBenchmark).
+#
+# CSim is a private repository, so game tests are included only when the
+# Illumo secret CSIM_READ_TOKEN can read melj0202/CSim. Optional repository
+# variable CSIM_REF selects that checkout (default main).
+
+name: Windows tests
+
+on:
+  push:
+    branches:
+      - main
+      - "release/**"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  illumo-workspace:
+    name: Release IllumoWorkspace
+    runs-on: windows-2022
+    timeout-minutes: 240
+    steps:
+      - name: Note whether CSim can be cloned
+        id: csim
+        env:
+          CSIM_READ_TOKEN: ${{ secrets.CSIM_READ_TOKEN }}
+        shell: pwsh
+        run: |
+          if ($env:CSIM_READ_TOKEN) {
+            "present=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
+          } else {
+            "present=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
+          }
+
+      - name: Checkout Illumo
+        uses: actions/checkout@v4
+        with:
+          # A shallow clone forces BuildInfo's build number to 0.
+          fetch-depth: 0
+
+      - name: Checkout CSim
+        if: steps.csim.outputs.present == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: melj0202/CSim
+          ref: ${{ vars.CSIM_REF || 'main' }}
+          token: ${{ secrets.CSIM_READ_TOKEN }}
+          path: CSim
+
+      - name: Report checkout
+        shell: pwsh
+        run: |
+          cmake --version
+          python --version
+          if (Test-Path -LiteralPath CSim/CMakeLists.txt) {
+            "CSim is checked out. Game tests are part of this run." >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            "CSim is not checked out. Engine, IllEd, IllMeshViewer, and Playground tests still run. Add the CSIM_READ_TOKEN secret to include the game." >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Cache the pinned WASM toolchain
+        uses: actions/cache@v4
+        with:
+          path: build-wasm-tools
+          key: wasm-tools-${{ hashFiles('tools/bootstrap-wasm.ps1', 'cmake/IllumoWasm.cmake') }}
+
+      - name: Fetch the WASM toolchain
+        shell: pwsh
+        run: python build.py wasm-tools
+
+      - name: Build and run IllumoWorkspace
+        shell: pwsh
+        run: python build.py test --no-tidy --no-docs --config Release --parallel --architecture x64
+
+      - name: Upload CTest logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-logs
+          if-no-files-found: ignore
+          path: |
+            build-workspace/Testing/Temporary/LastTest.log
+            build-workspace/Testing/Temporary/LastTestsFailed.log
