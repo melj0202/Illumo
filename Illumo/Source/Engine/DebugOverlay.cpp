@@ -15,6 +15,7 @@
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
 #include <algorithm>
+#include <memory>
 #include <queue>
 #include <string>
 #include <vector>
@@ -22,6 +23,8 @@
 DebugOverlay::DebugOverlay(FrameProfiler* profiler)
   : m_profiler(profiler)
   , diagnosticsLabel(nullptr)
+  , memoryLabel(nullptr)
+  , m_frameGraph()
   , diagnostics(std::make_unique<DebugOverlayState>())
   , watermarkLabel(nullptr)
   , rendererDemo(nullptr)
@@ -59,8 +62,26 @@ DebugOverlay::start(IllumoContext& context)
   GLString::setRenderWindow(ic->window);
 
   diagnosticsLabel =
-    new GLString("", 80, 255, 120, 255, 18, 12, 12, ic->renderer);
-  diagnosticsLabel->setPanelStyle(UiTheme::statusPanel());
+    new GLString("", 255, 255, 255, 255, 18, 12, 12, ic->renderer);
+  diagnosticsLabel->setGlyphBacking(true);
+  memoryLabel = new GLString("", 255, 255, 255, 255, 18, 12, 12, ic->renderer);
+  memoryLabel->setGlyphBacking(true);
+  m_frameGraph = std::make_unique<GameVisual>();
+  m_frameGraph->setWindow(ic->window);
+  m_frameGraph->setCamera(ic->camera);
+  m_frameGraph->setSpace(PrimitiveSpace::Pixels);
+  m_frameGraph->setLayerHint(RenderLayerId::Debug);
+  m_frameGraph->prepare(ic->renderer);
+  m_frameGraph->setVisible(false);
+  m_diagnosticsBackdrop = std::make_unique<GameVisual>();
+  m_diagnosticsBackdrop->setWindow(ic->window);
+  m_diagnosticsBackdrop->setCamera(ic->camera);
+  m_diagnosticsBackdrop->setSpace(PrimitiveSpace::Pixels);
+  m_diagnosticsBackdrop->setLayerHint(RenderLayerId::Debug);
+  m_diagnosticsBackdrop->prepare(ic->renderer);
+  m_diagnosticsBackdrop->addFilledRect(
+    0.0f, 0.0f, 1.0f, 1.0f, ColorRgba{ 0, 0, 0, 168 });
+  m_diagnosticsBackdrop->setVisible(false);
   *diagnostics = DebugOverlayState{};
   updateDiagnostics(0.0);
 
@@ -305,19 +326,208 @@ DebugOverlay::unregisterRendererCommands()
 void
 DebugOverlay::updateDiagnostics(double dt)
 {
-  if (diagnosticsLabel == nullptr || ic == nullptr || ic->envVars == nullptr) {
+  if (diagnosticsLabel == nullptr || memoryLabel == nullptr || ic == nullptr ||
+      ic->envVars == nullptr || ic->window == nullptr) {
     return;
   }
   ILLUMO_PROFILE_ZONE("DebugOverlay.updateDiagnostics");
-  const IBackend* backend = ic->renderer->getBackend();
-  if (diagnostics->update(dt,
-                          ic->envVars->getVar("showFPS").valueAsBool,
-                          ic->envVars->getVar("showMemory").valueAsBool,
-                          ic->window->isFramePaced(),
-                          backend != nullptr ? backend->getFPS() : 0)) {
-    diagnosticsLabel->setContent(diagnostics->content());
+  const bool showFps = ic->envVars->getVar("showFPS").valueAsBool;
+  const bool showMemory = ic->envVars->getVar("showMemory").valueAsBool;
+  diagnostics->update(dt,
+                      showFps,
+                      showMemory,
+                      ic->window->isFramePaced(),
+                      ic->window->getRefreshRate(),
+                      getTargetFps(ic->envVars));
+  diagnosticsLabel->setContent(diagnostics->frameRateText());
+  diagnosticsLabel->setVisible(showFps &&
+                               !diagnostics->frameRateText().empty());
+  memoryLabel->setContent(diagnostics->memoryText());
+  memoryLabel->setVisible(showMemory && !diagnostics->memoryText().empty());
+  layoutDiagnostics();
+  updateFrameGraph();
+}
+
+void
+DebugOverlay::layoutDiagnostics()
+{
+  const float sizePt = static_cast<float>(diagnosticsLabel->getSize());
+  float textHeight = sizePt * 2.0f;
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  if (font && !diagnostics->frameRateText().empty()) {
+    textHeight = font->measureText(diagnostics->frameRateText(), sizePt).height;
   }
-  diagnosticsLabel->setVisible(diagnostics->visible());
+  const float graphGap = 4.0f;
+  const float graphHeight = 36.0f;
+  const float graphWidth = 240.0f;
+  float blockWidth = 0.0f;
+  float blockBottom = 12.0f;
+  if (diagnostics->showsFrameRate() && !diagnostics->frameRateText().empty()) {
+    float textWidth = 0.0f;
+    if (font != nullptr) {
+      const TextBounds bounds =
+        font->measureText(diagnostics->frameRateText(), sizePt);
+      textHeight = bounds.height;
+      textWidth = bounds.width;
+    }
+    blockWidth = textWidth > graphWidth ? textWidth : graphWidth;
+    blockBottom = 12.0f + textHeight + graphGap + graphHeight;
+  }
+  float memoryY = 12.0f;
+  if (diagnostics->showsFrameRate()) {
+    memoryY = blockBottom + 6.0f;
+  }
+  memoryLabel->setX(12);
+  memoryLabel->setY(static_cast<int>(memoryY));
+  if (memoryLabel->isVisible() && font != nullptr &&
+      !diagnostics->memoryText().empty()) {
+    const TextBounds bounds =
+      font->measureText(diagnostics->memoryText(), sizePt);
+    if (bounds.width > blockWidth) {
+      blockWidth = bounds.width;
+    }
+    blockBottom = memoryY + bounds.height;
+  } else if (memoryLabel->isVisible()) {
+    blockBottom = memoryY + sizePt * 3.0f;
+  }
+  if (m_diagnosticsBackdrop == nullptr) {
+    return;
+  }
+  const bool showBlock =
+    diagnosticsLabel->isVisible() || memoryLabel->isVisible();
+  m_diagnosticsBackdrop->setVisible(showBlock && blockWidth > 0.0f);
+  ShapePrimitive* plate = m_diagnosticsBackdrop->getShape(0);
+  if (plate != nullptr) {
+    const float pad = 8.0f;
+    plate->rect.x = 12.0f - pad;
+    plate->rect.y = 12.0f - pad;
+    plate->rect.w = blockWidth + pad * 2.0f;
+    plate->rect.h = (blockBottom - 12.0f) + pad * 2.0f;
+  }
+}
+
+void
+DebugOverlay::updateFrameGraph()
+{
+  if (m_frameGraph == nullptr || diagnostics == nullptr) {
+    return;
+  }
+  const bool show =
+    diagnostics->showsFrameRate() && diagnostics->frameTimeCount() >= 2;
+  if (!show) {
+    if (m_frameGraph->isVisible()) {
+      m_frameGraph->clearPrimitives();
+      m_frameGraph->setVisible(false);
+      m_graphSegments = -1;
+    }
+    return;
+  }
+
+  float samples[DebugOverlayState::kFrameTimeCapacity];
+  const int count =
+    diagnostics->copyFrameTimes(samples, DebugOverlayState::kFrameTimeCapacity);
+  if (count < 2) {
+    m_frameGraph->setVisible(false);
+    return;
+  }
+
+  const float sizePt = diagnosticsLabel != nullptr
+                         ? static_cast<float>(diagnosticsLabel->getSize())
+                         : 18.0f;
+  float textHeight = sizePt * 2.0f;
+  std::shared_ptr<Font> font = Font::getDefaultFont();
+  if (font && !diagnostics->frameRateText().empty()) {
+    textHeight = font->measureText(diagnostics->frameRateText(), sizePt).height;
+  }
+  const float left = 12.0f;
+  const float top = 12.0f + textHeight + 4.0f;
+  const float width = 240.0f;
+  const float height = 36.0f;
+  const double budget = frameBudgetSeconds(
+    diagnostics->vsync(), diagnostics->refreshHz(), diagnostics->targetFps());
+  const float scale = static_cast<float>(budget > 0.0 ? budget * 2.0 : 0.05);
+  const ColorRgba white{ 255, 255, 255, 255 };
+  const ColorRgba black{ 0, 0, 0, 255 };
+
+  float plotted[DebugOverlayState::kFrameTimeCapacity];
+  for (int index = 0; index < count; ++index) {
+    float unit = samples[index] / scale;
+    if (unit < 0.0f) {
+      unit = 0.0f;
+    }
+    if (unit > 1.0f) {
+      unit = 1.0f;
+    }
+    plotted[index] = top + height - unit * height;
+  }
+  const int segments = count - 1;
+  const float step = width / static_cast<float>(segments);
+  // Scale is two budgets tall, so one budget (the cap, or one refresh) sits
+  // halfway up. Slower frames rise toward the top and clamp there.
+  const float markY = top + height * 0.5f;
+  if (m_graphSegments != segments) {
+    m_frameGraph->clearPrimitives();
+    m_frameGraph->addLine(left + 1.0f,
+                          markY + 1.0f,
+                          left + width + 1.0f,
+                          markY + 1.0f,
+                          black,
+                          2.0f);
+    for (int index = 0; index < segments; ++index) {
+      const float x0 = left + step * static_cast<float>(index);
+      const float x1 = left + step * static_cast<float>(index + 1);
+      m_frameGraph->addLine(x0 + 1.0f,
+                            plotted[index] + 1.0f,
+                            x1 + 1.0f,
+                            plotted[index + 1] + 1.0f,
+                            black,
+                            2.0f);
+    }
+    m_frameGraph->addLine(left, markY, left + width, markY, white, 1.0f);
+    for (int index = 0; index < segments; ++index) {
+      const float x0 = left + step * static_cast<float>(index);
+      const float x1 = left + step * static_cast<float>(index + 1);
+      m_frameGraph->addLine(
+        x0, plotted[index], x1, plotted[index + 1], white, 1.0f);
+    }
+    m_graphSegments = segments;
+  } else {
+    ShapePrimitive* mark = m_frameGraph->getShape(0);
+    if (mark != nullptr) {
+      mark->x0 = left + 1.0f;
+      mark->y0 = markY + 1.0f;
+      mark->x1 = left + width + 1.0f;
+      mark->y1 = markY + 1.0f;
+    }
+    for (int index = 0; index < segments; ++index) {
+      ShapePrimitive* segment = m_frameGraph->getShape(1 + index);
+      if (segment == nullptr) {
+        continue;
+      }
+      segment->x0 = left + step * static_cast<float>(index) + 1.0f;
+      segment->y0 = plotted[index] + 1.0f;
+      segment->x1 = left + step * static_cast<float>(index + 1) + 1.0f;
+      segment->y1 = plotted[index + 1] + 1.0f;
+    }
+    ShapePrimitive* whiteMark = m_frameGraph->getShape(1 + segments);
+    if (whiteMark != nullptr) {
+      whiteMark->x0 = left;
+      whiteMark->y0 = markY;
+      whiteMark->x1 = left + width;
+      whiteMark->y1 = markY;
+    }
+    for (int index = 0; index < segments; ++index) {
+      ShapePrimitive* segment = m_frameGraph->getShape(2 + segments + index);
+      if (segment == nullptr) {
+        continue;
+      }
+      segment->x0 = left + step * static_cast<float>(index);
+      segment->y0 = plotted[index];
+      segment->x1 = left + step * static_cast<float>(index + 1);
+      segment->y1 = plotted[index + 1];
+    }
+  }
+  m_frameGraph->setVisible(true);
 }
 
 void
@@ -786,6 +996,12 @@ DebugOverlay::stop()
     delete diagnosticsLabel;
     diagnosticsLabel = nullptr;
   }
+  if (memoryLabel) {
+    delete memoryLabel;
+    memoryLabel = nullptr;
+  }
+  m_frameGraph.reset();
+  m_diagnosticsBackdrop.reset();
   if (watermarkLabel) {
     delete watermarkLabel;
     watermarkLabel = nullptr;
@@ -803,8 +1019,17 @@ DebugOverlay::dispatch(DrawList& scene)
   if (ic->commandLine && ic->commandLine->wantsDraw()) {
     scene.AddDrawable(ic->commandLine, RenderLayerId::UI);
   }
+  if (m_diagnosticsBackdrop != nullptr && m_diagnosticsBackdrop->isVisible()) {
+    scene.AddDrawable(m_diagnosticsBackdrop.get(), RenderLayerId::Debug);
+  }
   if (diagnosticsLabel && diagnosticsLabel->isVisible()) {
     scene.AddDrawable(diagnosticsLabel, RenderLayerId::Debug);
+  }
+  if (m_frameGraph != nullptr && m_frameGraph->isVisible()) {
+    scene.AddDrawable(m_frameGraph.get(), RenderLayerId::Debug);
+  }
+  if (memoryLabel && memoryLabel->isVisible()) {
+    scene.AddDrawable(memoryLabel, RenderLayerId::Debug);
   }
   if (m_profilerOverlay != nullptr && m_profiler->enabled()) {
     scene.AddDrawable(&m_profilerOverlay->visual(), RenderLayerId::Debug);

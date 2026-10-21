@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Rendering/DisplayMode.h>
 #include <Illumo/Rendering/WindowIcon.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <array>
@@ -26,8 +27,11 @@ public:
   }
   virtual ~IRenderWindow() = default;
   virtual void updateWindow() = 0;
-  // The window publishes the resulting fullscreen state to its environment.
-  // A rejected toggle leaves that state unchanged.
+  // The window publishes the resulting mode to its environment. A rejected
+  // change leaves that state unchanged.
+  virtual DisplayMode displayMode() const { return DisplayMode::Window; }
+  virtual void setDisplayMode(DisplayMode mode) { (void)mode; }
+  // Window and fullscreen window. Exclusive returns to a normal window.
   virtual void toggleFullscreen() = 0;
   virtual void reinitializeWindow(const int width,
                                   const int height,

@@ -35,7 +35,10 @@ public:
     // the wire's range and quantized as the host will report it back.
     const float preference = UiScale::stored(scale);
     GuestDisplayState desired;
-    desired.fullscreen = m_environment->getVar("fullscreen").valueAsBool;
+    desired.displayMode =
+      static_cast<std::uint32_t>(displayModeFromEnvironment(m_environment));
+    desired.fullscreen =
+      desired.displayMode != GuestDisplayState::kDisplayModeWindow;
     desired.vsync = vsync.value.empty() || vsync.valueAsBool;
     desired.fps = static_cast<std::uint32_t>(
       std::clamp(fps.value.empty() ? 60L : fps.valueAsLong, 0L, 1000L));
@@ -75,6 +78,9 @@ public:
     m_display->pump();
     if (m_display->idle() && m_display->ready() && m_display->error().empty()) {
       const GuestDisplayState& actual = m_display->actual();
+      m_environment->setVar(
+        "displayMode",
+        displayModeName(static_cast<DisplayMode>(actual.displayMode)));
       m_environment->setVar("fullscreen", actual.fullscreen);
       m_environment->setVar("vsync", actual.vsync);
       m_environment->setVar("fps", actual.fps);
@@ -114,15 +120,24 @@ public:
   }
   bool systemCursorHidden() const { return m_hideSystemCursor; }
   void updateWindow() override {}
-  void toggleFullscreen() override
+  DisplayMode displayMode() const override
   {
-    if (m_display == nullptr || m_environment == nullptr) {
+    return displayModeFromEnvironment(m_environment);
+  }
+  void setDisplayMode(DisplayMode mode) override
+  {
+    if (m_environment == nullptr) {
       illumoFatal("GuestSnapshotWindow: no display service is bound");
     }
-    m_environment->setVar("fullscreen",
-                          !m_environment->getVar("fullscreen").valueAsBool);
+    storeDisplayMode(m_environment, mode);
     m_requestedDisplay = false;
     synchronizeDisplay();
+  }
+  void toggleFullscreen() override
+  {
+    setDisplayMode(displayMode() == DisplayMode::Window
+                     ? DisplayMode::FullscreenWindow
+                     : DisplayMode::Window);
   }
   void reinitializeWindow(int, int, const std::string&) override
   {

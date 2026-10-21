@@ -16,6 +16,7 @@ GLString::GLString()
   , x(0)
   , y(0)
   , contentDirty(true)
+  , glyphBacking(false)
   , renderer(nullptr)
 {
   visual.setSpace(PrimitiveSpace::Pixels);
@@ -40,6 +41,7 @@ GLString::GLString(std::string content,
   , x(x)
   , y(y)
   , contentDirty(true)
+  , glyphBacking(false)
   , renderer(renderer)
 {
   visual.setSpace(PrimitiveSpace::Pixels);
@@ -108,7 +110,26 @@ GLString::syncVisual()
       textX += panelStyle.paddingX + accentGap;
       textY += panelStyle.paddingY;
     }
-    visual.addText(content, textX, textY, size_pt, color);
+    if (glyphBacking) {
+      const ColorRgba backing{ 0, 0, 0, color.a };
+      const int offsets[8][2] = { { -1, 0 },  { 1, 0 },  { 0, -1 }, { 0, 1 },
+                                  { -1, -1 }, { -1, 1 }, { 1, -1 }, { 1, 1 } };
+      for (int index = 0; index < 8; ++index) {
+        visual.addText(content,
+                       textX + static_cast<float>(offsets[index][0]),
+                       textY + static_cast<float>(offsets[index][1]),
+                       size_pt,
+                       backing);
+      }
+    }
+    const size_t textIndex =
+      visual.addText(content, textX, textY, size_pt, color);
+    if (glyphBacking) {
+      TextPrimitive* text = visual.getText(textIndex);
+      if (text != nullptr) {
+        text->drawOrder = 1;
+      }
+    }
   }
   contentDirty = false;
 }
@@ -192,6 +213,15 @@ GLString::clearPanelStyle()
 {
   panelStyle = UiPanelStyle{};
   markContentDirty();
+}
+
+void
+GLString::setGlyphBacking(bool enabled)
+{
+  if (glyphBacking != enabled) {
+    glyphBacking = enabled;
+    markContentDirty();
+  }
 }
 
 std::string

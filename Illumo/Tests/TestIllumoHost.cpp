@@ -35,9 +35,12 @@ public:
 
   void toggleFullscreen() override
   {
-    if (!rejectFullscreen && m_environment != nullptr) {
-      m_environment->setVar("fullscreen",
-                            !m_environment->getVar("fullscreen").valueAsBool);
+    if (rejectFullscreen) {
+      return;
+    }
+    NullRenderWindow::toggleFullscreen();
+    if (m_environment != nullptr) {
+      storeDisplayMode(m_environment, displayMode());
     }
   }
   bool rejectFullscreen{ false };
@@ -597,7 +600,7 @@ testGlobalHotkeys()
               "F11 toggles fullscreen envvar");
     testTrue(g,
              host.context().commandLine->getHistory().back().content ==
-               "SUCCESS: Fullscreen: on",
+               "SUCCESS: Display mode: Fullscreen window",
              "F11 reports enabled state");
     host.context().inputManager->getKeyQueue().push(
       InputManager::KeyPressEvent{ KeyCode::F11, InputAction::Press, 0 });
@@ -608,7 +611,7 @@ testGlobalHotkeys()
               "second F11 restores windowed state");
     testTrue(g,
              host.context().commandLine->getHistory().back().content ==
-               "SUCCESS: Fullscreen: off",
+               "SUCCESS: Display mode: Window",
              "F11 reports disabled state");
     CountingWindow* window =
       static_cast<CountingWindow*>(host.context().window);
@@ -622,7 +625,7 @@ testGlobalHotkeys()
               "rejected fullscreen toggle preserves state");
     testTrue(g,
              host.context().commandLine->getHistory().back().content ==
-               "SUCCESS: Fullscreen: off",
+               "SUCCESS: Display mode: Window",
              "rejected toggle reports unchanged state");
 
     // 2. Test F3 (FPS overlay toggle)

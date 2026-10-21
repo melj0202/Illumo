@@ -1227,6 +1227,19 @@ run(const std::string& name)
                unknownApiReply.activeGraphicsApi ==
                  GuestDisplayState::kGraphicsApiUnset,
              "No saved choice reports OpenGL; an unknown window reports unset");
+    env.setVar("displayMode", "window");
+    env.setVar("fullscreen", false);
+    GuestDisplayState exclusiveMode;
+    exclusiveMode.displayMode = GuestDisplayState::kDisplayModeExclusive;
+    exclusiveMode.fullscreen = true;
+    GuestDisplayState exclusiveReply;
+    testTrue(counters,
+             displayRoundTrip({ true, exclusiveMode }, 16, &exclusiveReply) &&
+               env.getVar("displayMode").value == "exclusive" &&
+               env.getVar("fullscreen").valueAsBool &&
+               exclusiveReply.displayMode ==
+                 GuestDisplayState::kDisplayModeExclusive,
+             "A version 7 request selects exclusive fullscreen");
     GuestDisplayRequest decoded;
     GuestWireWriter future;
     future.u32(kGuestDisplayVersion + 1u);

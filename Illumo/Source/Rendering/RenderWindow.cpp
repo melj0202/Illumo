@@ -64,10 +64,10 @@ RenderWindow::RenderWindow(const int width,
   this->windowedHeight = height;
   this->windowTitle = title;
   this->envVars = envVars;
-  this->isFullScreen =
-    envVars ? envVars->getVar("fullscreen").valueAsBool : false;
+  this->m_displayMode = displayModeFromEnvironment(envVars);
   this->vsyncEnabled = true;
   this->swapIntervalInitialized = false;
+  this->swapIntervalRepost = 0;
   this->glfwInitialized = false;
   this->window = nullptr;
 }
@@ -118,23 +118,12 @@ RenderWindow::initialize()
     glfwWindowHint(GLFW_SAMPLES, samples);
   }
   m_createdSamples = samples;
-  /* Create a windowed mode window and its OpenGL context */
-
-  if (isFullScreen) {
-    GLFWmonitor* primaryMonitor = glfwGetPrimaryMonitor();
-    const GLFWvidmode* mode = glfwGetVideoMode(primaryMonitor);
-    if (primaryMonitor == nullptr || mode == nullptr) {
-      Logger::LogError("Failed to query the primary monitor");
-      glfwTerminate();
-      glfwInitialized = false;
-      return false;
-    }
-    window = glfwCreateWindow(
-      mode->width, mode->height, windowTitle.c_str(), primaryMonitor, nullptr);
-  } else {
-    window = glfwCreateWindow(
-      windowWidth, windowHeight, windowTitle.c_str(), nullptr, nullptr);
-  }
+  // Always a windowed window first. Fullscreen covers the monitor afterwards
+  // without an exclusive video-mode switch, which drops the swap wait.
+  const DisplayMode launchMode = m_displayMode;
+  m_displayMode = DisplayMode::Window;
+  window = glfwCreateWindow(
+    windowWidth, windowHeight, windowTitle.c_str(), nullptr, nullptr);
   if (!window) {
     const char* description = nullptr;
     glfwGetError(&description);
@@ -162,14 +151,14 @@ RenderWindow::initialize()
         " at " + std::to_string(mode->refreshRate) + " Hz");
     }
   }
-  Logger::LogTrace(std::string("Window created: ") +
-                   std::to_string(windowWidth) + "x" +
-                   std::to_string(windowHeight) +
-                   (isFullScreen ? ", fullscreen" : ", windowed") +
-                   (m_captureOnly ? ", hidden for capture" : "") + ", " +
-                   std::to_string(samples) + "x MSAA, " + apiName);
+  Logger::LogTrace(
+    std::string("Window created: ") + std::to_string(windowWidth) + "x" +
+    std::to_string(windowHeight) +
+    (launchMode != DisplayMode::Window ? ", fullscreen" : ", windowed") +
+    (m_captureOnly ? ", hidden for capture" : "") + ", " +
+    std::to_string(samples) + "x MSAA, " + apiName);
   recordWindowSize(envVars, windowWidth, windowHeight, false);
-  if (!isFullScreen) {
+  if (!m_captureOnly) {
     centerWindow();
     glfwGetWindowPos(window, &windowedX, &windowedY);
     glfwGetWindowSize(window, &windowedWidth, &windowedHeight);
@@ -197,6 +186,9 @@ RenderWindow::initialize()
                    std::to_string(fbHeight));
 
   syncPresentationMode();
+  if (launchMode != DisplayMode::Window) {
+    setDisplayMode(launchMode);
+  }
   return true;
 }
 
@@ -364,40 +356,67 @@ RenderWindow::reinitializeWindow()
 }
 
 void
-RenderWindow::toggleFullscreen()
+RenderWindow::setDisplayMode(DisplayMode mode)
 {
-  ILLUMO_PROFILE_ZONE("RenderWindow.toggleFullscreen");
-  if (isFullScreen) {
-    glfwSetWindowMonitor(
-      window, nullptr, windowedX, windowedY, windowedWidth, windowedHeight, 0);
-    isFullScreen = false;
-  } else {
+  ILLUMO_PROFILE_ZONE("RenderWindow.setDisplayMode");
+  if (window == nullptr || mode == m_displayMode) {
+    return;
+  }
+  if (m_displayMode == DisplayMode::Window) {
     glfwGetWindowPos(window, &windowedX, &windowedY);
     glfwGetWindowSize(window, &windowedWidth, &windowedHeight);
+  }
+  if (mode == DisplayMode::Window) {
+    glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_TRUE);
+    glfwSetWindowAttrib(window, GLFW_FLOATING, GLFW_FALSE);
+    glfwSetWindowMonitor(
+      window, nullptr, windowedX, windowedY, windowedWidth, windowedHeight, 0);
+  } else {
     GLFWmonitor* primaryMonitor = glfwGetPrimaryMonitor();
-    const GLFWvidmode* mode =
-      primaryMonitor ? glfwGetVideoMode(primaryMonitor) : nullptr;
-    if (primaryMonitor == nullptr || mode == nullptr) {
+    const GLFWvidmode* videoMode =
+      primaryMonitor != nullptr ? glfwGetVideoMode(primaryMonitor) : nullptr;
+    if (primaryMonitor == nullptr || videoMode == nullptr) {
       Logger::LogError(
-        "Cannot enter fullscreen: primary monitor is unavailable");
+        "Cannot change display mode: primary monitor is unavailable");
       return;
     }
-    glfwSetWindowMonitor(window,
-                         primaryMonitor,
-                         0,
-                         0,
-                         mode->width,
-                         mode->height,
-                         mode->refreshRate);
-    isFullScreen = true;
+    if (mode == DisplayMode::Exclusive) {
+      glfwSetWindowMonitor(window,
+                           primaryMonitor,
+                           0,
+                           0,
+                           videoMode->width,
+                           videoMode->height,
+                           videoMode->refreshRate);
+    } else {
+      int monitorX = 0;
+      int monitorY = 0;
+      glfwGetMonitorPos(primaryMonitor, &monitorX, &monitorY);
+      glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
+      glfwSetWindowAttrib(window, GLFW_FLOATING, GLFW_TRUE);
+      glfwSetWindowMonitor(window,
+                           nullptr,
+                           monitorX,
+                           monitorY,
+                           videoMode->width,
+                           videoMode->height,
+                           0);
+    }
   }
-  if (envVars != nullptr) {
-    envVars->setVar("fullscreen", isFullScreen);
-  }
-  // Callers (the F11 hotkey, the display service) report the change to the
-  // user; this records it.
-  Logger::LogTrace(isFullScreen ? "Window entered fullscreen"
-                                : "Window returned to windowed mode");
+  m_displayMode = mode;
+  swapIntervalInitialized = false;
+  syncPresentationMode();
+  swapIntervalRepost = 2;
+  storeDisplayMode(envVars, mode);
+  Logger::LogTrace(std::string("Display mode: ") + displayModeLabel(mode));
+}
+
+void
+RenderWindow::toggleFullscreen()
+{
+  setDisplayMode(m_displayMode == DisplayMode::Window
+                   ? DisplayMode::FullscreenWindow
+                   : DisplayMode::Window);
 }
 
 bool
@@ -446,6 +465,11 @@ RenderWindow::swapBuffers()
     syncPresentationMode();
     if (m_graphicsApi == BackendDef::OPENGL) {
       glfwSwapBuffers(window);
+      if (swapIntervalRepost > 0) {
+        swapIntervalRepost -= 1;
+        swapIntervalInitialized = false;
+        syncPresentationMode();
+      }
     }
   }
 }

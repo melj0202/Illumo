@@ -18,6 +18,9 @@ private:
   float size_pt;
   int x, y;
   bool contentDirty;
+  // One-pixel black copies of the glyphs, so the text stays readable on a
+  // bright scene without a filled panel.
+  bool glyphBacking;
 
   Renderer* renderer;
   GameVisual visual;
@@ -53,6 +56,7 @@ public:
   void setY(int newY);
   void setPanelStyle(const UiPanelStyle& style);
   void clearPanelStyle();
+  void setGlyphBacking(bool enabled);
   void DrawImpl();
   bool AppendCommands(Renderer* renderer) override;
 

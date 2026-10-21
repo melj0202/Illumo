@@ -239,10 +239,15 @@ WasmGameServices::completeDisplay(GuestServices& results)
     GuestDisplayRequest request;
     GuestDisplayRequest::read(record.payload, request);
     if (request.apply) {
-      if (m_environment->getVar("fullscreen").valueAsBool !=
-          request.state.fullscreen) {
-        m_window->toggleFullscreen();
+      const DisplayMode desired =
+        request.version >= 7u
+          ? static_cast<DisplayMode>(request.state.displayMode)
+          : (request.state.fullscreen ? DisplayMode::FullscreenWindow
+                                      : DisplayMode::Window);
+      if (m_window->displayMode() != desired) {
+        m_window->setDisplayMode(desired);
       }
+      storeDisplayMode(m_environment, m_window->displayMode());
       m_environment->setVar("vsync", request.state.vsync);
       m_environment->setVar("fps", request.state.fps);
       m_environment->setVar("uiScale", UiScale::text(request.state.uiScale));
@@ -271,7 +276,10 @@ WasmGameServices::completeDisplay(GuestServices& results)
     const EnvVar& scale = m_environment->getVar("uiScale");
     const EnvVar& vsync = m_environment->getVar("vsync");
     GuestDisplayState actual;
-    actual.fullscreen = m_environment->getVar("fullscreen").valueAsBool;
+    actual.displayMode =
+      static_cast<std::uint32_t>(displayModeFromEnvironment(m_environment));
+    actual.fullscreen =
+      actual.displayMode != GuestDisplayState::kDisplayModeWindow;
     actual.vsync = vsync.value.empty() || vsync.valueAsBool;
     actual.fps = static_cast<std::uint32_t>(
       std::clamp(fps.value.empty() ? 60L : fps.valueAsLong, 0L, 1000L));

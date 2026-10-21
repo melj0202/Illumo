@@ -52,8 +52,8 @@ const BuiltInCommandHelp kBuiltInCommands[] = {
   { "filter", "filter [text|off]", "Show only output lines containing text" },
   { "fps", "fps [on|off|toggle]", "Show or change the FPS overlay" },
   { "fullscreen",
-    "fullscreen [on|off|toggle]",
-    "Show or change fullscreen mode" },
+    "fullscreen [on|off|toggle|window|fullscreen|exclusive]",
+    "Show or change the display mode" },
   { "get", "get <variable>", "Read an environment variable" },
   { "help", "help [command]", "Show commands or detailed help" },
   { "history", "history [filter|clear]", "Search or clear command history" },
@@ -1922,25 +1922,33 @@ CommandLineCore::ExecuteSingleCommand(const std::string& singleCmd,
       }
     }
   } else if (cmd == "fullscreen") {
-    const bool currentValue =
-      envVars ? envVars->getVar("fullscreen").valueAsBool : false;
-    bool requestedValue = !currentValue;
+    const DisplayMode current = displayModeFromEnvironment(envVars);
+    DisplayMode requested = current == DisplayMode::Window
+                              ? DisplayMode::FullscreenWindow
+                              : DisplayMode::Window;
     bool valid = args.empty();
     if (args.size() == 1 && lowerCopy(args[0]) == "toggle") {
       valid = true;
     } else if (args.size() == 1) {
-      valid = parseBoolValue(args[0], &requestedValue);
+      bool enabled = false;
+      if (parseBoolValue(args[0], &enabled)) {
+        requested = enabled ? (current == DisplayMode::Window
+                                 ? DisplayMode::FullscreenWindow
+                                 : current)
+                            : DisplayMode::Window;
+        valid = true;
+      } else if (parseDisplayMode(lowerCopy(args[0]), &requested)) {
+        valid = true;
+      }
     }
     if (!valid) {
-      logError("Usage: fullscreen [on|off|toggle]");
+      logError("Usage: fullscreen [on|off|toggle|window|fullscreen|exclusive]");
     } else {
-      if (requestedValue != currentValue) {
-        onToggleFullscreen();
+      if (requested != current) {
+        onSetDisplayMode(requested);
       }
-      if (envVars != nullptr) {
-        envVars->setVar("fullscreen", requestedValue);
-      }
-      logSuccess(std::string("Fullscreen: ") + (requestedValue ? "on" : "off"));
+      storeDisplayMode(envVars, requested);
+      logSuccess(std::string("Display mode: ") + displayModeLabel(requested));
     }
   } else if (cmd == "filter") {
     const std::string text = joinArguments(args, 0);

@@ -15,6 +15,7 @@ public:
   int width;
   int height;
   int fullscreenToggleCount;
+  DisplayMode m_displayMode;
   bool closeRequested;
   double mouseX;
   double mouseY;
@@ -29,6 +30,7 @@ public:
     , width(w)
     , height(h)
     , fullscreenToggleCount(0)
+    , m_displayMode(DisplayMode::Window)
     , closeRequested(false)
     , mouseX(0.0)
     , mouseY(0.0)
@@ -36,7 +38,21 @@ public:
   }
 
   void updateWindow() override {}
-  void toggleFullscreen() override { fullscreenToggleCount += 1; }
+  DisplayMode displayMode() const override { return m_displayMode; }
+  void setDisplayMode(DisplayMode mode) override
+  {
+    if (mode == m_displayMode) {
+      return;
+    }
+    m_displayMode = mode;
+    fullscreenToggleCount += 1;
+  }
+  void toggleFullscreen() override
+  {
+    setDisplayMode(m_displayMode == DisplayMode::Window
+                     ? DisplayMode::FullscreenWindow
+                     : DisplayMode::Window);
+  }
   void reinitializeWindow(const int, const int, const std::string&) override {}
   void reinitializeWindow() override {}
   void handleResize(int w, int h) override

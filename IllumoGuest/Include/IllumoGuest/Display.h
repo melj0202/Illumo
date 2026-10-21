@@ -11,9 +11,10 @@
 // preference (read when the host window is created) and the samples of the
 // window now running. Version 5 appends the rendering backend the host saves
 // for its next launch and the one now running. Version 6 adds the Direct3D 12
-// backend code; a version 5 report names it unknown (0). Hosts still accept
-// versions 1-5 and answer each request in its own version.
-inline constexpr std::uint32_t kGuestDisplayVersion = 6u;
+// backend code; a version 5 report names it unknown (0). Version 7 appends
+// the display mode. Hosts still accept versions 1-6 and answer each request
+// in its own version.
+inline constexpr std::uint32_t kGuestDisplayVersion = 7u;
 
 struct GuestDisplayState
 {
@@ -48,6 +49,11 @@ struct GuestDisplayState
   static constexpr std::uint32_t kGraphicsApiVulkan = 2u;
   // Version 6.
   static constexpr std::uint32_t kGraphicsApiDirectX12 = 3u;
+  // Version 7.
+  static constexpr std::uint32_t kDisplayModeWindow = 0u;
+  static constexpr std::uint32_t kDisplayModeFullscreen = 1u;
+  static constexpr std::uint32_t kDisplayModeExclusive = 2u;
+  std::uint32_t displayMode = kDisplayModeWindow;
   // The largest backend code `version` carries.
   static std::uint32_t maximumGraphicsApi(std::uint32_t version)
   {
@@ -126,6 +132,9 @@ struct GuestDisplayState
       writer.u32(activeGraphicsApi <= maximum ? activeGraphicsApi
                                               : kGraphicsApiUnset);
     }
+    if (version >= 7u) {
+      writer.u32(displayMode);
+    }
   }
   static bool read(GuestWireReader& reader,
                    GuestDisplayState& state,
@@ -151,6 +160,11 @@ struct GuestDisplayState
       graphicsApi = reader.u32();
       activeGraphicsApi = reader.u32();
     }
+    std::uint32_t displayMode =
+      fullscreen != 0u ? kDisplayModeFullscreen : kDisplayModeWindow;
+    if (version >= 7u) {
+      displayMode = reader.u32();
+    }
     const bool scaleValid =
       version >= 3u ? scale == 0u || (scale >= kMinimumUiScaleHundredths &&
                                       scale <= kMaximumUiScaleHundredths)
@@ -166,9 +180,11 @@ struct GuestDisplayState
     state.activeMsaa = activeMsaa;
     state.graphicsApi = graphicsApi;
     state.activeGraphicsApi = activeGraphicsApi;
+    state.displayMode = displayMode;
+    state.fullscreen = displayMode != kDisplayModeWindow;
     return reader.valid() && fullscreen <= 1 && vsync <= 1 &&
-           hideSystemCursor <= 1 && fps <= 1000 && scaleValid &&
-           validMsaa(msaa) &&
+           displayMode <= kDisplayModeExclusive && hideSystemCursor <= 1 &&
+           fps <= 1000 && scaleValid && validMsaa(msaa) &&
            (activeMsaa == kUnknownMsaa || validMsaa(activeMsaa)) &&
            graphicsApi <= maximumGraphicsApi(version) &&
            activeGraphicsApi <= maximumGraphicsApi(version);

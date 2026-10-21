@@ -535,13 +535,17 @@ compiled arrays and reusable snapshot buffers. These caches do not retain or rep
 `RenderWindow` defaults to swap interval one. The persisted `vsync` environment
 value can select synchronized or uncapped presentation and is reapplied only
 when it changes, so Debug's generic `toggle vsync` command works live. The FPS
-overlay labels synchronized swap-completion cadence as `Paced FPS` and reports
-main-loop submissions separately; uncapped mode reports paced FPS as off rather
-than presenting CPU submissions as monitor output (D-P32).
+overlay prints the recent main-loop rate beside the present mode and refresh
+(`fifo` while vsync is on, `mailbox` while it is off) and the software cap
+(`inf` when the limiter is not running), so an uncapped rate is not mistaken
+for the monitor (D-P32).
 
 `FramePacer` limits the loop in software to the persisted `fps` whenever VSync
 is off or `fps` is below the monitor refresh rate (for example `fps 60` on a
-144 Hz display); `fps 0` disables it. Each frame it sleeps on a
+144 Hz display). With VSync on and no lower cap, it still holds the loop to
+the refresh: a fullscreen present on Windows can return without waiting, and
+the loop would otherwise run ahead of the display. `fps 0` with VSync off
+disables the sleep. Each frame it sleeps on a
 `PlatformWaitTimer` until the timer's wake latency before the deadline, then
 spins with `PlatformCpuPause` for the rest (about 0.5 ms), and it resets the
 deadline instead of bursting when a frame runs more than 1.5 frames late. On
@@ -1577,11 +1581,18 @@ dialogs, and cell canvas. It separates general tooling from product behavior:
 
 #### Process memory diagnostics
 
-The optional Debug/RelWithDebInfo `DebugOverlay` owns one top-left `GLString`
-diagnostics panel. `showFPS` / F3 / `fps` retain FPS-only control;
-`showMemory` (default off) / `memory [on|off|toggle]` independently control
-memory rows. Both settings persist through the existing environment service.
-The console help, completion and `sysinfo` expose memory visibility.
+The optional Debug/RelWithDebInfo `DebugOverlay` owns the top-left diagnostics
+readout. `showFPS` / F3 / `fps` retain FPS-only control; `showMemory` (default
+off) / `memory [on|off|toggle]` independently control memory rows. Both
+settings persist through the existing environment service. The console help,
+completion and `sysinfo` expose memory visibility. FPS and memory are plain
+white text with a one-pixel black copy of each glyph, on one
+semi-transparent black rectangle. The FPS block is the recent frame rate, the
+software cap (`inf` when the limiter is off, otherwise the cap in
+milliseconds), the present mode (`fifo` with vsync, `mailbox` without) and the
+refresh rate, then p50, p98 and p99.5 of the last 180 frame times expressed as
+FPS. A line under that block plots those frame times against a mark at one
+budget (the cap, or one refresh).
 
 An internal `DebugOverlayState` owns independent FPS and memory refresh clocks
 and cached text; only changed content rebuilds the label. Memory sampling occurs
@@ -1611,9 +1622,15 @@ logical processor count until a native port is verified.
 - OpenGL calls stay under `Rendering/OpenGL/` (+ window bootstrap).  
 - Interfaces only where multiple implementations or third-party volatility are real (`IBackend`, `IRenderWindow`).  
 - macOS is not a current target; no Cocoa or other Apple platform scaffold is retained.
-- Fullscreen transitions preserve the windowed position and dimensions, enter
-  the primary monitor at its current video mode, and restore the saved windowed
-  bounds on exit.
+- Display mode is one of window, fullscreen window, or exclusive. The
+  fullscreen window covers the primary monitor at its current video mode
+  without a mode switch. Exclusive fullscreen gives that monitor to the
+  window at the current mode and refresh. Both preserve the windowed position
+  and dimensions and restore them on the way back to a normal window. F11
+  switches between the normal window and the fullscreen window; from
+  exclusive it returns to the normal window. Exclusive fullscreen drops the
+  OpenGL swap wait on Windows, so a vsync request with no lower frame cap
+  still holds the loop to the refresh.
 
 ### 5.12 Isolated WASM application runtime (D-E13 to D-E17)
 

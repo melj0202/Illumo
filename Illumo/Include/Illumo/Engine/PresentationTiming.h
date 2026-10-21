@@ -3,6 +3,9 @@
 #include <Illumo/Platform/PlatformTimer.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <chrono>
+#include <iomanip>
+#include <locale>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -53,6 +56,22 @@ shouldPace(bool vsyncEnabled, int refreshRate, long targetFps)
     return targetFps < effectiveRefresh;
   }
   return true;
+}
+
+// The rate the loop should sleep toward. A cap below the refresh wins. With
+// vsync on and no lower cap, hold the refresh anyway: a fullscreen present on
+// Windows can return without waiting, and the loop would otherwise run ahead
+// of the display. Zero means do not sleep.
+inline long
+presentationPaceTarget(bool vsyncEnabled, int refreshHz, long targetFps)
+{
+  if (shouldPace(vsyncEnabled, refreshHz, targetFps)) {
+    return targetFps;
+  }
+  if (!vsyncEnabled) {
+    return 0;
+  }
+  return refreshHz > 0 ? refreshHz : 60;
 }
 
 // How much of `remaining` a pacer sleeps through before spinning to its
@@ -183,11 +202,52 @@ paceFrame(std::chrono::steady_clock::time_point frameStartTime, long targetFps)
   pacer.paceFrom(frameStartTime, targetFps);
 }
 
+// Software frame-time cap, or "inf" when the limiter is not running.
+// `vsync` is the swap interval (fifo); the refresh rate is in hertz.
 inline std::string
-buildFrameRateLabel(bool framePaced, int pacedFps, int submitFps)
+frameLimiterText(bool vsync, int refreshHz, long targetFps)
 {
-  const std::string pacedValue =
-    framePaced ? std::to_string(pacedFps) : std::string("off");
-  return "Paced FPS: " + pacedValue +
-         " | Submit FPS: " + std::to_string(submitFps);
+  const int refresh = refreshHz > 0 ? refreshHz : 60;
+  if (!shouldPace(vsync, refresh, targetFps)) {
+    return "inf";
+  }
+  std::ostringstream text;
+  text.imbue(std::locale::classic());
+  text << std::fixed << std::setprecision(1)
+       << (1000.0 / static_cast<double>(targetFps)) << "ms";
+  return text.str();
+}
+
+// The frame time the graph's reference line marks: the software cap when it
+// is running, otherwise one refresh.
+inline double
+frameBudgetSeconds(bool vsync, int refreshHz, long targetFps)
+{
+  const int refresh = refreshHz > 0 ? refreshHz : 60;
+  if (shouldPace(vsync, refresh, targetFps) && targetFps > 0) {
+    return 1.0 / static_cast<double>(targetFps);
+  }
+  return 1.0 / static_cast<double>(refresh);
+}
+
+// Achieved rate, limiter, present mode and refresh, then frame-time
+// percentiles expressed as FPS (a higher percentile is a slower frame).
+inline std::string
+buildFrameRateLabel(int submitFps,
+                    bool vsync,
+                    int refreshHz,
+                    long targetFps,
+                    int p50Fps,
+                    int p98Fps,
+                    int p995Fps)
+{
+  const int refresh = refreshHz > 0 ? refreshHz : 0;
+  std::ostringstream text;
+  text.imbue(std::locale::classic());
+  text << submitFps
+       << " fps T: " << frameLimiterText(vsync, refreshHz, targetFps) << " ("
+       << (vsync ? "fifo" : "mailbox") << ") @" << refresh << "Hz\n"
+       << "p50=" << p50Fps << " p98=" << p98Fps << " p99.5=" << p995Fps
+       << " fps";
+  return text.str();
 }

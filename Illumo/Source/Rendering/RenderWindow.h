@@ -28,6 +28,8 @@ public:
                           const int height,
                           const std::string& title) override;
   void reinitializeWindow() override;
+  DisplayMode displayMode() const override { return m_displayMode; }
+  void setDisplayMode(DisplayMode mode) override;
   void toggleFullscreen() override;
   GLFWwindow* getWindowInstance() override { return window; }
   void updateWindow() override;
@@ -87,9 +89,12 @@ private:
   int windowedWidth;
   int windowedHeight;
   std::string windowTitle;
-  bool isFullScreen;
+  DisplayMode m_displayMode;
   bool vsyncEnabled;
   bool swapIntervalInitialized;
+  // Swaps left that must set the interval again. A mode change ignores the
+  // call until a buffer has been swapped in the new size.
+  int swapIntervalRepost;
   bool glfwInitialized;
   bool initialize();
   void centerWindow();

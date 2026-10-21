@@ -122,6 +122,7 @@ public:
   void onCloseRequested() override;
   void onQuitRequested() override;
   void onToggleFullscreen() override;
+  void onSetDisplayMode(DisplayMode mode) override;
   void queryWindowDimensions(int* width, int* height) const override;
 
   void markCompositionDirty();

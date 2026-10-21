@@ -67,6 +67,7 @@ struct CommandLineFixture
     env.setVar("cellFadeSpeed", "8");
     env.setVar("showFPS", false);
     env.setVar("fullscreen", false);
+    env.setVar("displayMode", "window");
     mock.Initialize();
   }
 };
@@ -158,6 +159,7 @@ testCommandLineCommandDispatchAndValidation()
   env.setVar("cellFadeSpeed", "8");
   env.setVar("showFPS", false);
   env.setVar("fullscreen", false);
+  env.setVar("displayMode", "window");
   Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
   MockBackend mock;
   mock.Initialize();
@@ -594,6 +596,16 @@ testGLStringPanelComposition()
              label.getVisual().shapeCount(),
              0u,
              "clearing chrome returns to text-only composition");
+  label.setGlyphBacking(true);
+  testTrue(g,
+           label.AppendCommands(&renderer),
+           "backed text remains on the token path");
+  testEqSize(g,
+             label.getVisual().textCount(),
+             9u,
+             "backing draws eight black copies under the white glyphs");
+  testEqSize(
+    g, label.getVisual().shapeCount(), 0u, "glyph backing adds no panel");
 }
 
 static void

@@ -326,7 +326,13 @@ RuntimeShell::run(std::chrono::steady_clock::time_point launched)
       const bool vsyncEnabled = isVsyncRequested(&m_illumo.environment());
       const int refreshRate =
         ic->window != nullptr ? ic->window->getRefreshRate() : 60;
-      framePacer.pace(targetFps, vsyncEnabled, refreshRate);
+      const long paceTarget =
+        presentationPaceTarget(vsyncEnabled, refreshRate, targetFps);
+      // A refresh backup must take the sleep path. Passing vsync through
+      // would make pace() refuse a target that is not below the refresh.
+      const bool paceWithVsync =
+        vsyncEnabled && shouldPace(vsyncEnabled, refreshRate, targetFps);
+      framePacer.pace(paceTarget, paceWithVsync, refreshRate);
     }
     profiler.endFrame();
   }

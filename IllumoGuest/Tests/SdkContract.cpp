@@ -285,10 +285,10 @@ displayBackendContract()
   GuestServices direct3d = exchange(queue);
   require(direct3d.records.size() == 1 &&
             GuestDisplayRequest::read(direct3d.records[0].payload, request) &&
-            request.version == 6u &&
+            request.version == kGuestDisplayVersion &&
             request.state.graphicsApi ==
               GuestDisplayState::kGraphicsApiDirectX12,
-          "A Direct3D 12 choice travels as display version 6");
+          "A Direct3D 12 choice travels in the current display version");
 }
 static void
 clipboardContract()

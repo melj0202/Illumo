@@ -887,6 +887,14 @@ CommandLine::onToggleFullscreen()
 }
 
 void
+CommandLine::onSetDisplayMode(DisplayMode mode)
+{
+  if (window != nullptr) {
+    window->setDisplayMode(mode);
+  }
+}
+
+void
 CommandLine::queryWindowDimensions(int* width, int* height) const
 {
   if (window != nullptr) {

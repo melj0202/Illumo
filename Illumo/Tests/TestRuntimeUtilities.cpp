@@ -283,12 +283,12 @@ testDebugOverlayMemory()
   g_memoryAvailable = true;
   g_memorySample = { 130547712, 144913203, 163577856 };
   testTrue(g,
-           !overlay.update(10.0, false, false, true, 60, queryTestMemory),
+           !overlay.update(10.0, false, false, true, 144, 60, queryTestMemory),
            "hidden overlay has no content changes");
   testEqInt(g, g_memoryQueries, 0, "hidden memory does not sample");
   testTrue(g, !overlay.visible(), "both sections disabled hides panel");
   testTrue(g,
-           overlay.update(0.0, false, true, true, 60, queryTestMemory),
+           overlay.update(0.0, false, true, true, 144, 60, queryTestMemory),
            "enabling memory updates immediately");
   testTrue(g, overlay.visible(), "memory alone shows panel");
   testTrue(g,
@@ -297,47 +297,71 @@ testDebugOverlayMemory()
            "memory uses MiB with one decimal and no leading FPS row");
   testEqInt(g, g_memoryQueries, 1, "enabling memory samples once");
   testTrue(g,
-           !overlay.update(0.5, false, true, true, 60, queryTestMemory),
+           !overlay.update(0.5, false, true, true, 144, 60, queryTestMemory),
            "cached content remains unchanged between samples");
   testEqInt(g, g_memoryQueries, 1, "half-second does not sample");
   testTrue(g,
-           !overlay.update(0.5, false, true, true, 60, queryTestMemory),
+           !overlay.update(0.5, false, true, true, 144, 60, queryTestMemory),
            "identical values avoid a label rebuild");
   testEqInt(g, g_memoryQueries, 2, "one-second interval samples");
-  overlay.update(0.0, true, true, true, 60, queryTestMemory);
+  overlay.update(0.0, true, true, true, 144, 60, queryTestMemory);
   testTrue(g,
-           overlay.content().find("Paced FPS: 60 | Submit FPS: 0\nRAM:") == 0,
+           overlay.content().find("0 fps T: 16.7ms (fifo) @144Hz\n"
+                                  "p50=0 p98=0 p99.5=0 fps\nRAM:") == 0,
            "FPS precedes memory when both enabled");
   testEqInt(g, g_memoryQueries, 2, "FPS visibility does not resample memory");
-  overlay.update(0.5, true, false, true, 60, queryTestMemory);
+  overlay.update(0.5, true, false, true, 144, 60, queryTestMemory);
   testTrue(g,
-           overlay.content() == "Paced FPS: 60 | Submit FPS: 0",
+           overlay.content() == "0 fps T: 16.7ms (fifo) @144Hz\n"
+                                "p50=0 p98=0 p99.5=0 fps",
            "FPS-only panel removes memory rows");
-  overlay.update(0.5, true, true, true, 60, queryTestMemory);
+  overlay.update(0.5, true, true, true, 144, 60, queryTestMemory);
   testTrue(g,
-           overlay.content().find("Submit FPS: 2\nRAM:") != std::string::npos,
+           overlay.content().find("2 fps T: 16.7ms (fifo) @144Hz\n"
+                                  "p50=2 p98=2 p99.5=2 fps\nRAM:") == 0,
            "memory toggles do not reset the FPS interval");
   testEqInt(g, g_memoryQueries, 3, "re-enabling samples immediately");
   g_memoryAvailable = false;
-  overlay.update(1.0, false, true, true, 60, queryTestMemory);
+  overlay.update(1.0, false, true, true, 144, 60, queryTestMemory);
   testTrue(g,
            overlay.content() == "Memory: unavailable",
            "failure replaces stale memory values");
-  overlay.update(0.5, false, true, true, 60, queryTestMemory);
+  overlay.update(0.5, false, true, true, 144, 60, queryTestMemory);
   testEqInt(g, g_memoryQueries, 4, "failed queries still use normal cadence");
   g_memoryAvailable = true;
   g_memorySample = { 0, 4294967296ULL, 1048576 };
-  overlay.update(0.5, false, true, true, 60, queryTestMemory);
+  overlay.update(0.5, false, true, true, 144, 60, queryTestMemory);
   testTrue(g,
            overlay.content() == "RAM: 0.0 MiB\nPeak RAM: 4096.0 MiB\n"
                                 "Private commit: 1.0 MiB",
            "query recovers and formats zero and large byte counts");
-  overlay.update(5.0, false, true, true, 60, queryTestMemory);
+  overlay.update(5.0, false, true, true, 144, 60, queryTestMemory);
   testEqInt(g, g_memoryQueries, 6, "long frame samples only once");
-  overlay.update(0.0, false, false, true, 60, queryTestMemory);
+  overlay.update(0.0, false, false, true, 144, 60, queryTestMemory);
   testTrue(g,
            !overlay.visible() && overlay.content().empty(),
            "disabling both clears panel");
+
+  DebugOverlayState stability;
+  stability.update(0.0, true, false, true, 144, 0, queryTestMemory);
+  for (int frame = 0; frame < 99; ++frame) {
+    stability.update(0.01, true, false, true, 144, 0, queryTestMemory);
+  }
+  testTrue(g,
+           stability.update(0.05, true, false, true, 144, 0, queryTestMemory),
+           "a one-second window refreshes the frame-rate label");
+  testTrue(g,
+           stability.content() == "96 fps T: inf (fifo) @144Hz\n"
+                                  "p50=100 p98=100 p99.5=20 fps",
+           "percentiles report the slow tail as lower FPS");
+  float samples[DebugOverlayState::kFrameTimeCapacity];
+  const int sampleCount =
+    stability.copyFrameTimes(samples, DebugOverlayState::kFrameTimeCapacity);
+  testEqInt(g, sampleCount, 100, "the frame-time window keeps each sample");
+  testTrue(g,
+           sampleCount == 100 && samples[0] > 0.009f && samples[0] < 0.011f &&
+             samples[99] > 0.049f && samples[99] < 0.051f,
+           "samples stay in order, oldest first");
 }
 
 static void
@@ -672,13 +696,15 @@ testPresentationTimingPolicy()
            "enabled vsync selects frame-paced presentation");
 
   testTrue(g,
-           buildFrameRateLabel(true, 144, 144) ==
-             "Paced FPS: 144 | Submit FPS: 144",
-           "paced label separates swap cadence from submissions");
+           buildFrameRateLabel(60, true, 144, 60, 60, 58, 40) ==
+             "60 fps T: 16.7ms (fifo) @144Hz\n"
+             "p50=60 p98=58 p99.5=40 fps",
+           "paced label shows the cap, fifo present mode and percentiles");
   testTrue(g,
-           buildFrameRateLabel(false, 999, 4812) ==
-             "Paced FPS: off | Submit FPS: 4812",
-           "uncapped label does not misreport submissions as presented FPS");
+           buildFrameRateLabel(4812, false, 144, 0, 4000, 1200, 800) ==
+             "4812 fps T: inf (mailbox) @144Hz\n"
+             "p50=4000 p98=1200 p99.5=800 fps",
+           "uncapped label names mailbox and does not invent a frame cap");
 
   testTrue(
     g, getTargetFps(nullptr) == 60, "missing environment defaults to 60 FPS");
@@ -730,6 +756,15 @@ testPresentationTimingPolicy()
     g,
     shouldPace(true, 144, 60),
     "60 FPS target on 144 Hz display engages software pacing under VSync");
+  testTrue(g,
+           presentationPaceTarget(true, 144, 0) == 144,
+           "vsync with no cap still holds the loop to the refresh");
+  testTrue(g,
+           presentationPaceTarget(true, 144, 60) == 60,
+           "a cap below the refresh stays the pace target");
+  testTrue(g,
+           presentationPaceTarget(false, 144, 0) == 0,
+           "vsync off and no cap does not sleep");
 
   // Sleep strategy: sleep all but the timer's wake latency, then spin.
   testTrue(g,

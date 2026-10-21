@@ -269,9 +269,14 @@ document. \pathref{Templates/SpinningCube}, the template for new projects, is a
 \texttt{vsync=0} selects uncapped profiling, while Debug metrics distinguish
 paced swap completions from CPU submissions.
 
-The global F11 shortcut asks the window to toggle fullscreen. The window
-publishes the resulting state to EnvVars, and the host reports that value
-without changing it again. A rejected toggle preserves the prior setting.
+The global F11 shortcut switches between a normal window and a fullscreen
+window, and returns an exclusive fullscreen window to a normal window. The
+window publishes the resulting display mode to EnvVars, and the host reports
+that value without changing it again. A rejected toggle preserves the prior
+setting. The fullscreen window covers the monitor without a video-mode
+switch. Exclusive fullscreen gives the monitor to the window at the current
+mode and refresh; that path drops the OpenGL swap wait on Windows, and a
+later interval call does not restore it.
 
 IllMeshViewer consumes queued Press events for O (open), F/R (reset camera),
 G (grid), X (wireframe), and B (skybox). Hold/repeat and release events do not
@@ -295,8 +300,10 @@ need not intersect the ground plane.
 
 
 \subsection{Process memory diagnostics}
-In debug-tool builds, \symbolref{DebugOverlay} composes FPS and memory in one
-\texttt{GLString} status panel. F3 and \texttt{fps} control only FPS;
+In debug-tool builds, \symbolref{DebugOverlay} composes FPS and memory as plain
+white text with a one-pixel black glyph backing on a semi-transparent black
+rectangle, plus a frame-time line under the FPS block. F3 and \texttt{fps}
+control only FPS;
 \texttt{memory [on|off|toggle]} controls the persisted \texttt{showMemory}
 flag, initially off. Each section may be visible independently. The memory
 rows show current working set, process-lifetime peak working set and private

@@ -41,6 +41,8 @@ private:
   // The `files` browser over IllumoContext::fileTree.
   std::unique_ptr<FileTreeOverlay> m_fileTreeOverlay;
   void updateDiagnostics(double dt);
+  void layoutDiagnostics();
+  void updateFrameGraph();
   void updateWatermarkPosition();
   void registerRendererCommands();
   void unregisterRendererCommands();
@@ -61,6 +63,10 @@ private:
   bool m_detachedMouseDown = false;
 
   GLString* diagnosticsLabel;
+  GLString* memoryLabel;
+  std::unique_ptr<GameVisual> m_frameGraph;
+  std::unique_ptr<GameVisual> m_diagnosticsBackdrop;
+  int m_graphSegments = -1;
   std::unique_ptr<DebugOverlayState> diagnostics;
   GLString* watermarkLabel;
   GameVisual* rendererDemo;

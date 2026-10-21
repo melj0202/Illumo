@@ -452,9 +452,10 @@ viewport within a submit); uniform location cache; blend-func-on-enable (D-R5).
 Presentation defaults to monitor synchronization through
 \texttt{glfwSwapInterval(1)}. The persisted \texttt{vsync} value selects that
 frame-paced mode or an explicit uncapped profiling mode and may change live at
-a swap boundary. Debug labels swap-completion cadence as \texttt{Paced FPS} and
-main-loop work as \texttt{Submit FPS}; uncapped mode reports paced FPS as off
-instead of treating thousands of CPU submissions as displayed frames (D-P32).
+a swap boundary. The debug FPS line prints the recent main-loop rate beside
+the present mode and refresh (\texttt{fifo} with vsync, \texttt{mailbox}
+without) and the software cap (\texttt{inf} when the limiter is off), so an
+uncapped rate is not mistaken for the monitor (D-P32).
 
 \subsection{Vulkan backend (D-R33)}
 \texttt{Rendering/Vulkan/} is a second complete \symbolref{IBackend}. The

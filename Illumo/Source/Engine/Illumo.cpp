@@ -296,13 +296,10 @@ Illumo::processGlobalHotkeys()
       if (event.key == KeyCode::F11) {
         if (m_window != nullptr) {
           m_window->toggleFullscreen();
-          if (m_environment != nullptr) {
-            const bool current =
-              m_environment->getVar("fullscreen").valueAsBool;
-            if (m_commandLine != nullptr) {
-              m_commandLine->logSuccess(std::string("Fullscreen: ") +
-                                        (current ? "on" : "off"));
-            }
+          if (m_commandLine != nullptr) {
+            m_commandLine->logSuccess(
+              std::string("Display mode: ") +
+              displayModeLabel(m_window->displayMode()));
           }
         }
         continue;

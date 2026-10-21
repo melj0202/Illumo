@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Illumo/Rendering/DisplayMode.h>
 #include <Illumo/Services/ArenaAlloc.h>
 #include <Illumo/Services/ChainedStackAlloc.h>
 #include <Illumo/Services/CommandRegistry.h>
@@ -227,6 +228,7 @@ public:
   virtual void onCloseRequested() {}
   virtual void onQuitRequested() {}
   virtual void onToggleFullscreen() {}
+  virtual void onSetDisplayMode(DisplayMode mode) { (void)mode; }
   virtual void queryWindowDimensions(int* width, int* height) const
   {
     if (width != nullptr) {
