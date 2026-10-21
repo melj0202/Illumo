@@ -254,39 +254,66 @@ AssetManager::acquireTexture(const std::string& path,
   }
   ILLUMO_PROFILE_ZONE("AssetManager.acquireTexture");
 
-  const unsigned char fallback[16] = {
-    255, 0, 255, 255, 32, 32, 32, 255, 32, 32, 32, 255, 255, 0, 255, 255,
-  };
-  TextureHandle handle = renderer->enrollTexture(fallback, 2, 2, 4, options);
-  if (!handle.isValid()) {
-    Logger::LogError("The renderer refused a placeholder texture for " +
-                     canonical);
-    return TextureHandle{};
-  }
-
   TextureEntry entry;
-  entry.handle = handle;
   entry.path = canonical;
   entry.cacheKey = key;
   entry.options = options;
-  entry.info = { 2, 2, 4 };
   entry.lastWriteTime = writeTime(canonical);
-  textures[handle.slot] = entry;
-  textureCache[key] = handle.slot;
-
+  TextureHandle handle{};
+  std::string loadError;
   if (mode == AssetLoadMode::Synchronous) {
-    TextureEntry& stored = textures[handle.slot];
-    stored.requestSerial += 1;
+    // Decoded before anything is enrolled, so the image is created once
+    // rather than as a placeholder replaced straight away (in a WASM guest
+    // each enrolment is a texture the host creates).
     LoadJob job;
     job.kind = AssetKind::Texture;
-    job.slot = handle.slot;
-    job.generation = handle.generation;
-    job.requestSerial = stored.requestSerial;
-    job.pathA = stored.path;
-    job.textureOptions = stored.options;
-    LoadResult result = executeJob(job, source);
-    processResult(result);
-  } else {
+    job.pathA = canonical;
+    job.textureOptions = options;
+    const LoadResult result = executeJob(job, source);
+    loadError = result.error;
+    if (result.success) {
+      handle = renderer->enrollTexture(result.pixels.data(),
+                                       result.width,
+                                       result.height,
+                                       result.channels,
+                                       options);
+      if (handle.isValid()) {
+        entry.state = AssetState::Ready;
+        entry.revision = 1;
+        entry.info = { result.width, result.height, result.channels };
+        traceAsset("Loaded texture " + canonical + " (" +
+                   std::to_string(result.width) + "x" +
+                   std::to_string(result.height) + ")");
+      } else {
+        loadError = "Texture upload failed";
+      }
+    }
+  }
+
+  if (!handle.isValid()) {
+    // Async loads draw it until the decode lands; failed loads keep it.
+    const unsigned char fallback[16] = {
+      255, 0, 255, 255, 32, 32, 32, 255, 32, 32, 32, 255, 255, 0, 255, 255,
+    };
+    handle = renderer->enrollTexture(fallback, 2, 2, 4, options);
+    if (!handle.isValid()) {
+      Logger::LogError("The renderer refused a placeholder texture for " +
+                       canonical);
+      return TextureHandle{};
+    }
+    entry.info = { 2, 2, 4 };
+    if (mode == AssetLoadMode::Synchronous) {
+      entry.state = AssetState::Failed;
+      entry.lastError = loadError.empty() ? "Texture upload failed" : loadError;
+      Logger::LogError("Texture " + canonical +
+                       " could not be loaded: " + entry.lastError);
+    }
+  }
+
+  entry.handle = handle;
+  textures[handle.slot] = entry;
+  textureCache[key] = handle.slot;
+  if (mode == AssetLoadMode::Async) {
     queueTexture(textures[handle.slot]);
   }
   return handle;

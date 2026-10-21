@@ -128,15 +128,16 @@ SceneInstance::record(std::string_view id) const
 }
 
 void
-SceneInstance::releaseAssets()
+SceneInstance::releaseSlots(
+  std::unordered_map<std::string, std::unique_ptr<AssetSlot>>& slots,
+  bool failedOnly)
 {
-  if (m_skybox) {
-    m_graph.invalidateSnapshots();
-    m_skybox.reset();
-  }
   for (std::pair<const std::string, std::unique_ptr<AssetSlot>>& entry :
-       m_assetSlots) {
+       slots) {
     AssetSlot& slot = *entry.second;
+    if (failedOnly && !slot.failed) {
+      continue;
+    }
     if (m_assets != nullptr) {
       if (slot.texture.isValid()) {
         m_assets->releaseTexture(slot.texture);
@@ -145,7 +146,19 @@ SceneInstance::releaseAssets()
         m_assets->releaseMesh(slot.mesh);
       }
     }
+    slot.texture = TextureHandle{};
+    slot.mesh = MeshHandle{};
   }
+}
+
+void
+SceneInstance::releaseAssets()
+{
+  if (m_skybox) {
+    m_graph.invalidateSnapshots();
+    m_skybox.reset();
+  }
+  releaseSlots(m_assetSlots, false);
   m_assetSlots.clear();
 }
 
@@ -1345,7 +1358,16 @@ SceneInstance::setAssets(const std::vector<SceneAsset>& assets,
        m_records) {
     destroyAttachments(*entry.second);
   }
-  releaseAssets();
+  // The skybox borrows its slot's cubemap.
+  m_skybox.reset();
+  // The previous table keeps its references until the new one has acquired
+  // its own, so an entry that loads the same way is an AssetManager cache hit
+  // rather than a second read, decode and upload (editors apply a table for
+  // every asset field step and settings undo). Failed entries go first so
+  // they load again.
+  std::unordered_map<std::string, std::unique_ptr<AssetSlot>> previous;
+  previous.swap(m_assetSlots);
+  releaseSlots(previous, true);
   m_warnings.clear();
   m_state.assets = assets;
   for (const SceneAsset& asset : assets) {
@@ -1355,6 +1377,7 @@ SceneInstance::setAssets(const std::vector<SceneAsset>& assets,
   }
   rebuildAllAttachments();
   rebuildEnvironment();
+  releaseSlots(previous, false);
   touch();
   return true;
 }

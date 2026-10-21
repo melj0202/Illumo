@@ -275,6 +275,11 @@ private:
   void applyWorldEnvironment();
   bool validateNode(const SceneNode& node, std::string& error) const;
   void releaseAssets();
+  // Drops the slots' AssetManager references (only failed slots' when
+  // failedOnly); a released slot holds no handles.
+  void releaseSlots(
+    std::unordered_map<std::string, std::unique_ptr<AssetSlot>>& slots,
+    bool failedOnly);
   AssetSlot* assetSlot(std::string_view id);
   void rebuildEnvironment();
   void rebuildAllAttachments();

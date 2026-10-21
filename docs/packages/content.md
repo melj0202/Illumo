@@ -236,7 +236,13 @@ snapshots before reconfiguring attachments, and bump `revision()`;
 Solid primitives share one unit mesh per shape acquired with
 `AssetManager::acquireMesh(MeshData)`; wire shapes stay procedural. Meshes,
 texture and atlas sprites and cubemaps load through `AssetManager`; a missing
-or failed asset draws a magenta placeholder and adds to `warnings()`. Lighting
+or failed asset draws a magenta placeholder and adds to `warnings()`.
+`setAssets` rebuilds every attachment but keeps the previous table's asset
+references until the new table has acquired its own, so an entry that loads
+the same way (same resolved path and load options) is an `AssetManager` cache
+hit instead of a second read, decode and upload; only new or changed entries
+load, and failed entries are released first so they load again. `load` still
+releases the old scene before building the new one. Lighting
 comes from the first enabled, visible light component in preorder, else the
 environment sun; 2D scenes are unlit. The skybox is a separate `SkyboxVisual`
 drawable (`skybox()`), not a graph node. `pickRay` uses attachment local

@@ -34,6 +34,10 @@ class AtlasObservingBackend final : public MockBackend
 {
 public:
   bool atlasDrawn = false;
+  // Host textures shaped like AssetManager's 2x2 RGBA load placeholder, and
+  // like the 4x4 project texture the project test places.
+  size_t placeholderCreates = 0;
+  size_t smallTextureCreates = 0;
   TextureHandle CreateTexture(const unsigned char* data,
                               int width,
                               int height,
@@ -42,6 +46,10 @@ public:
   {
     const TextureHandle handle =
       MockBackend::CreateTexture(data, width, height, channels, options);
+    if (channels == 4 && width == height) {
+      placeholderCreates += width == 2 ? 1 : 0;
+      smallTextureCreates += width == 4 ? 1 : 0;
+    }
     if (channels == 4 && options.filter == TextureFilter::Nearest &&
         width >= 256 && width == height) {
       m_atlas = handle;
@@ -381,6 +389,14 @@ projectPackage()
     renderFrame(editor, renderer, window, camera);
     return ++frames > 90;
   });
+  std::printf("host texture creations: %zu placeholder(s), %zu of the 4x4 "
+              "project texture\n",
+              mock.placeholderCreates,
+              mock.smallTextureCreates);
+  testTrue(counters,
+           mock.placeholderCreates == 0 && mock.smallTextureCreates == 1,
+           "the UI atlas and the placed texture each reach the host once, "
+           "without a placeholder first");
   commands.QueueCommand("scene_save_project");
   commands.ExecuteQueue();
   SceneDocument saved;

@@ -5,7 +5,12 @@ dependencies, and redistribution licenses. `AssetManager` retains its managed
 file texture/shader/static-mesh caches, stable typed handles, reference
 counting, and shutdown-before-backend lifetime. Texture and shader assets use
 the one CPU file/decode worker, render-thread GPU pump, Debug timestamp polling,
-explicit reload, and last-good fallbacks. Static meshes are synchronously
+explicit reload, and last-good fallbacks. A synchronous texture acquisition
+decodes before it enrolls anything, so the image is created once; the 2x2
+placeholder is enrolled only for an async load (drawn until its decode lands)
+or a load that fails. In a WASM guest each enrollment is a texture the host
+creates, so the placeholder would otherwise cost one extra host texture and
+its release per load. Static meshes are synchronously
 decoded through `MeshLoader`, enrolled once, and shared by handle; they do not
 yet participate in hot reload.
 

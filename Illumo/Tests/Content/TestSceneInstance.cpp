@@ -14,15 +14,18 @@
 #include <cstdio>
 #include <map>
 
-// Serves in-memory bytes by virtual path, like the guest package cache.
+// Serves in-memory bytes by virtual path, like the guest package cache, and
+// counts every read so tests can tell a cache hit from a reload.
 class MemoryAssetSource : public IAssetSource
 {
 public:
   std::map<std::string, std::vector<unsigned char>> files;
+  mutable std::map<std::string, int> reads;
   std::string canonical(const std::string& path) const override { return path; }
   bool read(const std::string& canonical,
             std::vector<unsigned char>& bytes) const override
   {
+    ++reads[canonical];
     const std::map<std::string, std::vector<unsigned char>>::const_iterator
       found = files.find(canonical);
     if (found == files.end()) {
@@ -329,6 +332,200 @@ testInstanceSkyboxAndAssets()
            noManager.load(document, "/packages/forest", error) &&
              noManager.skybox() == nullptr && noManager.warnings().size() >= 3,
            "without an asset manager assets become placeholders with warnings");
+  return counters.failures;
+}
+
+// Every AssetManager entry is held by exactly one reference: a reload leaves
+// a second entry for its path, a leak a second reference.
+static bool
+everyEntryHeldOnce(const AssetManager& assets)
+{
+  for (const std::string& line : assets.describeAssets()) {
+    if (line.find(" refs=1 ") == std::string::npos) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static size_t
+entriesFor(const AssetManager& assets, const std::string& path)
+{
+  const std::string suffix = " path=" + path;
+  size_t count = 0;
+  for (const std::string& line : assets.describeAssets()) {
+    if (line.size() >= suffix.size() &&
+        line.compare(line.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+static SceneAsset*
+assetById(std::vector<SceneAsset>& assets, const std::string& id)
+{
+  for (SceneAsset& asset : assets) {
+    if (asset.id == id) {
+      return &asset;
+    }
+  }
+  return nullptr;
+}
+
+// An asset-table edit (IllEd applies one for every asset field step, paste,
+// placement and settings undo) keeps unchanged assets loaded: only entries
+// whose load changed read their files again, and failed ones try again.
+static int
+testInstanceAssetTableEdit()
+{
+  TestCounters counters;
+  HeadlessRenderFixture fixture(640, 480);
+  fixture.mock.Initialize();
+  MemoryAssetSource source;
+  const std::string root = "/packages/forest/";
+  source.files[root + "sky.tga"] = solidTga(64, 48, 200);
+  source.files[root + "leaf.tga"] = solidTga(8, 8, 20);
+  source.files[root + "meshes/tri.obj"] =
+    text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+  AssetManager assets(&fixture.renderer, false, &source);
+  SceneDocument document;
+  document.worldMode = SceneWorldMode::World3D;
+  SceneAsset sky;
+  sky.id = "sky";
+  sky.type = SceneAssetType::CubemapCross;
+  sky.path = "sky.tga";
+  SceneAsset leaf;
+  leaf.id = "leaf";
+  leaf.type = SceneAssetType::Atlas;
+  leaf.path = "leaf.tga";
+  leaf.columns = 2;
+  leaf.rows = 2;
+  SceneAsset bark;
+  bark.id = "bark";
+  bark.type = SceneAssetType::Texture;
+  bark.path = "bark.tga";
+  SceneAsset mesh;
+  mesh.id = "tri";
+  mesh.type = SceneAssetType::Mesh;
+  mesh.path = "meshes/tri.obj";
+  SceneAsset missing;
+  missing.id = "missing";
+  missing.type = SceneAssetType::Mesh;
+  missing.path = "meshes/none.obj";
+  document.assets = { sky, leaf, bark, mesh, missing };
+  document.environment.skybox = "sky";
+  SceneNode meshNode;
+  meshNode.id = "m";
+  SceneComponent meshComponent;
+  meshComponent.value = SceneMeshRenderer{ "tri", ColorRgba{}, true };
+  meshNode.components.push_back(meshComponent);
+  SceneNode leafNode;
+  leafNode.id = "s";
+  SceneSprite leafSprite;
+  leafSprite.texture = "leaf";
+  leafSprite.hasCell = true;
+  leafSprite.column = 1;
+  leafSprite.row = 1;
+  SceneComponent leafComponent;
+  leafComponent.value = leafSprite;
+  leafNode.components.push_back(leafComponent);
+  SceneNode barkNode;
+  barkNode.id = "b";
+  SceneSprite barkSprite;
+  barkSprite.texture = "bark";
+  SceneComponent barkComponent;
+  barkComponent.value = barkSprite;
+  barkNode.components.push_back(barkComponent);
+  SceneNode brokenNode;
+  brokenNode.id = "broken";
+  SceneComponent brokenComponent;
+  brokenComponent.value = SceneMeshRenderer{ "missing", ColorRgba{}, true };
+  brokenNode.components.push_back(brokenComponent);
+  document.nodes = { meshNode, leafNode, barkNode, brokenNode };
+
+  SceneInstance instance(&assets);
+  instance.setRenderer(&fixture.renderer);
+  std::string error;
+  testTrue(counters,
+           instance.load(document, "/packages/forest", error) &&
+             instance.warnings().size() == 2,
+           "the scene loads with two failed assets");
+  testTrue(counters,
+           source.reads[root + "sky.tga"] == 1 &&
+             source.reads[root + "leaf.tga"] == 1 &&
+             source.reads[root + "meshes/tri.obj"] == 1 &&
+             source.reads[root + "bark.tga"] == 1 &&
+             source.reads[root + "meshes/none.obj"] == 1,
+           "the load reads each file once");
+  const size_t entries = assets.describeAssets().size();
+
+  // The grid only changes how sprites cut the atlas, not what loads.
+  std::vector<SceneAsset> edited = instance.document().assets;
+  assetById(edited, "leaf")->columns = 4;
+  testTrue(
+    counters, instance.setAssets(edited, error), "the edited table applies");
+  std::printf("reads after a grid edit: sky %d, leaf %d, tri %d\n",
+              source.reads[root + "sky.tga"],
+              source.reads[root + "leaf.tga"],
+              source.reads[root + "meshes/tri.obj"]);
+  testTrue(counters,
+           source.reads[root + "sky.tga"] == 1 &&
+             source.reads[root + "leaf.tga"] == 1 &&
+             source.reads[root + "meshes/tri.obj"] == 1,
+           "unchanged assets stay loaded instead of reading their files again");
+  testTrue(counters,
+           source.reads[root + "bark.tga"] == 2 &&
+             source.reads[root + "meshes/none.obj"] == 2 &&
+             instance.warnings().size() == 2,
+           "failed assets try again");
+  testTrue(counters,
+           assets.describeAssets().size() == entries &&
+             everyEntryHeldOnce(assets),
+           "no asset is duplicated or left with an extra reference");
+  AxisAlignedBounds3 bounds;
+  testTrue(counters,
+           instance.skybox() != nullptr &&
+             instance.skybox()->getCubemap().isValid() &&
+             instance.localBounds("m", &bounds) &&
+             std::fabs(bounds.maximum.x - 1.0f) < 1e-5f &&
+             instance.graph().getAttachmentCount(instance.handleOf("s")) == 1,
+           "the skybox, mesh and sprite still draw their assets");
+
+  // New mesh options are a different load: that mesh alone reads again, and
+  // its previous geometry is released.
+  edited = instance.document().assets;
+  assetById(edited, "tri")->mesh.centerAndNormalize = true;
+  assetById(edited, "tri")->mesh.targetRadius = 2.0f;
+  testTrue(
+    counters, instance.setAssets(edited, error), "the mesh options apply");
+  testTrue(counters,
+           source.reads[root + "meshes/tri.obj"] == 2 &&
+             source.reads[root + "sky.tga"] == 1 &&
+             source.reads[root + "leaf.tga"] == 1 &&
+             entriesFor(assets, root + "meshes/tri.obj") == 1 &&
+             assets.describeAssets().size() == entries &&
+             everyEntryHeldOnce(assets),
+           "only the changed mesh reloads and the old one is released");
+
+  // Once the missing files exist, applying the same table loads them.
+  source.files[root + "bark.tga"] = solidTga(4, 4, 90);
+  source.files[root + "meshes/none.obj"] =
+    text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+  testTrue(counters,
+           instance.setAssets(instance.document().assets, error) &&
+             instance.warnings().empty(),
+           "re-applying the table loads assets that failed before");
+  testTrue(counters,
+           source.reads[root + "sky.tga"] == 1 &&
+             source.reads[root + "leaf.tga"] == 1 &&
+             source.reads[root + "meshes/tri.obj"] == 2 &&
+             everyEntryHeldOnce(assets),
+           "loaded assets are still not read again");
+  testTrue(counters,
+           instance.localBounds("broken", &bounds) &&
+             std::fabs(bounds.maximum.x - 1.0f) < 1e-5f,
+           "the recovered mesh replaces its placeholder");
   return counters.failures;
 }
 
@@ -736,6 +933,8 @@ registerSceneInstanceTests(IllumoTestRegistry& registry)
                []() { return testInstanceEnvironmentLight(); });
   registry.add("Illumo.Content.InstanceSkyboxAndAssets",
                []() { return testInstanceSkyboxAndAssets(); });
+  registry.add("Illumo.Content.InstanceAssetTableEdit",
+               []() { return testInstanceAssetTableEdit(); });
   registry.add("Illumo.Content.InstanceIncrementalEdit",
                []() { return testInstanceIncrementalEdit(); });
   registry.add("Illumo.Content.InstanceSiblingOrder",

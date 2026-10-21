@@ -935,6 +935,27 @@ testPacingSleepPrecision()
     lateFrames);
 }
 
+// The texture creations and replacements recorded since `first`, as
+// "WxH" for each creation and "+WxH" for each replacement, space separated.
+static std::string
+textureUploads(const MockBackend& mock, size_t first)
+{
+  std::string uploads;
+  for (size_t index = first; index < mock.getCreateCount(); ++index) {
+    const MockBackend::CreateRecord& create = mock.getCreate(index);
+    const bool created =
+      create.kind == MockBackend::CreateRecord::Kind::TextureData;
+    if (!created &&
+        create.kind != MockBackend::CreateRecord::Kind::ReplaceTexture) {
+      continue;
+    }
+    uploads += (uploads.empty() ? "" : " ") + std::string(created ? "" : "+") +
+               std::to_string(create.width) + "x" +
+               std::to_string(create.height);
+  }
+  return uploads;
+}
+
 static void
 testAssetManagerEnrollment()
 {
@@ -950,8 +971,13 @@ testAssetManagerEnrollment()
     file.write(reinterpret_cast<const char*>(pixel), 3);
   }
 
+  size_t createsBefore = fixture.mock.getCreateCount();
   TextureHandle first = assets.acquireTexture(
     path.string(), TextureOptions{}, AssetLoadMode::Synchronous);
+  testTrue(g,
+           textureUploads(fixture.mock, createsBefore) == "1x1",
+           "a synchronous load creates the decoded texture once, without a "
+           "placeholder first");
   TextureHandle duplicate =
     assets.acquireTexture((path.parent_path() / "." / path.filename()).string(),
                           TextureOptions{},
@@ -974,8 +1000,12 @@ testAssetManagerEnrollment()
            !fixture.mock.IsTextureValid(first),
            "last release destroys backend resource");
 
+  createsBefore = fixture.mock.getCreateCount();
   TextureHandle missing = assets.acquireTexture(
     "missing-asset.png", TextureOptions{}, AssetLoadMode::Synchronous);
+  testTrue(g,
+           textureUploads(fixture.mock, createsBefore) == "2x2",
+           "a failed synchronous load creates only the placeholder");
   AssetStatus missingStatus = assets.getState(missing);
   testTrue(g,
            missingStatus.state == AssetState::Failed,
