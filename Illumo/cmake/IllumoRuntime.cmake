@@ -193,8 +193,9 @@ function(illumo_stage_runtime_file target_name source_file destination_name)
   add_dependencies(${target_name} ${stage_target})
 endfunction()
 
-# icx links the Intel math runtime dynamically. svml_dispmd.dll and libmmd.dll
-# have to sit beside the executable; the static Intel runtime does not.
+# icx links the Intel math runtime dynamically. Release imports libmmd.dll and
+# svml_dispmd.dll. Debug (-MDd) imports libmmdd.dll instead. All three sit
+# beside the executable; the loader only opens the ones that build imported.
 function(illumo_stage_intel_runtime target_name)
   if(NOT WIN32 OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
     return()
@@ -204,7 +205,7 @@ function(illumo_stage_intel_runtime target_name)
     return()
   endif()
   get_filename_component(intel_bin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
-  foreach(intel_dll IN ITEMS svml_dispmd.dll libmmd.dll)
+  foreach(intel_dll IN ITEMS svml_dispmd.dll libmmd.dll libmmdd.dll)
     set(intel_dll_path "${intel_bin_dir}/${intel_dll}")
     if(EXISTS "${intel_dll_path}")
       add_custom_command(TARGET ${target_name} POST_BUILD

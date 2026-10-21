@@ -274,9 +274,37 @@ class BuildTests(unittest.TestCase):
         self.assertNotIn("-G", command)
         self.assertFalse(any(item.startswith("-DCMAKE_C_COMPILER=") for item in command))
         self.assertIn("-DILLUMO_ORCHESTRATOR_OPTIMIZATION=", command)
+        self.assertIn("-DILLUMO_ORCHESTRATOR_CPU=", command)
         self.assertIn("-DILLUMO_ORCHESTRATOR_WARNINGS=", command)
         self.assertFalse(any("ILLUMO_ENABLE_ASAN" in item for item in command))
         self.assertNotIn("--compiler", build.profile_arguments(build.dashboard_settings(build.DashboardState())))
+
+    def test_cpu_target_is_baseline_until_selected(self):
+        self.assertEqual(build.cpu_compile_flag("intel", "intel-windows", "default"), "")
+        self.assertEqual(build.cpu_compile_flag("intel", "intel-windows", "avx2"), "/arch:AVX2")
+        self.assertEqual(build.cpu_compile_flag("intel", "intel-windows", "host"), "/QxHost")
+        self.assertEqual(build.cpu_compile_flag("intel", "gnu", "host"), "-xHost")
+        self.assertEqual(build.cpu_compile_flag("clang", "gnu", "avx2"), "-march=x86-64-v3")
+        self.assertEqual(build.cpu_compile_flag("clang", "gnu", "avx512"), "-march=x86-64-v4")
+        self.assertEqual(build.cpu_compile_flag("msvc", "msvc", "host"), "")
+        args = build.create_parser().parse_args(["build", "--compiler", "intel", "--cpu", "host"])
+        build.apply_compiler_selection(args, system="nt")
+        command = build.compiler_cmake_arguments(args, system="nt", search=self.nowhere)
+        self.assertEqual(args.sanitizer, "off")
+        self.assertIn("-DILLUMO_ORCHESTRATOR_CPU=/QxHost", command)
+        self.assertIn("-DILLUMO_ENABLE_ASAN=OFF", command)
+        requested = build.create_parser().parse_args(
+            ["build", "--compiler", "intel", "--sanitizer", "address", "--tidy"])
+        dropped = build.compiler_cmake_arguments(requested, system="nt", search=self.nowhere)
+        self.assertEqual(requested.sanitizer, "off")
+        self.assertTrue(requested.no_tidy)
+        self.assertIn("-DILLUMO_ENABLE_ASAN=OFF", dropped)
+        self.assertNotIn("-DILLUMO_ENABLE_ASAN=ON", dropped)
+        kept = build.create_parser().parse_args(
+            ["build", "--compiler", "clang", "--sanitizer", "address"])
+        kept_command = build.compiler_cmake_arguments(kept, system="posix", search=self.nowhere)
+        self.assertEqual(kept.sanitizer, "address")
+        self.assertIn("-DILLUMO_ENABLE_ASAN=ON", kept_command)
 
     def test_intel_windows_flags_use_its_own_tree(self):
         args = build.create_parser().parse_args(
@@ -361,7 +389,7 @@ class BuildTests(unittest.TestCase):
         args = build.create_parser().parse_args(build.dashboard_action_arguments(state, "build"))
         self.assertEqual((args.compiler, args.optimization, args.generator), ("intel", "speed", "Ninja"))
         rows = [row.key for row in build.compiler_option_rows(state)]
-        self.assertEqual(rows, ["back", "compiler", "optimization", "warnings", "sanitizer", "flags"])
+        self.assertEqual(rows, ["back", "compiler", "optimization", "cpu", "warnings", "sanitizer", "flags"])
         build.apply_palette_choice(state, None, "set:warnings=Quiet")
         self.assertEqual(state.warnings, "quiet")
         build.apply_dashboard_profile(state, "release", build.BUILTIN_PROFILES["release"])

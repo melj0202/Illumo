@@ -50,7 +50,7 @@ BUILTIN_PROFILES = {
 }
 PROFILE_STRINGS = (
     "config", "build_dir", "generator", "architecture",
-    "compiler", "optimization", "warnings", "sanitizer",
+    "compiler", "optimization", "cpu", "warnings", "sanitizer",
 )
 PROFILE_FLAGS = ("tracy", "no_tests", "no_docs", "no_tidy", "no_wasm")
 # Abstract compiler menu. Configure turns these into driver paths and flags;
@@ -69,6 +69,13 @@ OPTIMIZATION_CHOICES = (
     ("speed", "Speed"),
     ("fast", "Fast"),
 )
+# Instruction set. "host" is Intel's /QxHost or -xHost, which is off unless chosen.
+CPU_CHOICES = (
+    ("default", "Baseline"),
+    ("avx2", "AVX2"),
+    ("avx512", "AVX-512"),
+    ("host", "This CPU"),
+)
 WARNING_CHOICES = (
     ("default", "Project default"),
     ("strict", "Strict"),
@@ -82,12 +89,14 @@ SANITIZER_CHOICES = (
 COMPILER_OPTION_CHOICES = {
     "compiler": COMPILER_CHOICES,
     "optimization": OPTIMIZATION_CHOICES,
+    "cpu": CPU_CHOICES,
     "warnings": WARNING_CHOICES,
     "sanitizer": SANITIZER_CHOICES,
 }
 COMPILER_OPTION_LABELS = {
     "compiler": "Compiler",
     "optimization": "Optimization",
+    "cpu": "CPU",
     "warnings": "Warnings",
     "sanitizer": "Address sanitizer",
 }
@@ -97,12 +106,25 @@ OPTIMIZATION_FLAGS = {
     "intel-windows": {"none": "/Od", "size": "/O1", "speed": "/O2", "fast": "/O3"},
     "gnu": {"none": "-O0", "size": "-Os", "speed": "-O2", "fast": "-O3"},
 }
+# AVX2 and AVX-512 stay portable across Intel and AMD. Host is the Intel
+# processor switch (/QxHost, -xHost), except GCC and Clang, which get
+# -march=native. MSVC has no host switch.
+CPU_FLAGS = {
+    "msvc": {"avx2": "/arch:AVX2", "avx512": "/arch:AVX512", "host": ""},
+    "intel-windows": {"avx2": "/arch:AVX2", "avx512": "/arch:AVX512", "host": "/QxHost"},
+    "gnu": {"avx2": "-march=x86-64-v3", "avx512": "-march=x86-64-v4", "host": "-march=native"},
+}
 WARNING_FLAGS = {
     "msvc": {"strict": "/W4|/permissive-", "quiet": "/W0"},
     "intel-windows": {"strict": "/W4|/permissive-", "quiet": "/W0"},
     "gnu": {"strict": "-Wall|-Wextra|-Wpedantic", "quiet": "-w"},
 }
-# Commands whose configure step consumes the compiler selection.
+# Dropped when the build command is formed. CMake turns AddressSanitizer and
+# clang-tidy on unless the command says otherwise, so an ignored feature is
+# passed as off rather than left at that default.
+COMPILER_UNSUPPORTED = {
+    "intel": frozenset({"tidy", "asan"}),
+}
 COMPILER_COMMANDS = (
     "configure", "build", "dist", "test", "run", "play",
     "doctor", "watch", "profile-save",
@@ -686,6 +708,7 @@ class DashboardState:
     parallel_index: int = 0
     compiler: str = "default"
     optimization: str = "default"
+    cpu: str = "default"
     warnings: str = "default"
     sanitizer: str = "default"
     status: str = "Ready"
@@ -1656,7 +1679,7 @@ def dashboard_settings(state: DashboardState) -> dict:
     settings = {
         "config": state.configuration, "build_dir": str(DEFAULT_BUILD_DIRECTORY),
         "compiler": state.compiler, "optimization": state.optimization,
-        "warnings": state.warnings, "sanitizer": state.sanitizer,
+        "cpu": state.cpu, "warnings": state.warnings, "sanitizer": state.sanitizer,
         "tracy": state.tracy_enabled, "no_tests": not state.testing_enabled,
         "no_docs": not state.documentation_enabled, "no_tidy": False,
         "no_wasm": not state.wasm_enabled,
@@ -1667,13 +1690,10 @@ def dashboard_settings(state: DashboardState) -> dict:
     compiler = settings.get("compiler") or "default"
     settings["compiler"] = compiler
     settings["optimization"] = settings.get("optimization") or "default"
+    settings["cpu"] = settings.get("cpu") or "default"
     settings["warnings"] = settings.get("warnings") or "default"
     settings["sanitizer"] = settings.get("sanitizer") or "default"
-    # clang-tidy can parse icx once it is given /std:c++latest, but its
-    # warnings-as-errors reject ordinary Vulkan zero-initialization that icx
-    # accepts. The tidy action keeps that gate on a Clang build.
-    if compiler == "intel":
-        settings["no_tidy"] = True
+    omit_unsupported_settings(settings)
     settings["build_dir"] = str(assigned_build_directory(settings["build_dir"], compiler))
     generator = assigned_generator(settings.get("generator"), compiler)
     if generator:
@@ -1697,6 +1717,7 @@ def apply_dashboard_profile(state: DashboardState, name: str | None, settings: d
                                  if item[1] == settings.get("parallel", 0)), 0)
     state.compiler = settings.get("compiler", "default")
     state.optimization = settings.get("optimization", "default")
+    state.cpu = settings.get("cpu", "default")
     state.warnings = settings.get("warnings", "default")
     state.sanitizer = settings.get("sanitizer", "default")
 
@@ -3601,7 +3622,7 @@ def compiler_option_rows(state: DashboardState) -> list[ToolboxRow]:
         settings.get("compiler", "default"), generator=settings.get("generator"),
     )
     rows = [action_row("back", "Back to dashboard")]
-    for key in ("compiler", "optimization", "warnings", "sanitizer"):
+    for key in ("compiler", "optimization", "cpu", "warnings", "sanitizer"):
         current = settings.get(key, "default")
         rows.append(ToolboxRow(
             key,
@@ -3630,8 +3651,8 @@ def compiler_option_details(
         if resolved.language == "intel-windows":
             lines.append(
                 "The build loads setvars.bat so libircmt.lib and the Windows libraries "
-                "are both on the link path. clang-tidy and coverage stay on their "
-                "Clang builds; icx's own warnings do not fail the compile."
+                "are both on the link path. AddressSanitizer stays off: icx rejects it "
+                "with the Debug runtime. clang-tidy and coverage stay on Clang."
             )
         conflict = compiler_generator_error(settings.get("generator"), settings.get("compiler", "default"))
         if conflict:
@@ -3649,6 +3670,10 @@ def compiler_option_details(
         flag = OPTIMIZATION_FLAGS[resolved.language][current]
         return (f"Compile flag: {flag}",
                 "MSVC Fast is /Ox, Intel on Windows Fast is /O3, Clang and GCC Fast is -O3.")
+    if key == "cpu":
+        return cpu_option_details(
+            settings.get("compiler", "default"), resolved, settings.get("cpu", "default"),
+        )
     if key == "warnings":
         current = settings.get("warnings", "default")
         if current == "default":
@@ -3661,6 +3686,11 @@ def compiler_option_details(
         return (f"Compile flags: {flag}",
                 "MSVC-style builds still pass /FS /MP /we4530.")
     current = settings.get("sanitizer", "default")
+    if settings.get("compiler") == "intel":
+        return (
+            "AddressSanitizer stays off for Intel.",
+            "icx rejects /fsanitize=address together with the Debug runtime (-MDd).",
+        )
     if current == "off":
         return ("Passes -DILLUMO_ENABLE_ASAN=OFF.",
                 "Debug then uses the fast guest bounds traps.")
@@ -3669,6 +3699,39 @@ def compiler_option_details(
                 "The sanitizer still applies to Debug only: /fsanitize=address or -fsanitize=address.")
     return ("Debug uses AddressSanitizer. Release does not.",
             "Off disables it. On pins the CMake default explicitly.")
+
+
+def cpu_compile_flag(family: str, language: str, cpu: str) -> str:
+    """The instruction-set flag for one menu choice. Empty means the baseline."""
+    if cpu == "default":
+        return ""
+    if cpu == "host" and family == "intel" and language == "gnu":
+        return "-xHost"
+    return CPU_FLAGS[language][cpu]
+
+
+def cpu_option_details(family: str, resolved: ResolvedCompiler, cpu: str) -> tuple[str, ...]:
+    if cpu == "default":
+        return (
+            "No instruction-set flag. Intel's /QxHost is not on.",
+            "The binary stays on the compiler's portable baseline.",
+        )
+    flag = cpu_compile_flag(family, resolved.language, cpu)
+    if cpu == "host" and not flag:
+        return (
+            "Microsoft's compiler has no switch for this Intel CPU.",
+            "Choose AVX2 for an instruction set Intel and AMD both run.",
+        )
+    if cpu == "host" and family == "intel":
+        return (
+            f"Compile flag: {flag}",
+            "Tuned for this Intel processor. It can refuse to run on AMD or older Intel CPUs.",
+        )
+    if cpu == "host":
+        return (f"Compile flag: {flag}", "Tuned for the CPU that compiles this build.")
+    if cpu == "avx2":
+        return (f"Compile flag: {flag}", "Runs on Intel and AMD CPUs with AVX2.")
+    return (f"Compile flag: {flag}", "Needs a CPU with AVX-512.")
 
 
 def compiler_flag_details(
@@ -3686,6 +3749,8 @@ def compiler_status_line(state: DashboardState) -> str:
     parts = [choice_label(COMPILER_CHOICES, settings.get("compiler", "default"))]
     if settings.get("optimization", "default") != "default":
         parts.append(choice_label(OPTIMIZATION_CHOICES, settings["optimization"]))
+    if settings.get("cpu", "default") != "default":
+        parts.append(choice_label(CPU_CHOICES, settings["cpu"]))
     if settings.get("warnings", "default") != "default":
         parts.append(choice_label(WARNING_CHOICES, settings["warnings"]) + " warnings")
     if settings.get("sanitizer", "default") != "default":
@@ -5481,6 +5546,16 @@ def add_common_build_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--cpu",
+        choices=tuple(key for key, _label in CPU_CHOICES),
+        default="default",
+        help=(
+            "instruction set: default baseline, avx2, avx512, or host. "
+            "Host is /QxHost or -xHost for Intel and -march=native for Clang and GCC. "
+            "It is off unless selected."
+        ),
+    )
+    parser.add_argument(
         "--optimization",
         choices=tuple(key for key, _label in OPTIMIZATION_CHOICES),
         default="default",
@@ -6010,6 +6085,28 @@ def flag_text(encoded: str) -> str:
     return encoded.replace("|", " ")
 
 
+def unsupported_features(compiler: str) -> frozenset[str]:
+    return COMPILER_UNSUPPORTED.get(compiler or "default", frozenset())
+
+
+def omit_unsupported_settings(settings: dict) -> None:
+    """Pretend unsupported features were not set, so the command omits them."""
+    missing = unsupported_features(settings.get("compiler") or "default")
+    if "tidy" in missing:
+        settings["no_tidy"] = True
+    if "asan" in missing:
+        settings["sanitizer"] = "off"
+
+
+def omit_unsupported_arguments(arguments: argparse.Namespace) -> None:
+    compiler = getattr(arguments, "compiler", "default") or "default"
+    missing = unsupported_features(compiler)
+    if "tidy" in missing and hasattr(arguments, "no_tidy"):
+        arguments.no_tidy = True
+    if "asan" in missing and hasattr(arguments, "sanitizer"):
+        arguments.sanitizer = "off"
+
+
 def compiler_build_directory(compiler: str) -> str:
     if compiler == "default":
         return str(DEFAULT_BUILD_DIRECTORY)
@@ -6060,8 +6157,7 @@ def apply_compiler_selection(arguments: argparse.Namespace, system: str | None =
     arguments.compiler = compiler
     if compiler == "msvc" and system != "nt":
         raise BuildError("The Microsoft compiler is only available on Windows.")
-    if compiler == "intel" and hasattr(arguments, "no_tidy"):
-        arguments.no_tidy = True
+    omit_unsupported_arguments(arguments)
     arguments.build_dir = assigned_build_directory(arguments.build_dir, compiler)
     arguments.generator = assigned_generator(getattr(arguments, "generator", None), compiler)
     error = compiler_generator_error(arguments.generator, compiler)
@@ -6267,6 +6363,7 @@ def namespace_from_settings(settings: dict) -> argparse.Namespace:
     return argparse.Namespace(
         compiler=settings.get("compiler", "default"),
         optimization=settings.get("optimization", "default"),
+        cpu=settings.get("cpu", "default"),
         warnings=settings.get("warnings", "default"),
         sanitizer=settings.get("sanitizer", "default"),
         generator=settings.get("generator"),
@@ -6283,6 +6380,7 @@ def compiler_cmake_arguments(
     search=None,
 ) -> list[str]:
     """CMake arguments for the selected compiler. Empty options clear a stale cache."""
+    omit_unsupported_arguments(arguments)
     family = getattr(arguments, "compiler", "default") or "default"
     resolved = resolve_compiler(
         family,
@@ -6299,11 +6397,14 @@ def compiler_cmake_arguments(
         if manifest_tool is not None:
             args.append(f"-DCMAKE_MT={manifest_tool / 'mt.exe'}")
     optimization = getattr(arguments, "optimization", "default") or "default"
+    cpu = getattr(arguments, "cpu", "default") or "default"
     warnings = getattr(arguments, "warnings", "default") or "default"
     sanitizer = getattr(arguments, "sanitizer", "default") or "default"
     opt = "" if optimization == "default" else OPTIMIZATION_FLAGS[resolved.language][optimization]
+    cpu_flag = cpu_compile_flag(family, resolved.language, cpu)
     warn = "" if warnings == "default" else WARNING_FLAGS[resolved.language][warnings]
     args.append(f"-DILLUMO_ORCHESTRATOR_OPTIMIZATION={opt}")
+    args.append(f"-DILLUMO_ORCHESTRATOR_CPU={cpu_flag}")
     args.append(f"-DILLUMO_ORCHESTRATOR_WARNINGS={warn}")
     if sanitizer == "off":
         args.append("-DILLUMO_ENABLE_ASAN=OFF")
@@ -6324,6 +6425,7 @@ def require_selected_compiler(arguments: argparse.Namespace, dry_run: bool) -> N
 
 
 def configure_command(arguments: argparse.Namespace, cmake: str) -> list[str]:
+    omit_unsupported_arguments(arguments)
     build_directory = resolve_build_directory(arguments.build_dir)
     command = [
         cmake,

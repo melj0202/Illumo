@@ -20,6 +20,8 @@ set(ILLUMO_ORCHESTRATOR_OPTIMIZATION "" CACHE STRING
   "Optimization flag from the build orchestrator; empty keeps per-config defaults")
 set(ILLUMO_ORCHESTRATOR_WARNINGS "" CACHE STRING
   "Warning flags from the build orchestrator, separated by '|'; empty keeps project defaults")
+set(ILLUMO_ORCHESTRATOR_CPU "" CACHE STRING
+  "Instruction-set flag from the build orchestrator; empty keeps the compiler baseline")
 set(ILLUMO_RUN_TESTS_ALL "")
 if(ILLUMO_RUN_TESTS_ON_BUILD)
   set(ILLUMO_RUN_TESTS_ALL ALL)
@@ -222,6 +224,9 @@ function(illumo_configure_runtime_target target_name)
     # Read by the WASM host to select explicit guest bounds checks.
     target_compile_definitions(${target_name} PRIVATE
       $<$<CONFIG:Debug>:ILLUMO_ASAN=1>)
+  endif()
+  if(ILLUMO_ORCHESTRATOR_CPU)
+    target_compile_options(${target_name} PRIVATE ${ILLUMO_ORCHESTRATOR_CPU})
   endif()
   if(ILLUMO_ORCHESTRATOR_OPTIMIZATION)
     target_compile_options(${target_name} PRIVATE ${ILLUMO_ORCHESTRATOR_OPTIMIZATION})

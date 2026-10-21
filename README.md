@@ -685,16 +685,20 @@ The **Profile** setting cycles `Default`, the built-in profiles and any saved
 ones; changing a later setting marks the profile `(edited)` as a session
 override. Press `m`, or open **Development Tools → Compiler options**, to
 choose the host compiler and the options that are independent of it:
-optimization (match the configuration, none, size, speed, or fast), warnings
-(project default, strict, or quiet), and AddressSanitizer (Debug on, off, or
-on). The orchestrator turns that choice into the driver's path and flags when
+optimization (match the configuration, none, size, speed, or fast), CPU
+(baseline, AVX2, AVX-512, or this CPU), warnings (project default, strict,
+or quiet), and AddressSanitizer (Debug on, off, or on). The CPU baseline
+does not enable Intel's `/QxHost`. The orchestrator turns that choice into
+the driver's path and flags when
 it configures. Each choice gets its own tree
 (`build-workspace-msvc`, `build-workspace-intel`, `build-workspace-clang`,
 `build-workspace-gcc`) unless `--build-dir` names a different directory.
 Microsoft stays on the Visual Studio generator. Intel oneAPI (`icx`), LLVM
 (`clang-cl` on Windows), and GCC use Ninja. The same choices are
-`--compiler`, `--optimization`, `--warnings`, and `--sanitizer`. Coverage and
-clang-tidy stay on Clang. WASM packages stay on the pinned WASI clang.
+`--compiler`, `--optimization`, `--cpu`, `--warnings`, and `--sanitizer`. An Intel
+build turns AddressSanitizer off, because `icx` rejects it with the Debug
+runtime. Coverage and clang-tidy stay on Clang. WASM packages stay on the
+pinned WASI clang.
 Use the arrow keys to choose `Release`, `Debug`, `RelWithDebInfo`, or
 `MinSizeRel`, cycle the **Application** setting through the installed apps
 (IllumoGame / IllEd / Mesh Viewer), toggle documentation, Tracy and the WASM
