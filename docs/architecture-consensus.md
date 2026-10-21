@@ -658,8 +658,12 @@ IBackend::SubmitCommandQueue
 
 **Layers vs passes:** layers are ordered composition buckets. Ordinary layers
 draw to the screen; a layer's effective pass sequence can select offscreen
-targets, viewports, and independent clear settings. Application overrides take
-precedence over host defaults. This explicit pass mechanism is not a render graph.
+targets, viewports, and independent clear settings. The World sequence may
+also hold one `PassType::ShadowDepth` entry that places the shared shadow
+depth pass, its `passMask` selecting the casters that emit depth; without it
+the Renderer runs that pass before every layer, as it always has (D-RP2).
+Application overrides take precedence over host defaults. This explicit pass
+mechanism is not a render graph.
 
 **Acquire/enroll (rare):** backend `Create*` returns non-convertible
 `MeshHandle`, `ShaderHandle`, or `TextureHandle` values with slot+generation;
@@ -2148,7 +2152,8 @@ Full formal prose also lives in `docs/latex/sections/09-design-decision-log.tex`
 | **D-R11** | `Illumo::initialize` constructs through `CreateOpenGLBackend`, owns the one fallible backend `Initialize` call, and transfers ownership; `Renderer` never includes OpenGL types. |
 | **D-R12** | Historical fixed-queue policy; superseded by bounded vector growth in D-R16. |
 | **D-R13** | Single production frame path in `Illumo::render`; `RenderProofQuad` is test-only. |
-| **D-R14** | Scene layers (World/UI/Debug) + Renderer-owned built-in `RenderStyle` table. Layers group ordered drawables; D-R22 adds the shared shadow depth pass and D-RP1 permits configured per-layer offscreen/post passes. |
+| **D-R14** | Scene layers (World/UI/Debug) + Renderer-owned built-in `RenderStyle` table. Layers group ordered drawables; D-R22 adds the shared shadow depth pass, D-RP1 permits configured per-layer offscreen/post passes and D-RP2 lets a World sequence place that shadow pass. |
+| **D-RP2** | `PassType::ShadowDepth` names the Renderer's shared shadow depth pass. One such entry in the World layer's pass sequence runs the pass at that position with `passMask` selecting the depth-emitting drawables; without it the pass runs before every layer, unchanged. Another layer's entry reports a frame error. Still one Renderer-owned pass and map (D-R22). |
 | **D-R15** | Render primitives (`Shape`/`Sprite`/`Text`) composed on a `GameVisual` host; product drawables embed/compose via GameVisual. |
 | **D-R16** | Typed slot+generation resource/style handles; validated replace/destroy/query; stale operations log and no-op. CommandQueue reserves 2,048, grows, and rejects only at a configurable 65,536 default ceiling. |
 | **D-R17** | AssetManager owns canonical-path texture/shader caching, references, one CPU worker, stable fallbacks, render-thread pump/replacement, explicit reload, and Debug 500 ms timestamp polling. |

@@ -15,7 +15,9 @@ class IRenderWindow;
 // Role: ordered, non-owning layered list of drawables rebuilt every frame by
 // the program and the debug overlay as they dispatch (World → UI → Debug). Each
 // layer can define an ordered sequence of RenderPass descriptors (defaults to
-// a single DrawPass to the main backbuffer if unspecified).
+// a single DrawPass to the main backbuffer if unspecified). A World sequence
+// may include one PassType::ShadowDepth entry to place the Renderer's shared
+// shadow pass; without it the pass runs before every layer.
 class DrawList
 {
 public:

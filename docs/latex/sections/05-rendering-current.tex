@@ -31,6 +31,8 @@ results.
         \texttt{BeginFrame} $\rightarrow$ \texttt{RenderScene} $\rightarrow$
         \texttt{EndFrame} (swap).
   \item \symbolref{Renderer::RenderScene}:
+        collect World shadow casters; the shared shadow depth pass, unless a
+        World \texttt{ShadowDepth} pass entry places it (D-RP2);
         initial screen clear + viewport tokens; walk layers
         World $\rightarrow$ UI $\rightarrow$ Debug, using each layer's effective
         custom passes or ordinary screen rendering; each drawable
@@ -162,7 +164,8 @@ frame's drawables before the old scene leaves, detaching borrowed callbacks
 while preserving defaults.
 \begin{itemize}
   \item \textbf{Layer} --- ordered composition bucket, rendered to the screen
-        by default or through its effective custom pass sequence.
+        by default or through its effective custom pass sequence; the World
+        sequence may place the shared \texttt{ShadowDepth} pass (D-RP2).
   \item \textbf{RenderStyle} --- Renderer-owned generational registry: shader handle +
         \texttt{PipelineState} defaults (\texttt{Canvas}, \texttt{UiText},
         \texttt{Console}, \texttt{Shape}, \texttt{Sprite}). Canonical Shape/Sprite

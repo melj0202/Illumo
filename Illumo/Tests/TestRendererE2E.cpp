@@ -762,6 +762,116 @@ testRenderSceneShadowPassPrecedesCustomTarget()
   }
 }
 
+// In these scenes the shared shadow map is the only offscreen target, so a
+// valid framebuffer bind marks the shadow pass.
+struct ShadowPassObservation
+{
+  size_t shadowBinds = 0;
+  size_t drawsBeforeShadow = 0;
+  size_t drawsInsideShadow = 0;
+};
+
+static ShadowPassObservation
+observeShadowPass(const MockBackend& mock)
+{
+  ShadowPassObservation seen;
+  bool insideShadow = false;
+  for (size_t i = 0; i < mock.getLastSubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastSubmitted(i);
+    if (command.commandType == CommandType::SetFramebuffer) {
+      insideShadow = command.bindFramebuffer.handle.isValid();
+      if (insideShadow) {
+        seen.shadowBinds += 1;
+      }
+    } else if (command.commandType == CommandType::DrawIndexed) {
+      if (insideShadow) {
+        seen.drawsInsideShadow += 1;
+      } else if (seen.shadowBinds == 0) {
+        seen.drawsBeforeShadow += 1;
+      }
+    }
+  }
+  return seen;
+}
+
+static void
+testRenderSceneShadowPassConfiguredPosition()
+{
+  std::printf("\n--- e2e: a World pass sequence places the shadow pass ---\n");
+  E2ENullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  renderer.ensureBuiltinStyles();
+
+  MeshVisual visual;
+  visual.prepare(&renderer);
+  visual.addSolidCube(
+    glm::vec3(0.0f), glm::vec3(0.5f), ColorRgba{ 200, 200, 200, 255 });
+  visual.setLightingEnabled(true);
+  visual.setShadowsEnabled(true);
+
+  int customRuns = 0;
+  const RenderPassDesc colorPass =
+    RenderPassDesc::CreateDefaultDrawPass("WorldColor");
+  const RenderPassDesc shadowPass = RenderPassDesc::CreateShadowDepthPass();
+  RenderPassDesc customPass;
+  customPass.name = "AfterShadow";
+  customPass.type = PassType::Custom;
+  customPass.customExecution = [&customRuns](Renderer*) { ++customRuns; };
+
+  {
+    DrawList scene(&window, &camera);
+    scene.SetLayerPasses(RenderLayerId::World,
+                         { colorPass, shadowPass, customPass });
+    scene.AddDrawable(&visual, RenderLayerId::World);
+    renderer.BeginFrame();
+    renderer.RenderScene(&scene, &camera);
+    const ShadowPassObservation seen = observeShadowPass(mock);
+    e2eEqSize(seen.shadowBinds, 1, "a placed ShadowDepth pass runs once");
+    e2eTrue(seen.drawsBeforeShadow > 0,
+            "the World color pass draws before the placed shadow pass");
+    e2eTrue(seen.drawsInsideShadow > 0,
+            "the placed shadow pass draws the caster");
+    e2eEqInt(customRuns, 1, "passes after the shadow pass still execute");
+    e2eTrue(renderer.frameError().empty(),
+            "placing the shadow pass reports no frame error");
+  }
+  {
+    RenderPassDesc maskedShadow = shadowPass;
+    maskedShadow.passMask = 0u;
+    DrawList scene(&window, &camera);
+    scene.SetLayerPasses(RenderLayerId::World, { maskedShadow, colorPass });
+    scene.AddDrawable(&visual, RenderLayerId::World);
+    renderer.BeginFrame();
+    renderer.RenderScene(&scene, &camera);
+    const ShadowPassObservation seen = observeShadowPass(mock);
+    e2eEqSize(
+      seen.shadowBinds, 1, "a masked ShadowDepth pass still binds the map");
+    e2eEqSize(seen.drawsInsideShadow,
+              0,
+              "a zero pass mask keeps every caster out of the depth pass");
+  }
+  {
+    DrawList scene(&window, &camera);
+    scene.SetLayerPasses(RenderLayerId::UI, { shadowPass });
+    scene.AddDrawable(&visual, RenderLayerId::World);
+    renderer.BeginFrame();
+    renderer.RenderScene(&scene, &camera);
+    const ShadowPassObservation seen = observeShadowPass(mock);
+    e2eEqSize(seen.shadowBinds,
+              1,
+              "World keeps its implicit shadow pass when UI misplaces one");
+    e2eTrue(!renderer.frameError().empty(),
+            "a ShadowDepth pass outside World reports a frame error");
+  }
+}
+
 static void
 testRenderTargetPoolResizing()
 {
@@ -1330,6 +1440,9 @@ registerRendererE2ETests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.Renderer.ShadowPassPrecedesCustomTarget", []() {
     return runRendererE2ECase(testRenderSceneShadowPassPrecedesCustomTarget);
+  });
+  registry.add("Illumo.Renderer.ShadowPassConfiguredPosition", []() {
+    return runRendererE2ECase(testRenderSceneShadowPassConfiguredPosition);
   });
   registry.add("Illumo.Renderer.RenderTargetPoolResizing", []() {
     return runRendererE2ECase(testRenderTargetPoolResizing);

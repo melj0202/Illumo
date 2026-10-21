@@ -211,6 +211,11 @@ private:
   void endFrameContext();
   void resetShadowFrame();
   bool prepareShadowPass();
+  // Fits the shared map and emits the depth pass over the World drawables
+  // whose pass mask intersects passMask, restoring the current pass target.
+  void appendShadowPass(const std::vector<DrawableBase*>& worldDrawables,
+                        uint32_t passMask);
+  static bool hasShadowDepthPass(const std::vector<RenderPassDesc>& passes);
   static bool buildBoundsFrustum(const Matrix4& matrix, BoundsFrustum* frustum);
   static bool boundsIntersectFrustum(const AxisAlignedBounds3& bounds,
                                      const BoundsFrustum& frustum);

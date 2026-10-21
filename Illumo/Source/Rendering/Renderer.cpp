@@ -506,6 +506,45 @@ Renderer::prepareShadowPass()
   return true;
 }
 
+bool
+Renderer::hasShadowDepthPass(const std::vector<RenderPassDesc>& passes)
+{
+  for (const RenderPassDesc& pass : passes) {
+    if (pass.type == PassType::ShadowDepth) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void
+Renderer::appendShadowPass(const std::vector<DrawableBase*>& worldDrawables,
+                           uint32_t passMask)
+{
+  if (!prepareShadowPass()) {
+    return;
+  }
+  ILLUMO_PROFILE_ZONE("Renderer.ShadowPass");
+  const FramebufferHandle restoredFramebuffer = _currentPassFbo;
+  const std::array<int, 4> restoredViewport = _currentPassViewport;
+  pushFramebuffer(shadowFramebuffer);
+  pushViewport(0, 0, requestedShadowMapSize, requestedShadowMapSize);
+  pushClearDepth();
+  bindStyle(RenderStyleId::ShadowDepth);
+  for (size_t i = 0; i < worldDrawables.size(); ++i) {
+    DrawableBase* drawable = worldDrawables[i];
+    if (drawable != nullptr && drawable->isVisible() &&
+        (drawable->getPassMask() & passMask) != 0) {
+      drawable->AppendShadowCommands(this);
+    }
+  }
+  pushFramebuffer(restoredFramebuffer);
+  pushViewport(restoredViewport[0],
+               restoredViewport[1],
+               restoredViewport[2],
+               restoredViewport[3]);
+}
+
 const float*
 Renderer::retainUniformMatrix(const float* value)
 {
@@ -1539,25 +1578,13 @@ Renderer::RenderScene(DrawList* scene, Camera* camera)
       }
     }
 
-    if (prepareShadowPass()) {
-      ILLUMO_PROFILE_ZONE("Renderer.ShadowPass");
-      const FramebufferHandle restoredFramebuffer = _currentPassFbo;
-      const std::array<int, 4> restoredViewport = _currentPassViewport;
-      pushFramebuffer(shadowFramebuffer);
-      pushViewport(0, 0, requestedShadowMapSize, requestedShadowMapSize);
-      pushClearDepth();
-      bindStyle(RenderStyleId::ShadowDepth);
-      for (size_t i = 0; i < worldDrawables.size(); ++i) {
-        DrawableBase* drawable = worldDrawables[i];
-        if (drawable != nullptr && drawable->isVisible()) {
-          drawable->AppendShadowCommands(this);
-        }
-      }
-      pushFramebuffer(restoredFramebuffer);
-      pushViewport(restoredViewport[0],
-                   restoredViewport[1],
-                   restoredViewport[2],
-                   restoredViewport[3]);
+    // A World pass sequence may place the shadow pass itself; otherwise it
+    // runs here, before any layer, as it always has.
+    const bool shadowPassPlaced =
+      scene->hasCustomPasses(RenderLayerId::World) &&
+      hasShadowDepthPass(scene->passesIn(RenderLayerId::World));
+    if (!shadowPassPlaced) {
+      appendShadowPass(worldDrawables, 0xFFFFFFFFu);
     }
   }
 
@@ -1622,6 +1649,18 @@ Renderer::RenderScene(DrawList* scene, Camera* camera)
         for (size_t p = 0; p < passes.size(); ++p) {
           const RenderPassDesc& pass = passes[p];
           ILLUMO_PROFILE_ZONE("Renderer.AppendPass");
+
+          if (pass.type == PassType::ShadowDepth) {
+            // Targets its own map and restores this layer's current target,
+            // so it needs none of the target setup below.
+            if (layer == RenderLayerId::World) {
+              appendShadowPass(list, pass.passMask);
+            } else {
+              reportFrameError(
+                "ShadowDepth passes belong to the World layer only");
+            }
+            continue;
+          }
 
           FramebufferHandle targetFbo{};
           int targetW = frameContext.windowDimensions[0];

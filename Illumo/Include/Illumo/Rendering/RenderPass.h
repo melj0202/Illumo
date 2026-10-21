@@ -17,7 +17,12 @@ enum class PassType : uint8_t
 {
   Draw,
   PostProcess,
-  Custom
+  Custom,
+  // The Renderer's one shared directional shadow depth pass, placed where
+  // this entry sits in the World layer's sequence. Without such an entry the
+  // Renderer runs it implicitly before every layer. passMask selects which
+  // World drawables emit depth; it has no meaning in other layers.
+  ShadowDepth
 };
 
 struct PassClearConfig
@@ -106,6 +111,15 @@ struct RenderPassDesc
     desc.name = passName;
     desc.type = PassType::Draw;
     desc.useScreenTarget = true;
+    return desc;
+  }
+
+  static RenderPassDesc CreateShadowDepthPass(
+    const std::string& passName = "ShadowDepthPass")
+  {
+    RenderPassDesc desc;
+    desc.name = passName;
+    desc.type = PassType::ShadowDepth;
     return desc;
   }
 

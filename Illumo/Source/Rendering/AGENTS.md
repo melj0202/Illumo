@@ -34,7 +34,10 @@ types.
   claim a dropped frame was complete.
 - `DrawList` is a non-owning ordered drawable list rebuilt each frame. It
   does not own drawables and must not become a retained scene graph or ECS.
-- Directional shadows are one Renderer-owned pass before color rendering. The
+- Directional shadows are one Renderer-owned pass. It runs before every layer
+  unless the World pass sequence places a `PassType::ShadowDepth` entry,
+  which runs it there with `passMask` choosing the depth emitters; an entry
+  in another layer is a frame error (D-RP2). The
   first camera-visible World caster selects the light; the Renderer retains
   caster descriptors, extrudes the camera frustum toward that light by the
   configured caster distance, fits the shared map to intersecting bounds, and

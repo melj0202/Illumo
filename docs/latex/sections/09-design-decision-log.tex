@@ -2212,6 +2212,28 @@ lists and reset restore defaults. Effective pass queries include fallbacks.
 Resource ownership and synchronous token submission remain unchanged.
 \end{decisionbox}
 
+\subsection*{D-RP2 --- The shadow pass is a placeable World pass}
+\begin{decisionbox}[title={D-RP2 \quad 2026-10-21}]
+\textbf{Decision:} \texttt{PassType::ShadowDepth} names the Renderer's shared
+directional shadow depth pass. A World layer pass sequence may hold one such
+entry; the pass then runs at that position and the entry's \texttt{passMask}
+selects the drawables that emit depth. Without the entry the Renderer runs the
+pass before every layer, exactly as before, so every existing caller and every
+recorded guest frame is unchanged. A \texttt{ShadowDepth} entry in another
+layer reports a frame error.\\
+\textbf{Why:} Every other stage of a frame was already a configured pass
+(D-RP1); the shadow pass alone was hard-coded into \texttt{RenderScene}, so
+ordering it against an offscreen or post pass meant editing the renderer
+core.\\
+\textbf{Consequences:} Still one Renderer-owned pass and one shared map,
+fitted after caster collection (D-R22); no per-object maps. Caster collection
+stays ahead of the pass wherever it sits, so the guest recorder's casters and
+camera are final when the World layer begins. A colour pass placed before the
+shadow pass renders unshadowed; the configurer owns that order.
+\texttt{Illumo.Renderer.ShadowPassConfiguredPosition} covers position, mask
+and misplacement.
+\end{decisionbox}
+
 \subsection*{D-GC1 --- Product-owned rules catalog discovery}
 \begin{decisionbox}[title={D-GC1 \quad 2026-09-14}]
 \textbf{Decision:} Game's RuleCatalogLoader owns catalog file reads and ordered

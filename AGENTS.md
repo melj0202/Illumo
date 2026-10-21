@@ -429,7 +429,8 @@ suite passes.
   per-frame camera or light values (those come from Renderer's
   `FrameUniforms` block), and are recorded and run on the main thread.
 - Directional shadows use one Renderer-owned depth pass over camera-relevant
-  World casters before color rendering. Direct `MeshVisual` drawables and
+  World casters, run before every layer unless the World pass sequence places
+  it with a `PassType::ShadowDepth` entry (D-RP2). Direct `MeshVisual` drawables and
   SceneGraph attachments contribute bounds and depth tokens to the same fitted
   light-space matrix and shared map; invalid camera reconstruction falls back
   to all casters, and per-object shadow framebuffers are forbidden.
