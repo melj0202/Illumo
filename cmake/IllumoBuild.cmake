@@ -14,6 +14,12 @@ option(ILLUMO_ENABLE_CLANG_TIDY
 # runs through ctest, `python build.py test`, or the IllumoRunTests target.
 option(ILLUMO_RUN_TESTS_ON_BUILD
   "Run the workspace test suite as part of the default (ALL) build" OFF)
+# The build orchestrator translates its compiler menu into these flags.
+# Empty keeps the defaults below. Warning flags are separated by "|".
+set(ILLUMO_ORCHESTRATOR_OPTIMIZATION "" CACHE STRING
+  "Optimization flag from the build orchestrator; empty keeps per-config defaults")
+set(ILLUMO_ORCHESTRATOR_WARNINGS "" CACHE STRING
+  "Warning flags from the build orchestrator, separated by '|'; empty keeps project defaults")
 set(ILLUMO_RUN_TESTS_ALL "")
 if(ILLUMO_RUN_TESTS_ON_BUILD)
   set(ILLUMO_RUN_TESTS_ALL ALL)
@@ -79,9 +85,21 @@ if(ILLUMO_ENABLE_CLANG_TIDY)
       "ILLUMO_ENABLE_CLANG_TIDY=ON requires clang-tidy on PATH. "
       "Install LLVM or configure with -DILLUMO_ENABLE_CLANG_TIDY=OFF.")
   endif()
-  set(ILLUMO_CLANG_TIDY_COMMAND
-    "${ILLUMO_CLANG_TIDY_EXECUTABLE};--config-file=${ILLUMO_WORKSPACE_SOURCE_ROOT}/.clang-tidy;--quiet"
-    CACHE INTERNAL "clang-tidy command attached to first-party C++ targets")
+  set(_illumo_tidy_command
+    "${ILLUMO_CLANG_TIDY_EXECUTABLE}"
+    "--config-file=${ILLUMO_WORKSPACE_SOURCE_ROOT}/.clang-tidy"
+    "--quiet")
+  # icx selects C++23 with /Qstd=c++23. clang-tidy ignores that flag, stays in
+  # an older language mode, and then cannot see std::string_view. /std:c++23
+  # is unused by clang-cl here; /std:c++latest is the mode it honors, and on
+  # a current MSVC library that mode is C++23. Coverage stays a Clang build.
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM"
+      AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+    list(APPEND _illumo_tidy_command "--extra-arg=/std:c++latest")
+  endif()
+  set(ILLUMO_CLANG_TIDY_COMMAND "${_illumo_tidy_command}"
+    CACHE INTERNAL "clang-tidy command attached to first-party C++ targets" FORCE)
+  unset(_illumo_tidy_command)
 endif()
 
 if(NOT DEFINED CMAKE_RUNTIME_OUTPUT_DIRECTORY)
@@ -150,7 +168,17 @@ function(illumo_configure_cpp_target target_name)
   if(MSVC)
     # C4530: an exception handler in first-party code is an error (MSVC only
     # warns when exceptions are off; Clang refuses try/throw itself).
-    target_compile_options(${target_name} PRIVATE /W4 /FS /MP /we4530)
+    # /FS /MP /we4530 stay even when the orchestrator replaces the warning level.
+    if(ILLUMO_ORCHESTRATOR_WARNINGS)
+      string(REPLACE "|" ";" _illumo_warning_list "${ILLUMO_ORCHESTRATOR_WARNINGS}")
+      target_compile_options(${target_name} PRIVATE ${_illumo_warning_list})
+    else()
+      target_compile_options(${target_name} PRIVATE /W4)
+    endif()
+    target_compile_options(${target_name} PRIVATE /FS /MP /we4530)
+  elseif(ILLUMO_ORCHESTRATOR_WARNINGS)
+    string(REPLACE "|" ";" _illumo_warning_list "${ILLUMO_ORCHESTRATOR_WARNINGS}")
+    target_compile_options(${target_name} PRIVATE ${_illumo_warning_list})
   else()
     target_compile_options(${target_name} PRIVATE -Wall -Wextra)
   endif()
@@ -195,20 +223,23 @@ function(illumo_configure_runtime_target target_name)
     target_compile_definitions(${target_name} PRIVATE
       $<$<CONFIG:Debug>:ILLUMO_ASAN=1>)
   endif()
-  if(MSVC)
+  if(ILLUMO_ORCHESTRATOR_OPTIMIZATION)
+    target_compile_options(${target_name} PRIVATE ${ILLUMO_ORCHESTRATOR_OPTIMIZATION})
+  elseif(MSVC)
     target_compile_options(${target_name} PRIVATE
       $<$<CONFIG:Debug>:/Od>
       $<$<CONFIG:Release>:/O2>)
-    if(ILLUMO_ENABLE_ASAN AND NOT ILLUMO_ENABLE_COVERAGE)
-      target_compile_options(${target_name} PRIVATE
-        $<$<CONFIG:Debug>:/fsanitize=address>)
-    endif()
   else()
     target_compile_options(${target_name} PRIVATE
       $<$<CONFIG:Debug>:-O0>
       $<$<CONFIG:Debug>:-g>
       $<$<CONFIG:Release>:-O3>)
-    if(ILLUMO_ENABLE_ASAN AND NOT ILLUMO_ENABLE_COVERAGE)
+  endif()
+  if(ILLUMO_ENABLE_ASAN AND NOT ILLUMO_ENABLE_COVERAGE)
+    if(MSVC)
+      target_compile_options(${target_name} PRIVATE
+        $<$<CONFIG:Debug>:/fsanitize=address>)
+    else()
       target_compile_options(${target_name} PRIVATE
         $<$<CONFIG:Debug>:-fsanitize=address>)
       get_target_property(target_type ${target_name} TYPE)
@@ -219,6 +250,9 @@ function(illumo_configure_runtime_target target_name)
           $<$<CONFIG:Debug>:-fsanitize=address>)
       endif()
     endif()
+  endif()
+  if(COMMAND illumo_stage_intel_runtime)
+    illumo_stage_intel_runtime(${target_name})
   endif()
 endfunction()
 

@@ -683,7 +683,19 @@ python build.py
 
 The **Profile** setting cycles `Default`, the built-in profiles and any saved
 ones; changing a later setting marks the profile `(edited)` as a session
-override. Use the arrow keys to choose `Release`, `Debug`, `RelWithDebInfo`, or
+override. Press `m`, or open **Development Tools → Compiler options**, to
+choose the host compiler and the options that are independent of it:
+optimization (match the configuration, none, size, speed, or fast), warnings
+(project default, strict, or quiet), and AddressSanitizer (Debug on, off, or
+on). The orchestrator turns that choice into the driver's path and flags when
+it configures. Each choice gets its own tree
+(`build-workspace-msvc`, `build-workspace-intel`, `build-workspace-clang`,
+`build-workspace-gcc`) unless `--build-dir` names a different directory.
+Microsoft stays on the Visual Studio generator. Intel oneAPI (`icx`), LLVM
+(`clang-cl` on Windows), and GCC use Ninja. The same choices are
+`--compiler`, `--optimization`, `--warnings`, and `--sanitizer`. Coverage and
+clang-tidy stay on Clang. WASM packages stay on the pinned WASI clang.
+Use the arrow keys to choose `Release`, `Debug`, `RelWithDebInfo`, or
 `MinSizeRel`, cycle the **Application** setting through the installed apps
 (IllumoGame / IllEd / Mesh Viewer), toggle documentation, Tracy and the WASM
 runtime, select build parallelism, and run a focused action: **Play**,
@@ -697,7 +709,7 @@ toolchain is missing, and how many stale pre-WASM outputs remain; the line
 above it shows the Git branch, commit and working-tree state. Each action has
 a one-letter hotkey shown beside it (`p` Play, `b` Build everything, `a`
 runtime and apps, `e` distribution, `t` tests, `r` Run existing build, `s` statistics, `o`
-Development Tools, `d` docs, `c` coverage, `i` clang-tidy); `/` opens a
+Development Tools, `d` docs, `c` coverage, `i` clang-tidy, `m` compiler options); `/` opens a
 command palette that fuzzy-matches every action, tool, profile and setting
 value (`/ cfg deb` Enter selects Debug), `.` repeats the
 last action, `?` lists every shortcut with its command-line equivalent, Tab

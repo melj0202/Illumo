@@ -193,6 +193,30 @@ function(illumo_stage_runtime_file target_name source_file destination_name)
   add_dependencies(${target_name} ${stage_target})
 endfunction()
 
+# icx links the Intel math runtime dynamically. svml_dispmd.dll and libmmd.dll
+# have to sit beside the executable; the static Intel runtime does not.
+function(illumo_stage_intel_runtime target_name)
+  if(NOT WIN32 OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
+    return()
+  endif()
+  get_target_property(target_type ${target_name} TYPE)
+  if(NOT target_type STREQUAL "EXECUTABLE")
+    return()
+  endif()
+  get_filename_component(intel_bin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+  foreach(intel_dll IN ITEMS svml_dispmd.dll libmmd.dll)
+    set(intel_dll_path "${intel_bin_dir}/${intel_dll}")
+    if(EXISTS "${intel_dll_path}")
+      add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${intel_dll_path}"
+          "$<TARGET_FILE_DIR:${target_name}>"
+        COMMENT "Staging ${intel_dll} for ${target_name}"
+        VERBATIM)
+    endif()
+  endforeach()
+endfunction()
+
 function(illumo_stage_msvc_asan target_name)
   if(NOT MSVC OR NOT ILLUMO_ENABLE_ASAN OR ILLUMO_ENABLE_COVERAGE)
     return()

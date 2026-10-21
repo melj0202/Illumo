@@ -240,6 +240,154 @@ class BuildTests(unittest.TestCase):
                 build.CommandRunner(False).run(["missing"], self.root)
 
 
+    def nowhere(self, names, extra):
+        return None
+
+    def test_intel_link_environment_adds_the_runtime_library(self):
+        if build.os.name != "nt":
+            self.assertIsNone(build.compiler_subprocess_environment(
+                ["cmake", "-DCMAKE_CXX_COMPILER=icx"]))
+            return
+        root = self.root / "compiler"
+        (root / "bin").mkdir(parents=True)
+        (root / "lib").mkdir()
+        (root / "lib" / "libircmt.lib").write_bytes(b"")
+        compiler = root / "bin" / "icx.exe"
+        compiler.write_bytes(b"")
+        environment = build.compiler_subprocess_environment(
+            ["cmake", f"-DCMAKE_CXX_COMPILER={compiler}"])
+        self.assertIsNotNone(environment)
+        self.assertEqual(Path(environment["LIB"].split(build.os.pathsep)[0]), root / "lib")
+        cache = self.root / "tree"
+        cache.mkdir()
+        (cache / "CMakeCache.txt").write_text(
+            f"CMAKE_CXX_COMPILER:FILEPATH={compiler}\n", encoding="utf-8")
+        from_build = build.compiler_subprocess_environment(
+            ["cmake", "--build", str(cache)])
+        self.assertEqual(Path(from_build["LIB"].split(build.os.pathsep)[0]), root / "lib")
+        self.assertIsNone(build.compiler_subprocess_environment(["cmake", "--build", str(cache / "missing")]))
+
+    def test_default_configure_does_not_pin_a_compiler(self):
+        args = build.create_parser().parse_args(["configure", "--build-dir", str(self.root)])
+        build.apply_compiler_selection(args)
+        command = build.configure_command(args, "cmake")
+        self.assertNotIn("-G", command)
+        self.assertFalse(any(item.startswith("-DCMAKE_C_COMPILER=") for item in command))
+        self.assertIn("-DILLUMO_ORCHESTRATOR_OPTIMIZATION=", command)
+        self.assertIn("-DILLUMO_ORCHESTRATOR_WARNINGS=", command)
+        self.assertFalse(any("ILLUMO_ENABLE_ASAN" in item for item in command))
+        self.assertNotIn("--compiler", build.profile_arguments(build.dashboard_settings(build.DashboardState())))
+
+    def test_intel_windows_flags_use_its_own_tree(self):
+        args = build.create_parser().parse_args(
+            ["build", "--compiler", "intel", "--optimization", "fast",
+             "--warnings", "strict", "--sanitizer", "off"])
+        build.apply_compiler_selection(args, system="nt")
+        self.assertEqual(args.generator, "Ninja")
+        self.assertEqual(args.build_dir, build.Path("build-workspace-intel"))
+        command = build.compiler_cmake_arguments(args, system="nt", search=self.nowhere)
+        self.assertIn("-DCMAKE_C_COMPILER=icx", command)
+        self.assertIn("-DCMAKE_CXX_COMPILER=icx", command)
+        self.assertIn("-DILLUMO_ORCHESTRATOR_OPTIMIZATION=/O3", command)
+        self.assertIn("-DILLUMO_ORCHESTRATOR_WARNINGS=/W4|/permissive-", command)
+        self.assertIn("-DILLUMO_ENABLE_ASAN=OFF", command)
+        configured = build.configure_command(args, "cmake")
+        self.assertIn("-DILLUMO_ENABLE_CLANG_TIDY=OFF", configured)
+        self.assertIn("icx", build.resolve_compiler(
+            "intel", system="nt", generator="Ninja", search=self.nowhere).missing)
+
+    def test_intel_posix_uses_icpx_and_gnu_flags(self):
+        args = build.create_parser().parse_args(
+            ["build", "--compiler", "intel", "--optimization", "fast", "--warnings", "strict"])
+        build.apply_compiler_selection(args, system="posix")
+        command = build.compiler_cmake_arguments(args, system="posix", search=self.nowhere)
+        self.assertIn("-DCMAKE_C_COMPILER=icx", command)
+        self.assertIn("-DCMAKE_CXX_COMPILER=icpx", command)
+        self.assertIn("-DILLUMO_ORCHESTRATOR_OPTIMIZATION=-O3", command)
+        self.assertIn("-DILLUMO_ORCHESTRATOR_WARNINGS=-Wall|-Wextra|-Wpedantic", command)
+
+    def test_clang_cl_fast_is_ox_and_gcc_size_is_os(self):
+        def clang_cl(names, extra):
+            return build.Path("C:/LLVM/bin/clang-cl.exe") if "clang-cl" in names else None
+
+        args = build.create_parser().parse_args(["build", "--compiler", "clang", "--optimization", "fast"])
+        build.apply_compiler_selection(args, system="nt")
+        self.assertEqual(args.build_dir, build.Path("build-workspace-clang"))
+        command = build.compiler_cmake_arguments(args, system="nt", search=clang_cl)
+        rendered = " ".join(item.replace("\\", "/") for item in command)
+        self.assertIn("-DCMAKE_CXX_COMPILER=C:/LLVM/bin/clang-cl.exe", rendered)
+        self.assertIn("-DILLUMO_ORCHESTRATOR_OPTIMIZATION=/Ox", command)
+
+        def gcc(names, extra):
+            return build.Path("/usr/bin/" + names[0])
+
+        args = build.create_parser().parse_args(["build", "--compiler", "gcc", "--optimization", "size"])
+        build.apply_compiler_selection(args, system="posix")
+        command = build.compiler_cmake_arguments(args, system="posix", search=gcc)
+        rendered = " ".join(item.replace("\\", "/") for item in command)
+        self.assertIn("-DCMAKE_C_COMPILER=/usr/bin/gcc", rendered)
+        self.assertIn("-DCMAKE_CXX_COMPILER=/usr/bin/g++", rendered)
+        self.assertIn("-DILLUMO_ORCHESTRATOR_OPTIMIZATION=-Os", command)
+
+    def test_explicit_build_dir_and_rejected_generator(self):
+        args = build.create_parser().parse_args(
+            ["build", "--compiler", "clang", "--build-dir", "my-tree"])
+        build.apply_compiler_selection(args, system="nt")
+        self.assertEqual(args.build_dir, build.Path("my-tree"))
+        self.assertEqual(args.generator, "Ninja")
+        visual_studio = build.create_parser().parse_args(
+            ["build", "--compiler", "clang", "--generator", "Visual Studio 17 2022"])
+        with self.assertRaisesRegex(build.BuildError, "Visual Studio"):
+            build.apply_compiler_selection(visual_studio, system="nt")
+        msvc = build.create_parser().parse_args(["build", "--compiler", "msvc"])
+        with self.assertRaisesRegex(build.BuildError, "only available on Windows"):
+            build.apply_compiler_selection(msvc, system="posix")
+        build.apply_compiler_selection(msvc, system="nt")
+        self.assertIsNone(msvc.generator)
+        self.assertEqual(msvc.build_dir, build.Path("build-workspace-msvc"))
+        command = build.compiler_cmake_arguments(msvc, system="nt", search=self.nowhere)
+        self.assertFalse(any(item.startswith("-DCMAKE_C_COMPILER=") for item in command))
+
+    def test_profile_rejects_unknown_compiler_and_menu_tracks_overrides(self):
+        self.write_profiles({"compiler": "icc"})
+        with self.assertRaisesRegex(build.BuildError, "compiler"):
+            build.load_profiles(self.profiles)
+        state = build.DashboardState()
+        build.set_compiler_option(state, "compiler", "intel")
+        build.set_compiler_option(state, "optimization", "speed")
+        settings = build.dashboard_settings(state)
+        self.assertEqual((settings["build_dir"], settings["generator"], settings["optimization"]),
+                         ("build-workspace-intel", "Ninja", "speed"))
+        args = build.create_parser().parse_args(build.dashboard_action_arguments(state, "build"))
+        self.assertEqual((args.compiler, args.optimization, args.generator), ("intel", "speed", "Ninja"))
+        rows = [row.key for row in build.compiler_option_rows(state)]
+        self.assertEqual(rows, ["back", "compiler", "optimization", "warnings", "sanitizer", "flags"])
+        build.apply_palette_choice(state, None, "set:warnings=Quiet")
+        self.assertEqual(state.warnings, "quiet")
+        build.apply_dashboard_profile(state, "release", build.BUILTIN_PROFILES["release"])
+        self.assertEqual((state.overrides, state.compiler, state.optimization), ({}, "default", "default"))
+        rendered = build.render_dashboard(build.DashboardState(applications=("game",)), 120, ansi=False)
+        self.assertIn("default compiler", rendered)
+        self.assertLessEqual(len(rendered.splitlines()), 30)
+
+    def test_cached_compiler_conflict_and_user_flag_wins(self):
+        args = self.cache_arguments(
+            f"CMAKE_HOME_DIRECTORY:INTERNAL={build.SOURCE_DIRECTORY}\n"
+            "CMAKE_CXX_COMPILER:FILEPATH=C:/BuildTools/cl.exe\n",
+            "--compiler", "intel")
+        with self.assertRaisesRegex(build.BuildError, "configured with"):
+            build.validate_build_settings(args)
+        args.fresh = True
+        build.validate_build_settings(args)
+        args = build.create_parser().parse_args(
+            ["configure", "--build-dir", str(self.root),
+             "--cmake-arg=-DILLUMO_ORCHESTRATOR_OPTIMIZATION=/O1"])
+        command = build.configure_command(args, "cmake")
+        generated = next(index for index, item in enumerate(command)
+                         if item.startswith("-DILLUMO_ORCHESTRATOR_OPTIMIZATION="))
+        self.assertLess(generated, command.index("-DILLUMO_ORCHESTRATOR_OPTIMIZATION=/O1"))
+
+
 class DashboardProgressTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

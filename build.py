@@ -48,8 +48,65 @@ BUILTIN_PROFILES = {
     "tracy": {"config": "Release", "build_dir": "build-workspace-tracy",
               "tracy": True, "no_docs": True, "no_tidy": True},
 }
-PROFILE_STRINGS = ("config", "build_dir", "generator", "architecture")
+PROFILE_STRINGS = (
+    "config", "build_dir", "generator", "architecture",
+    "compiler", "optimization", "warnings", "sanitizer",
+)
 PROFILE_FLAGS = ("tracy", "no_tests", "no_docs", "no_tidy", "no_wasm")
+# Abstract compiler menu. Configure turns these into driver paths and flags;
+# the menu itself never stores /O2 or -O3.
+COMPILER_CHOICES = (
+    ("default", "Default"),
+    ("msvc", "Microsoft MSVC"),
+    ("intel", "Intel oneAPI"),
+    ("clang", "LLVM Clang"),
+    ("gcc", "GCC"),
+)
+OPTIMIZATION_CHOICES = (
+    ("default", "Match configuration"),
+    ("none", "None"),
+    ("size", "Size"),
+    ("speed", "Speed"),
+    ("fast", "Fast"),
+)
+WARNING_CHOICES = (
+    ("default", "Project default"),
+    ("strict", "Strict"),
+    ("quiet", "Quiet"),
+)
+SANITIZER_CHOICES = (
+    ("default", "Debug on"),
+    ("off", "Off"),
+    ("address", "On"),
+)
+COMPILER_OPTION_CHOICES = {
+    "compiler": COMPILER_CHOICES,
+    "optimization": OPTIMIZATION_CHOICES,
+    "warnings": WARNING_CHOICES,
+    "sanitizer": SANITIZER_CHOICES,
+}
+COMPILER_OPTION_LABELS = {
+    "compiler": "Compiler",
+    "optimization": "Optimization",
+    "warnings": "Warnings",
+    "sanitizer": "Address sanitizer",
+}
+# Warning lists use "|" so the CMake command line is not split on ";".
+OPTIMIZATION_FLAGS = {
+    "msvc": {"none": "/Od", "size": "/O1", "speed": "/O2", "fast": "/Ox"},
+    "intel-windows": {"none": "/Od", "size": "/O1", "speed": "/O2", "fast": "/O3"},
+    "gnu": {"none": "-O0", "size": "-Os", "speed": "-O2", "fast": "-O3"},
+}
+WARNING_FLAGS = {
+    "msvc": {"strict": "/W4|/permissive-", "quiet": "/W0"},
+    "intel-windows": {"strict": "/W4|/permissive-", "quiet": "/W0"},
+    "gnu": {"strict": "-Wall|-Wextra|-Wpedantic", "quiet": "-w"},
+}
+# Commands whose configure step consumes the compiler selection.
+COMPILER_COMMANDS = (
+    "configure", "build", "dist", "test", "run", "play",
+    "doctor", "watch", "profile-save",
+)
 
 # IllumoGame ships only as a WASM package played by IllumoRuntime. The pinned
 # Wasmtime/WASI SDK pair (cmake/IllumoWasm.cmake) is Windows x64 only.
@@ -342,7 +399,7 @@ DASHBOARD_DESCRIPTIONS = {
     "launch": "skip configure and build",
     "stats": "Git state, files, and first-party LOC",
     "file_stats": "first-party source files sorted by LOC",
-    "tools": "tests, diagnostics, profiles, and artifacts",
+    "tools": "compiler, tests, diagnostics, profiles, and artifacts",
     "docs": "illumo.pdf and architecture-map.pdf",
     "coverage": "Ninja, Clang, and the 85% gate",
     "tidy": "Ninja, Clang, and first-party clang-tidy",
@@ -627,6 +684,10 @@ class DashboardState:
     tracy_enabled: bool = False
     wasm_enabled: bool = WASM_HOST_SUPPORTED
     parallel_index: int = 0
+    compiler: str = "default"
+    optimization: str = "default"
+    warnings: str = "default"
+    sanitizer: str = "default"
     status: str = "Ready"
     status_kind: str = "normal"
     applications: tuple[str, ...] = field(default_factory=tuple)
@@ -1248,7 +1309,7 @@ def dashboard_selection_hint(state: DashboardState) -> str:
     if kind == "setting":
         return DASHBOARD_SETTING_HINTS.get(key, "")
     if key == "tools":
-        return "Test explorer, diagnostics, build trends, profiles, artifacts, watch and doctor"
+        return "Compiler options, tests, diagnostics, trends, profiles, artifacts, watch and doctor"
     if key == "quit":
         return "Leave the build console"
     try:
@@ -1314,7 +1375,11 @@ def render_dashboard(
             wordmark.append((subtitle, ANSI_DIM))
         row(centered_segments(wordmark, inner_width))
     settings = dashboard_settings(state)
-    context = [f"tree {settings['build_dir']} ({settings['config']})"]
+    compiler_name = (
+        "default compiler" if settings.get("compiler", "default") == "default"
+        else choice_label(COMPILER_CHOICES, settings.get("compiler", "default"))
+    )
+    context = [f"tree {settings['build_dir']} ({settings['config']}, {compiler_name})"]
     if state.git_summary:
         context.insert(0, state.git_summary)
     row(centered_segments([(f" {glyphs['separator']} ".join(context), ANSI_DIM)], inner_width))
@@ -1590,6 +1655,8 @@ def dashboard_parallel_label(state: DashboardState) -> str:
 def dashboard_settings(state: DashboardState) -> dict:
     settings = {
         "config": state.configuration, "build_dir": str(DEFAULT_BUILD_DIRECTORY),
+        "compiler": state.compiler, "optimization": state.optimization,
+        "warnings": state.warnings, "sanitizer": state.sanitizer,
         "tracy": state.tracy_enabled, "no_tests": not state.testing_enabled,
         "no_docs": not state.documentation_enabled, "no_tidy": False,
         "no_wasm": not state.wasm_enabled,
@@ -1597,6 +1664,22 @@ def dashboard_settings(state: DashboardState) -> dict:
     }
     settings.update(state.profile_settings)
     settings.update(state.overrides)
+    compiler = settings.get("compiler") or "default"
+    settings["compiler"] = compiler
+    settings["optimization"] = settings.get("optimization") or "default"
+    settings["warnings"] = settings.get("warnings") or "default"
+    settings["sanitizer"] = settings.get("sanitizer") or "default"
+    # clang-tidy can parse icx once it is given /std:c++latest, but its
+    # warnings-as-errors reject ordinary Vulkan zero-initialization that icx
+    # accepts. The tidy action keeps that gate on a Clang build.
+    if compiler == "intel":
+        settings["no_tidy"] = True
+    settings["build_dir"] = str(assigned_build_directory(settings["build_dir"], compiler))
+    generator = assigned_generator(settings.get("generator"), compiler)
+    if generator:
+        settings["generator"] = generator
+    elif not settings.get("generator"):
+        settings.pop("generator", None)
     return settings
 
 
@@ -1612,6 +1695,10 @@ def apply_dashboard_profile(state: DashboardState, name: str | None, settings: d
     state.wasm_enabled = not settings.get("no_wasm", not WASM_HOST_SUPPORTED)
     state.parallel_index = next((i for i, item in enumerate(DASHBOARD_PARALLEL_OPTIONS)
                                  if item[1] == settings.get("parallel", 0)), 0)
+    state.compiler = settings.get("compiler", "default")
+    state.optimization = settings.get("optimization", "default")
+    state.warnings = settings.get("warnings", "default")
+    state.sanitizer = settings.get("sanitizer", "default")
 
 
 def dashboard_parallel_arguments(state: DashboardState) -> list[str]:
@@ -3378,6 +3465,10 @@ def run_profile_picker(state: DashboardState, terminal: DashboardTerminal) -> No
             rows.append(ToolboxRow(name, f"{name} ({kind})", (
                 f"Config: {effective['config']} | Directory: {effective['build_dir']}",
                 f"Generator: {effective.get('generator', 'CMake default')} | Architecture: {effective.get('architecture', 'default')}",
+                f"Compiler: {choice_label(COMPILER_CHOICES, effective.get('compiler', 'default'))} | "
+                f"Optimization: {choice_label(OPTIMIZATION_CHOICES, effective.get('optimization', 'default'))} | "
+                f"Warnings: {choice_label(WARNING_CHOICES, effective.get('warnings', 'default'))} | "
+                f"Sanitizer: {choice_label(SANITIZER_CHOICES, effective.get('sanitizer', 'default'))}",
                 f"Tests: {not effective['no_tests']} | Docs: {not effective['no_docs']} | Tidy: {not effective['no_tidy']} | Tracy: {effective['tracy']} | WASM: {not effective['no_wasm']}",
                 f"Parallel: {dashboard_parallel_label(preview)} | CMake args: {effective.get('cmake_arg', [])}")))
         action = choose_toolbox("Build profiles", rows, view, terminal, message)
@@ -3478,6 +3569,7 @@ def run_artifact_picker(state: DashboardState, terminal: DashboardTerminal) -> N
 
 
 DEVELOPMENT_TOOLS = (
+    ("compiler", "Compiler options"),
     ("tests", "Test explorer"),
     ("diagnostics", "Diagnostic browser"),
     ("trends", "Build trends (durations and outcomes per action)"),
@@ -3491,8 +3583,171 @@ DEVELOPMENT_TOOLS = (
 )
 
 
+def cycle_choice(choices: Sequence[tuple[str, str]], current: str, direction: int) -> str:
+    keys = [key for key, _label in choices]
+    index = keys.index(current) if current in keys else 0
+    return keys[(index + direction) % len(keys)]
+
+
+def set_compiler_option(state: DashboardState, key: str, value: str) -> None:
+    setattr(state, key, value)
+    state.overrides[key] = value
+
+
+def compiler_option_rows(state: DashboardState) -> list[ToolboxRow]:
+    """The compiler menu: each option cycles, and the last row shows the flags."""
+    settings = dashboard_settings(state)
+    resolved = resolve_compiler(
+        settings.get("compiler", "default"), generator=settings.get("generator"),
+    )
+    rows = [action_row("back", "Back to dashboard")]
+    for key in ("compiler", "optimization", "warnings", "sanitizer"):
+        current = settings.get(key, "default")
+        rows.append(ToolboxRow(
+            key,
+            f"{COMPILER_OPTION_LABELS[key]:<18} {choice_label(COMPILER_OPTION_CHOICES[key], current)}",
+            compiler_option_details(key, settings, resolved),
+            tone="warn" if key == "compiler" and resolved.missing else "",
+        ))
+    preview = compiler_cmake_arguments(namespace_from_settings(settings))
+    rows.append(ToolboxRow(
+        "flags", "Flags passed at configure",
+        compiler_flag_details(settings, resolved, preview),
+        tone="warn" if resolved.missing else "ok",
+    ))
+    return rows
+
+
+def compiler_option_details(
+    key: str, settings: dict, resolved: ResolvedCompiler,
+) -> tuple[str, ...]:
+    if key == "compiler":
+        lines = [resolved.summary]
+        if resolved.missing:
+            lines.append(resolved.missing)
+        lines.append(f"Build tree: {settings['build_dir']}")
+        lines.append(f"Generator: {settings.get('generator', 'CMake default')}")
+        if resolved.language == "intel-windows":
+            lines.append(
+                "The build loads setvars.bat so libircmt.lib and the Windows libraries "
+                "are both on the link path. clang-tidy and coverage stay on their "
+                "Clang builds; icx's own warnings do not fail the compile."
+            )
+        conflict = compiler_generator_error(settings.get("generator"), settings.get("compiler", "default"))
+        if conflict:
+            lines.append(conflict)
+        lines.append("WASM packages still compile with the pinned WASI clang.")
+        return tuple(lines)
+    if key == "optimization":
+        current = settings.get("optimization", "default")
+        if current == "default":
+            if resolved.language == "gnu":
+                return ("CMake keeps Debug at -O0 -g and Release at -O3.",
+                        "None, Size, Speed and Fast replace that for every configuration.")
+            return ("CMake keeps Debug at /Od and Release at /O2.",
+                    "None, Size, Speed and Fast replace that for every configuration.")
+        flag = OPTIMIZATION_FLAGS[resolved.language][current]
+        return (f"Compile flag: {flag}",
+                "MSVC Fast is /Ox, Intel on Windows Fast is /O3, Clang and GCC Fast is -O3.")
+    if key == "warnings":
+        current = settings.get("warnings", "default")
+        if current == "default":
+            if resolved.language == "gnu":
+                return ("CMake keeps -Wall -Wextra.",)
+            return ("CMake keeps /W4, and still passes /FS /MP /we4530.",)
+        flag = flag_text(WARNING_FLAGS[resolved.language][current])
+        if resolved.language == "gnu":
+            return (f"Compile flags: {flag}",)
+        return (f"Compile flags: {flag}",
+                "MSVC-style builds still pass /FS /MP /we4530.")
+    current = settings.get("sanitizer", "default")
+    if current == "off":
+        return ("Passes -DILLUMO_ENABLE_ASAN=OFF.",
+                "Debug then uses the fast guest bounds traps.")
+    if current == "address":
+        return ("Passes -DILLUMO_ENABLE_ASAN=ON.",
+                "The sanitizer still applies to Debug only: /fsanitize=address or -fsanitize=address.")
+    return ("Debug uses AddressSanitizer. Release does not.",
+            "Off disables it. On pins the CMake default explicitly.")
+
+
+def compiler_flag_details(
+    settings: dict, resolved: ResolvedCompiler, arguments: Sequence[str],
+) -> tuple[str, ...]:
+    lines = list(arguments)
+    if resolved.missing:
+        lines.insert(0, resolved.missing)
+    lines.append("Exceptions stay off. Coverage and clang-tidy stay on Clang.")
+    return tuple(lines[:6])
+
+
+def compiler_status_line(state: DashboardState) -> str:
+    settings = dashboard_settings(state)
+    parts = [choice_label(COMPILER_CHOICES, settings.get("compiler", "default"))]
+    if settings.get("optimization", "default") != "default":
+        parts.append(choice_label(OPTIMIZATION_CHOICES, settings["optimization"]))
+    if settings.get("warnings", "default") != "default":
+        parts.append(choice_label(WARNING_CHOICES, settings["warnings"]) + " warnings")
+    if settings.get("sanitizer", "default") != "default":
+        parts.append("ASan " + choice_label(SANITIZER_CHOICES, settings["sanitizer"]))
+    return "Compiler: " + ", ".join(parts)
+
+
+def run_compiler_options(state: DashboardState, terminal: DashboardTerminal) -> str:
+    """Cycle compiler, optimization, warnings and the sanitizer."""
+    view = ToolboxView()
+    last = None
+    cyclable = tuple(COMPILER_OPTION_CHOICES)
+    while True:
+        rows = compiler_option_rows(state)
+        size = shutil.get_terminal_size((100, 32))
+        rendered, regions, page = render_toolbox(
+            "Compiler options", rows, view, size.columns, size.lines,
+            compiler_status_line(state), ansi=True,
+            help_text="Left/Right or Enter: change | q or Escape: back",
+        )
+        if rendered != last:
+            sys.stdout.write(ANSI_CLEAR + tui_newlines(rendered))
+            sys.stdout.flush()
+            last = rendered
+        event = terminal.read_event()
+        if isinstance(event, DashboardMouseEvent) and shutil.get_terminal_size((100, 32)) != size:
+            continue
+        if isinstance(event, DashboardMouseEvent) and event.kind in ("left", "right"):
+            region = next((hit for hit in regions if hit.row == event.y and 1 <= event.x <= hit.right), None)
+            if region is not None:
+                view.selected = region.index
+                clicked = rows[region.index].key
+                if clicked == "back" and event.kind == "left":
+                    return compiler_status_line(state)
+                if clicked in cyclable:
+                    set_compiler_option(
+                        state, clicked,
+                        cycle_choice(
+                            COMPILER_OPTION_CHOICES[clicked],
+                            dashboard_settings(state).get(clicked, "default"),
+                            1 if event.kind == "left" else -1,
+                        ),
+                    )
+            continue
+        selected = rows[view.selected].key if rows else ""
+        if event in ("left", "right", "enter") and selected in cyclable:
+            direction = -1 if event == "left" else 1
+            set_compiler_option(
+                state, selected,
+                cycle_choice(COMPILER_OPTION_CHOICES[selected],
+                             dashboard_settings(state).get(selected, "default"), direction),
+            )
+            continue
+        action = toolbox_event(view, rows, event, regions, page)
+        if action == "back":
+            return compiler_status_line(state)
+
+
 def run_development_tool(state: DashboardState, terminal: DashboardTerminal, tool: str) -> str:
     """Open one Development Tools entry; returns a status message."""
+    if tool == "compiler":
+        return run_compiler_options(state, terminal)
     if tool == "tests":
         run_test_explorer(state, terminal)
     elif tool == "diagnostics":
@@ -3563,6 +3818,11 @@ def palette_entries(state: DashboardState) -> list[tuple[str, str, str, str]]:
     finally:
         state.selected = selected
     entries += [(f"tool:{key}", "Tool", label, "Development Tools") for key, label in DEVELOPMENT_TOOLS]
+    for key, choices in COMPILER_OPTION_CHOICES.items():
+        title = COMPILER_OPTION_LABELS[key]
+        for _ident, value in choices:
+            entries.append((f"set:{key}={value}", "Setting", f"{title}: {value}",
+                            "Compiler options; m opens the menu"))
     try:
         profiles = [DASHBOARD_DEFAULT_PROFILE, *load_profiles(state.profiles_file, allow_missing=True)]
     except BuildError:
@@ -3687,6 +3947,11 @@ def apply_palette_choice(state: DashboardState, terminal: DashboardTerminal, cho
         return None
     if kind == "set":
         key, _equals, target = value.partition("=")
+        if key in COMPILER_OPTION_CHOICES:
+            ident = next(ident for ident, text in COMPILER_OPTION_CHOICES[key] if text == target)
+            set_compiler_option(state, key, ident)
+            state.status, state.status_kind = f"{COMPILER_OPTION_LABELS[key]}: {target}", "normal"
+            return None
         state.selected = [item[2] for item in DASHBOARD_ITEMS].index(key)
         # Step through the same path as Left/Right so overrides are recorded.
         for _attempt in range(len(DASHBOARD_PARALLEL_OPTIONS) + len(state.applications) + 4):
@@ -3703,6 +3968,7 @@ def dashboard_shortcut_lines(state: DashboardState) -> list[str]:
              "  Enter or click      run the selected action",
              "  Tab                 jump between Settings and Actions",
              "  Home/End            first or last row",
+             "  m                   compiler options (also under Development Tools)",
              "  /                   command palette: type to find any action, tool,",
              "                      profile or setting value; Enter runs it",
              "  .                   repeat the last action",
@@ -3849,6 +4115,10 @@ def run_dashboard() -> int:
                     show_toolbox_text("Keyboard shortcuts", dashboard_shortcut_lines(state), terminal)
                     last_rendered = None
                     continue
+                if key == "key:m":
+                    state.status, state.status_kind = run_compiler_options(state, terminal), "normal"
+                    last_rendered = None
+                    continue
                 if key == "search":
                     choice = run_command_palette(state, terminal)
                     last_rendered = None
@@ -3869,6 +4139,149 @@ def run_dashboard() -> int:
         terminal.leave()
         sys.stdout.write(ANSI_POP_TITLE)
         sys.stdout.flush()
+
+
+def prepend_env_path(env: dict[str, str], key: str, entries: Sequence[Path]) -> None:
+    current = [part for part in env.get(key, "").split(os.pathsep) if part]
+    folded = {os.path.normcase(part) for part in current}
+    prefix: list[str] = []
+    for entry in entries:
+        text = str(entry)
+        if os.path.normcase(text) not in folded:
+            prefix.append(text)
+            folded.add(os.path.normcase(text))
+    env[key] = os.pathsep.join([*prefix, *current])
+
+
+def intel_compiler_path(command: Sequence[str]) -> Path | None:
+    """The icx path a configure or build command will use, if it uses one."""
+    for item in command:
+        if "=" not in item:
+            continue
+        value = item.split("=", 1)[1].strip().strip('"')
+        if Path(value).stem.lower() in ("icx", "icpx"):
+            return Path(value)
+    if len(command) >= 3 and Path(command[0]).stem.lower() == "cmake" and command[1] == "--build":
+        cache = read_cmake_cache(resolve_build_directory(Path(command[2])))
+        for key in ("CMAKE_CXX_COMPILER", "CMAKE_C_COMPILER"):
+            value = cache.get(key, "")
+            if Path(value).stem.lower() in ("icx", "icpx"):
+                return Path(value)
+    return None
+
+
+def intel_runtime_directories(compiler: Path) -> tuple[Path, ...]:
+    """Directories that hold libircmt.lib next to an icx installation."""
+    root = compiler.parent.parent
+    found: list[Path] = []
+    for directory in (root / "lib", root / "lib" / "intel64"):
+        if (directory / "libircmt.lib").is_file():
+            found.append(directory)
+    return tuple(found)
+
+
+def windows_sdk_tool_directory() -> Path | None:
+    """The newest Windows SDK x64 bin directory that contains mt.exe."""
+    roots = []
+    program_files = os.environ.get("ProgramFiles(x86)")
+    if program_files:
+        roots.append(Path(program_files) / "Windows Kits" / "10" / "bin")
+    roots.append(Path(r"C:\Program Files (x86)\Windows Kits\10\bin"))
+    seen: set[str] = set()
+    for root in roots:
+        key = os.path.normcase(str(root))
+        if key in seen or not root.is_dir():
+            continue
+        seen.add(key)
+        versions = sorted((path for path in root.iterdir() if path.is_dir()), reverse=True)
+        for version in versions:
+            manifest_tool = version / "x64" / "mt.exe"
+            if manifest_tool.is_file():
+                return manifest_tool.parent
+    return None
+
+
+_oneapi_environment_cache: dict[str, dict[str, str] | None] = {}
+
+
+def oneapi_setvars(compiler: Path) -> Path | None:
+    """setvars.bat beside this icx, which also loads the Visual Studio libraries."""
+    for parent in compiler.parents:
+        candidate = parent / "setvars.bat"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def oneapi_environment(setvars: Path) -> dict[str, str] | None:
+    """The environment after setvars.bat. Cached: the batch file takes several seconds."""
+    key = os.path.normcase(str(setvars))
+    if key in _oneapi_environment_cache:
+        return _oneapi_environment_cache[key]
+    # cmd.exe quote rules mangle a /c string that both quotes a path and uses &&.
+    # A one-line batch file keeps the call and the environment dump intact.
+    script = Path(tempfile.gettempdir()) / "illumo-oneapi-env.bat"
+    script.write_text(
+        f'@echo off\r\ncall "{setvars}" intel64 >nul\r\nset\r\n', encoding="ascii",
+    )
+    try:
+        result = subprocess.run(
+            ["cmd", "/d", "/c", str(script)],
+            capture_output=True, check=False,
+        )
+    finally:
+        script.unlink(missing_ok=True)
+    if result.returncode != 0:
+        _oneapi_environment_cache[key] = None
+        return None
+    text = result.stdout.decode("mbcs", errors="replace")
+    environment: dict[str, str] = {}
+    for line in text.splitlines():
+        name, separator, value = line.partition("=")
+        # setvars prints some names in lowercase (path=). Windows treats them
+        # as the same variable, so keep one canonical spelling.
+        if separator and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            environment[name.upper()] = value
+    if "LIB" not in environment:
+        _oneapi_environment_cache[key] = None
+        return None
+    _oneapi_environment_cache[key] = environment
+    return environment
+
+
+def compiler_subprocess_environment(command: Sequence[str]) -> dict[str, str] | None:
+    """Environment for icx. Without Intel's libraries, link.exe cannot find libircmt.lib.
+
+    setvars.bat supplies those libraries and the MSVC and Windows SDK libraries
+    together. Returns None when the command does not use the Intel compiler.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        compiler = intel_compiler_path(command)
+    except BuildError:
+        return None
+    if compiler is None:
+        return None
+    libraries = intel_runtime_directories(compiler)
+    setvars = oneapi_setvars(compiler)
+    loaded = oneapi_environment(setvars) if setvars is not None else None
+    # Copy: the cached setvars environment must stay intact across commands.
+    environment = dict(loaded) if loaded is not None else dict(os.environ)
+    if libraries:
+        prepend_env_path(environment, "LIB", libraries)
+    manifest_tools = windows_sdk_tool_directory()
+    path_entries = [compiler.parent]
+    if manifest_tools is not None:
+        path_entries.insert(0, manifest_tools)
+    prepend_env_path(environment, "PATH", path_entries)
+    if libraries:
+        environment["ILLUMO_INTEL_RUNTIME"] = str(libraries[0])
+    elif environment.get("LIB"):
+        environment["ILLUMO_INTEL_RUNTIME"] = environment["LIB"].split(os.pathsep)[0]
+    else:
+        return None
+    return environment
 
 
 class CommandRunner:
@@ -3897,6 +4310,9 @@ class CommandRunner:
         ansi = sys.stdout.isatty()
         print(dashboard_style("> ", ANSI_BOLD + ANSI_VIOLET, ansi)
               + dashboard_style(format_command(command), ANSI_BOLD, ansi), flush=True)
+        environment = compiler_subprocess_environment(list(command))
+        if environment is not None:
+            print(f"Intel runtime libraries: {environment['ILLUMO_INTEL_RUNTIME']}", flush=True)
         if self.dry_run:
             return
 
@@ -3906,6 +4322,7 @@ class CommandRunner:
                 list(command),
                 cwd=working_directory,
                 check=False,
+                env=environment,
             )
             elapsed = time.monotonic() - started
             if ansi and result.returncode == 0 and elapsed >= 1:
@@ -4563,6 +4980,10 @@ def validate_profile(name: str, settings: object) -> None:
             )
         if not valid:
             raise BuildError(f"Profile '{name}' has an invalid value for '{key}'")
+        if key in COMPILER_OPTION_CHOICES and value not in {
+            ident for ident, _label in COMPILER_OPTION_CHOICES[key]
+        }:
+            raise BuildError(f"Profile '{name}' has an unsupported {key}")
     if "config" in settings and settings["config"] not in (
         "Debug", "Release", "RelWithDebInfo", "MinSizeRel"
     ):
@@ -4573,6 +4994,8 @@ def profile_arguments(settings: dict) -> list[str]:
     result: list[str] = []
     for key, value in settings.items():
         option = "--" + key.replace("_", "-")
+        if key in COMPILER_OPTION_CHOICES and value == "default":
+            continue
         if key in PROFILE_STRINGS:
             result.append(f"{option}={value}")
         elif key in PROFILE_FLAGS and value:
@@ -4827,6 +5250,21 @@ def validate_build_settings(arguments: argparse.Namespace) -> None:
                 f"Requested {attribute} '{requested}' conflicts with cached '{cache[key]}' "
                 f"in '{directory}'. Choose another --build-dir or explicitly use --fresh."
             )
+    resolved = resolve_compiler(
+        getattr(arguments, "compiler", "default") or "default",
+        generator=getattr(arguments, "generator", None),
+    )
+    cached_compiler = cache.get("CMAKE_CXX_COMPILER", "")
+    if (
+        resolved.cxx
+        and cached_compiler
+        and not getattr(arguments, "fresh", False)
+        and Path(cached_compiler).stem.lower() != Path(resolved.cxx).stem.lower()
+    ):
+        raise BuildError(
+            f"This tree was configured with '{cached_compiler}', but the selected "
+            f"compiler is '{resolved.cxx}'. Choose another --build-dir or pass --fresh."
+        )
 
 
 def run_doctor(arguments: argparse.Namespace) -> None:
@@ -4891,13 +5329,23 @@ def run_doctor(arguments: argparse.Namespace) -> None:
             ("latexmk", shutil.which("latexmk")),
         ):
             record(name, "ok" if path else "warning", path or "Optional documentation tool missing")
-    compiler = cache.get("CMAKE_CXX_COMPILER")
-    compiler_found = bool(compiler and Path(compiler).is_file())
-    record(
-        "compiler", "ok" if compiler_found else "warning",
-        compiler if compiler_found else
-        "No existing compiler verified. CMake configure must resolve the compiler and SDK.",
-    )
+    selected_compiler = getattr(arguments, "compiler", "default") or "default"
+    if selected_compiler != "default":
+        resolved = resolve_compiler(
+            selected_compiler, generator=getattr(arguments, "generator", None),
+        )
+        record(
+            "compiler", "error" if resolved.missing else "ok",
+            resolved.missing or resolved.summary,
+        )
+    else:
+        compiler = cache.get("CMAKE_CXX_COMPILER")
+        compiler_found = bool(compiler and Path(compiler).is_file())
+        record(
+            "compiler", "ok" if compiler_found else "warning",
+            compiler if compiler_found else
+            "No existing compiler verified. CMake configure must resolve the compiler and SDK.",
+        )
     wasm = enabled("ILLUMO_BUILD_WASM_RUNTIME")
     if wasm and not WASM_HOST_SUPPORTED:
         record("wasm toolchain", "error", "IllumoRuntime requires Windows x64; use --no-wasm.")
@@ -5019,6 +5467,40 @@ def add_common_build_arguments(parser: argparse.ArgumentParser) -> None:
             "build tree, relative to the repository root by default "
             "(default: build-workspace)"
         ),
+    )
+    parser.add_argument(
+        "--compiler",
+        choices=tuple(key for key, _label in COMPILER_CHOICES),
+        default="default",
+        help=(
+            "host compiler (default, msvc, intel, clang, gcc). "
+            "The orchestrator selects the driver and translates optimization, "
+            "warnings and the sanitizer into that compiler's flags. "
+            "A non-default compiler uses build-workspace-<compiler> unless "
+            "--build-dir names a different tree. Intel, Clang and GCC use Ninja."
+        ),
+    )
+    parser.add_argument(
+        "--optimization",
+        choices=tuple(key for key, _label in OPTIMIZATION_CHOICES),
+        default="default",
+        help=(
+            "optimization translated for the selected compiler "
+            "(default: Debug unoptimized, Release optimized; "
+            "none, size, speed, or fast apply to every configuration)"
+        ),
+    )
+    parser.add_argument(
+        "--warnings",
+        choices=tuple(key for key, _label in WARNING_CHOICES),
+        default="default",
+        help="warning level translated for the selected compiler (default, strict, quiet)",
+    )
+    parser.add_argument(
+        "--sanitizer",
+        choices=tuple(key for key, _label in SANITIZER_CHOICES),
+        default="default",
+        help="address sanitizer: default (on in Debug), off, or address",
     )
     parser.add_argument("--generator", help="CMake generator passed with -G")
     parser.add_argument(
@@ -5517,6 +5999,330 @@ def positive_job_count(value: str) -> int:
     return count
 
 
+def choice_label(choices: Sequence[tuple[str, str]], ident: str) -> str:
+    for key, label in choices:
+        if key == ident:
+            return label
+    return ident
+
+
+def flag_text(encoded: str) -> str:
+    return encoded.replace("|", " ")
+
+
+def compiler_build_directory(compiler: str) -> str:
+    if compiler == "default":
+        return str(DEFAULT_BUILD_DIRECTORY)
+    return f"build-workspace-{compiler}"
+
+
+def assigned_build_directory(build_dir: Path | str, compiler: str) -> Path:
+    """Keep an explicit tree. The generic default tree is not shared across compilers."""
+    path = Path(build_dir)
+    if compiler != "default" and path == DEFAULT_BUILD_DIRECTORY:
+        return Path(compiler_build_directory(compiler))
+    return path
+
+
+def assigned_generator(generator: str | None, compiler: str) -> str | None:
+    if compiler in ("intel", "clang", "gcc") and not generator:
+        return "Ninja"
+    return generator
+
+
+def compiler_generator_error(generator: str | None, compiler: str) -> str | None:
+    if (
+        generator
+        and str(generator).startswith("Visual Studio")
+        and compiler in ("intel", "clang", "gcc")
+    ):
+        label = choice_label(COMPILER_CHOICES, compiler)
+        return (
+            f"{label} is configured with Ninja and that compiler's driver. "
+            "The Visual Studio generator cannot take CMAKE_CXX_COMPILER. "
+            "Remove --generator, or choose Default or Microsoft MSVC."
+        )
+    return None
+
+
+def apply_compiler_selection(arguments: argparse.Namespace, system: str | None = None) -> None:
+    """Pin the build tree and generator that the selected compiler requires."""
+    if not hasattr(arguments, "compiler"):
+        return
+    system = system or os.name
+    compiler = arguments.compiler or "default"
+    known = {key for key, _label in COMPILER_CHOICES}
+    if compiler not in known:
+        raise BuildError(
+            f"Unknown compiler '{compiler}'. "
+            f"Choose one of: {', '.join(sorted(known))}."
+        )
+    arguments.compiler = compiler
+    if compiler == "msvc" and system != "nt":
+        raise BuildError("The Microsoft compiler is only available on Windows.")
+    if compiler == "intel" and hasattr(arguments, "no_tidy"):
+        arguments.no_tidy = True
+    arguments.build_dir = assigned_build_directory(arguments.build_dir, compiler)
+    arguments.generator = assigned_generator(getattr(arguments, "generator", None), compiler)
+    error = compiler_generator_error(arguments.generator, compiler)
+    if error:
+        raise BuildError(error)
+
+
+def compiler_install_roots() -> tuple[Path, ...]:
+    found: list[Path] = []
+    for name in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+        value = os.environ.get(name)
+        if value:
+            found.append(Path(value))
+    if os.name == "nt":
+        found.extend((Path(r"C:\Program Files"), Path(r"C:\Program Files (x86)")))
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in found:
+        key = os.path.normcase(str(path))
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return tuple(unique)
+
+
+def compiler_candidates(names: Sequence[str], system: str) -> tuple[Path, ...]:
+    """Install locations tried after PATH."""
+    candidates: list[Path] = []
+    suffix = ".exe" if system == "nt" else ""
+    if "icx" in names or "icpx" in names:
+        roots: list[Path] = []
+        oneapi = os.environ.get("ONEAPI_ROOT")
+        if oneapi:
+            roots.append(Path(oneapi))
+        if system == "nt":
+            roots.extend(directory / "Intel" / "oneAPI" for directory in compiler_install_roots())
+        else:
+            roots.append(Path("/opt/intel/oneapi"))
+        for root in roots:
+            binary = root / "compiler" / "latest" / "bin"
+            for name in names:
+                candidates.append(binary / f"{name}{suffix}")
+    if system == "nt" and ("clang-cl" in names or "clang" in names or "clang++" in names):
+        for directory in compiler_install_roots():
+            for name in names:
+                candidates.append(directory / "LLVM" / "bin" / f"{name}.exe")
+    return tuple(candidates)
+
+
+def find_executable(names: Sequence[str], extra: Sequence[Path] = ()) -> Path | None:
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    for path in extra:
+        if path.is_file():
+            return path
+    return None
+
+
+@dataclass(frozen=True)
+class ResolvedCompiler:
+    family: str
+    language: str
+    c: str | None
+    cxx: str | None
+    located: bool
+    summary: str
+    missing: str
+
+
+def missing_compiler_message(family: str, system: str) -> str:
+    if family == "msvc":
+        return (
+            "cl was not found on PATH. Open a Visual Studio developer prompt "
+            "for a Ninja build, or leave the generator unset so CMake uses "
+            "the Visual Studio toolset."
+        )
+    if family == "intel":
+        tool = "icx" if system == "nt" else "icx and icpx"
+        return (
+            f"{tool} was not found. Install Intel oneAPI and open its command prompt, "
+            "or add the compiler's bin directory to PATH."
+        )
+    if family == "clang" and system == "nt":
+        return (
+            "clang-cl was not found. Install LLVM for Windows so clang-cl is on PATH. "
+            "That is the MSVC-compatible driver this build uses."
+        )
+    if family == "clang":
+        return "clang and clang++ were not found on PATH."
+    if family == "gcc":
+        return "gcc and g++ were not found on PATH."
+    return f"No {family} compiler was found."
+
+
+def resolve_compiler(
+    family: str,
+    *,
+    system: str | None = None,
+    generator: str | None = None,
+    search=None,
+) -> ResolvedCompiler:
+    """Find the driver for a menu choice and the flag dialect it accepts."""
+    system = system or os.name
+    family = family or "default"
+    generator = generator or ""
+    locate = search or find_executable
+
+    def look(names: tuple[str, ...]) -> Path | None:
+        return locate(names, compiler_candidates(names, system))
+
+    if family == "default":
+        language = "msvc" if system == "nt" else "gnu"
+        summary = (
+            "CMake's default compiler. On Windows that is the Visual Studio toolset, "
+            "and custom options use MSVC flags."
+            if system == "nt" else
+            "CMake's default compiler. Custom options use GCC and Clang flags."
+        )
+        return ResolvedCompiler(family, language, None, None, True, summary, "")
+
+    if family == "msvc" and system != "nt":
+        message = "The Microsoft compiler is only available on Windows."
+        return ResolvedCompiler(family, "msvc", None, None, False, message, message)
+
+    if family == "msvc" and not generator.startswith("Ninja"):
+        return ResolvedCompiler(
+            family, "msvc", None, None, True,
+            "Microsoft cl through the Visual Studio generator. "
+            "A Ninja build needs cl on PATH.",
+            "",
+        )
+
+    if family == "msvc":
+        found = look(("cl",))
+        path = str(found) if found is not None else "cl"
+        missing = "" if found is not None else missing_compiler_message(family, system)
+        summary = f"Microsoft cl: {path}" if found is not None else missing
+        return ResolvedCompiler(family, "msvc", path, path, found is not None, summary, missing)
+
+    if family == "intel" and system == "nt":
+        found = look(("icx",))
+        path = str(found) if found is not None else "icx"
+        missing = "" if found is not None else missing_compiler_message(family, system)
+        summary = f"Intel oneAPI icx: {path}" if found is not None else missing
+        return ResolvedCompiler(
+            family, "intel-windows", path, path, found is not None, summary, missing,
+        )
+
+    if family == "intel":
+        c_found = look(("icx",))
+        cxx_found = look(("icpx",))
+        c_path = str(c_found) if c_found is not None else "icx"
+        cxx_path = str(cxx_found) if cxx_found is not None else "icpx"
+        located = c_found is not None and cxx_found is not None
+        missing = "" if located else missing_compiler_message(family, system)
+        summary = f"Intel oneAPI: {c_path} and {cxx_path}" if located else missing
+        return ResolvedCompiler(family, "gnu", c_path, cxx_path, located, summary, missing)
+
+    if family == "clang" and system == "nt":
+        clang_cl = look(("clang-cl",))
+        if clang_cl is not None:
+            path = str(clang_cl)
+            return ResolvedCompiler(
+                family, "msvc", path, path, True, f"LLVM clang-cl: {path}", "",
+            )
+        c_found = look(("clang",))
+        cxx_found = look(("clang++",))
+        if c_found is not None and cxx_found is not None:
+            return ResolvedCompiler(
+                family, "gnu", str(c_found), str(cxx_found), True,
+                f"LLVM clang++: {cxx_found}", "",
+            )
+        missing = missing_compiler_message(family, system)
+        return ResolvedCompiler(family, "msvc", "clang-cl", "clang-cl", False, missing, missing)
+
+    if family == "clang":
+        c_found = look(("clang",))
+        cxx_found = look(("clang++",))
+        c_path = str(c_found) if c_found is not None else "clang"
+        cxx_path = str(cxx_found) if cxx_found is not None else "clang++"
+        located = c_found is not None and cxx_found is not None
+        missing = "" if located else missing_compiler_message(family, system)
+        summary = f"LLVM clang++: {cxx_path}" if located else missing
+        return ResolvedCompiler(family, "gnu", c_path, cxx_path, located, summary, missing)
+
+    if family != "gcc":
+        message = f"Unknown compiler '{family}'."
+        return ResolvedCompiler(family, "gnu", None, None, False, message, message)
+
+    c_found = look(("gcc",))
+    cxx_found = look(("g++",))
+    c_path = str(c_found) if c_found is not None else "gcc"
+    cxx_path = str(cxx_found) if cxx_found is not None else "g++"
+    located = c_found is not None and cxx_found is not None
+    missing = "" if located else missing_compiler_message("gcc", system)
+    summary = f"GCC: {cxx_path}" if located else missing
+    return ResolvedCompiler("gcc", "gnu", c_path, cxx_path, located, summary, missing)
+
+
+def namespace_from_settings(settings: dict) -> argparse.Namespace:
+    return argparse.Namespace(
+        compiler=settings.get("compiler", "default"),
+        optimization=settings.get("optimization", "default"),
+        warnings=settings.get("warnings", "default"),
+        sanitizer=settings.get("sanitizer", "default"),
+        generator=settings.get("generator"),
+        build_dir=Path(str(settings.get("build_dir", DEFAULT_BUILD_DIRECTORY))),
+        fresh=False,
+        config=settings.get("config", "Release"),
+    )
+
+
+def compiler_cmake_arguments(
+    arguments: argparse.Namespace,
+    *,
+    system: str | None = None,
+    search=None,
+) -> list[str]:
+    """CMake arguments for the selected compiler. Empty options clear a stale cache."""
+    family = getattr(arguments, "compiler", "default") or "default"
+    resolved = resolve_compiler(
+        family,
+        system=system,
+        generator=getattr(arguments, "generator", None),
+        search=search,
+    )
+    args: list[str] = []
+    if resolved.c and resolved.cxx:
+        args.append(f"-DCMAKE_C_COMPILER={resolved.c}")
+        args.append(f"-DCMAKE_CXX_COMPILER={resolved.cxx}")
+    if (system or os.name) == "nt" and family == "intel":
+        manifest_tool = windows_sdk_tool_directory()
+        if manifest_tool is not None:
+            args.append(f"-DCMAKE_MT={manifest_tool / 'mt.exe'}")
+    optimization = getattr(arguments, "optimization", "default") or "default"
+    warnings = getattr(arguments, "warnings", "default") or "default"
+    sanitizer = getattr(arguments, "sanitizer", "default") or "default"
+    opt = "" if optimization == "default" else OPTIMIZATION_FLAGS[resolved.language][optimization]
+    warn = "" if warnings == "default" else WARNING_FLAGS[resolved.language][warnings]
+    args.append(f"-DILLUMO_ORCHESTRATOR_OPTIMIZATION={opt}")
+    args.append(f"-DILLUMO_ORCHESTRATOR_WARNINGS={warn}")
+    if sanitizer == "off":
+        args.append("-DILLUMO_ENABLE_ASAN=OFF")
+    elif sanitizer == "address":
+        args.append("-DILLUMO_ENABLE_ASAN=ON")
+    return args
+
+
+def require_selected_compiler(arguments: argparse.Namespace, dry_run: bool) -> None:
+    family = getattr(arguments, "compiler", "default") or "default"
+    resolved = resolve_compiler(family, generator=getattr(arguments, "generator", None))
+    if not resolved.missing:
+        return
+    if dry_run:
+        print(f"warning: {resolved.missing}", file=sys.stderr)
+        return
+    raise BuildError(resolved.missing)
+
+
 def configure_command(arguments: argparse.Namespace, cmake: str) -> list[str]:
     build_directory = resolve_build_directory(arguments.build_dir)
     command = [
@@ -5551,6 +6357,7 @@ def configure_command(arguments: argparse.Namespace, cmake: str) -> list[str]:
             f"-DILLUMO_BUILD_WASM_RUNTIME={wasm_enabled}",
         )
     )
+    command.extend(compiler_cmake_arguments(arguments))
     command.extend(arguments.cmake_arg)
     return command
 
@@ -5679,6 +6486,7 @@ def build_command(
 def configure(arguments: argparse.Namespace, runner: CommandRunner) -> str:
     cmake = existing_tool("cmake", runner.dry_run)
     validate_build_settings(arguments)
+    require_selected_compiler(arguments, runner.dry_run)
     require_wasm_toolchain(arguments, runner.dry_run)
     runner.run(configure_command(arguments, cmake))
     return cmake
@@ -6355,6 +7163,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
             parsed = parser.parse_args([
                 normalized[0], *profile_arguments(profiles[parsed.profile]), *normalized[1:]
             ])
+    except BuildError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return error.exit_code
+
+    try:
+        if parsed.command in COMPILER_COMMANDS:
+            apply_compiler_selection(parsed)
     except BuildError as error:
         print(f"error: {error}", file=sys.stderr)
         return error.exit_code
