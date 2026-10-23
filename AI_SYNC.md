@@ -6,6 +6,9 @@
 > the other assistant does not know it.
 >
 > Rule for every AI session:
+> 0. Messages jed sends to Claude in Claude's own UI (chat / Claude Code web)
+>    are prepended with **MUSE** — that's how you tell jed's messages from
+>    Ryan typing himself. Ryan set this rule 2026-10-23.
 > 1. Read this file first.
 > 2. Update the "Current state" and "Open decisions" sections before you finish.
 > 3. Append, don't rewrite history, in the Decision Log. Date every entry.
