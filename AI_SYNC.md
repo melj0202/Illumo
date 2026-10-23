@@ -50,6 +50,14 @@ into a reusable library. The Game of Life sim is CSim.
   A local-clone-only experiment with narrow includes was started; nothing
   about a fix has been pushed. The VM has no display, so Linux GUI/GLX
   smoke testing is impossible there.
+  Independently confirmed 2026-10-23 by Claude Code (Ubuntu 24.04 container,
+  GCC 13.3.0, gtkmm 3.24.9): the minimal repro gives the same error at
+  treeview.h:2543; the same file compiles with exceptions on; the narrow
+  three-header set compiles with -fno-exceptions. The full workspace build
+  (the 74/346 stop) was NOT re-run by Claude.
+  Stale docs: AGENTS.md ("Linux sources and CMake are repaired") and
+  docs/packages/platform-linux.md ("can configure and compile the engine
+  libraries") still claim Linux compiles. Not yet corrected.
 
 ## Working style / guardrails
 
@@ -66,6 +74,14 @@ into a reusable library. The Game of Life sim is CSim.
       Verified: warning-free -Wall -Wextra -Werror, all tests pass,
       20 repeat runs + ThreadSanitizer clean.
       NOT yet applied to Illumo. Decide: adopt, adapt, or drop.
+      Check before adopting: it uses exception propagation, but Illumo builds
+      with no C++ exceptions (D-F3, AGENTS.md: no try/catch/throw). It needs
+      an error-return path to fit, or it stays out.
+- [ ] Linux build fix: replace <gtkmm.h> with narrow gtkmm includes in the
+      three Linux GTK files. This keeps D-F3 (one exception mode for every
+      target, cmake/IllumoBuild.cmake). A per-file -fexceptions workaround
+      would break that rule. Fix the two stale Linux docs (see Current
+      state) in the same change. Not started in the repo.
 
 ## Decision log
 
@@ -74,6 +90,9 @@ into a reusable library. The Game of Life sim is CSim.
   source of truth between jed (Muse) and Claude (incl. Claude Code on the web).
   CLAUDE.md now points Claude at this file. A browser chat with Claude was
   also opened for direct handoffs — chat is a supplement, this file is the record.
+- 2026-10-23 — Claude (Claude Code on the web) read this file and CLAUDE.md on
+  branch ai-sync-setup and accepted the sync setup. Claude will read this file
+  first and update it at the end of every Illumo session.
 
 ## Handoff note template (use for each session)
 
@@ -82,3 +101,19 @@ into a reusable library. The Game of Life sim is CSim.
 - Verified:
 - Left open / next:
 - Files changed:
+
+## Handoff notes (newest last)
+
+### 2026-10-23 — Claude (Claude Code on the web) — Sync introduction
+- Did: Read CLAUDE.md, AGENTS.md and this file on ai-sync-setup. Spot-checked
+  the Current state against the repo. Re-ran the Linux gtkmm minimal repro.
+  No code changes, as jed asked.
+- Verified: Vulkan claims (M0-M8 complete, seven-scene BackendParity within
+  one pixel, 709 tests, RTX 4080 at 60 FPS) match docs/vulkan-backend-plan.md.
+  These are doc records; Claude did not re-run them (no Windows/GPU here).
+  Global -fno-exceptions is at cmake/IllumoBuild.cmake:136. All three Linux
+  GTK files include <gtkmm.h>. Minimal repro confirmed (see Current state).
+- Left open / next: TaskGraph decision (now with the D-F3 exceptions check).
+  Linux narrow-include fix plus the two stale Linux docs.
+- Files changed: AI_SYNC.md only. (libgtkmm-3.0-dev was installed in the
+  ephemeral session container only; nothing in the repo.)
