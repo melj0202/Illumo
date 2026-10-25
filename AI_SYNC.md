@@ -21,18 +21,30 @@ toward a general-purpose engine. It began as a terminal Conway's Game of
 Life sim, was rewritten for OpenGL, and the renderer/engine code was split
 into a reusable library. The Game of Life sim is CSim.
 
-## Current state — as of 2026-10-23 (verified from repo inspection + Linux build test)
+## Current state — as of 2026-10-24 (renderer and Linux sections updated 2026-10-24)
 
-- Renderer is multi-backend: OpenGL + Vulkan. OpenGL is the default.
+- Renderer is multi-backend. On `main`: OpenGL + Vulkan, OpenGL default.
+- On `release/v26.10` (HEAD 108f687, checked 2026-10-24) there is also a
+  DirectX 12 backend: `Illumo/Source/Rendering/D3D12/` with ~175 KB of
+  sources (DeviceCommands 43.5 KB, DeviceResources 33 KB, Device 27 KB,
+  DevicePresent 23.5 KB, ShaderCompiler 12.5 KB). Status per Ryan
+  (2026-10-24): it passes and works — he has run it. jed verified the
+  sources exist; jed has NOT run the D3D12 backend.
+- Branch-scope gotcha: `main` has no D3D12 directory, and jed's local
+  clone is main-only. A grep of main or of the local clone does NOT
+  settle questions about release-branch features. State the branch
+  with every backend claim.
 - Vulkan backend is complete (plan milestones M0-M8) and implements the
   full IBackend interface with the same observable results as OpenGL.
 - Switching: `GraphicsAPI` setting, `--graphics-api`, or
   `set GraphicsAPI vulkan` in the console (restart required).
   A failed Vulkan start falls back to OpenGL.
-- Validation: BackendParity renders seven scenes through both backends,
-  matching within one pixel. Full Release build passes 709 tests,
-  clang-tidy clean. Every package holds 60 FPS on both backends on RTX 4080;
-  uncapped Vulkan is at or above OpenGL.
+- Validation: BackendParity renders seven scenes through the OpenGL and
+  Vulkan backends, matching within one pixel. Full Release build passes
+  709 tests, clang-tidy clean. Every package holds 60 FPS on both of
+  those backends on RTX 4080; uncapped Vulkan is at or above OpenGL.
+  No D3D12 parity result is recorded — do not extend the parity claim
+  to D3D12.
 - CSim runs through Vulkan: it has a Renderer row in its Video tab, and
   title-scene tests / package captures run on both backends.
 - Verified on Windows / NVIDIA only. No validation layers on the
@@ -47,9 +59,16 @@ into a reusable library. The Game of Life sim is CSim.
   (cmake/IllumoBuild.cmake); error at gtkmm treeview.h:2543, build stopped
   at step 74/346. Minimal repro verified: umbrella + -fno-exceptions fails,
   narrow gtkmm includes (filechooserdialog/filefilter/clipboard) compile fine.
-  A local-clone-only experiment with narrow includes was started; nothing
+  Update 2026-10-24, superseding the "experiment started" status: the
+  local-clone experiment FINISHED 2026-10-23 — with narrow includes in the
+  three GTK files the full Linux build SUCCEEDS and all 626 registered
+  tests pass (Illumo 308, IllumoGame 216, IllEd 84, IllMeshViewer 18).
+  The patch is +3/-3 across LinuxGtk.cpp, LinuxSaveLoad.cpp,
+  LinuxClipboard.cpp, byte-identical on `main` and `release/v26.10`,
+  prepared in a landing pack (2026-10-23) and still uncommitted. Nothing
   about a fix has been pushed. The VM has no display, so Linux GUI/GLX
-  smoke testing is impossible there.
+  smoke testing is impossible there; GUI/GLX smoke on Linux remains
+  unproven.
   Independently confirmed 2026-10-23 by Claude Code (Ubuntu 24.04 container,
   GCC 13.3.0, gtkmm 3.24.9): the minimal repro gives the same error at
   treeview.h:2543; the same file compiles with exceptions on; the narrow
@@ -93,6 +112,10 @@ into a reusable library. The Game of Life sim is CSim.
 - 2026-10-23 — Claude (Claude Code on the web) read this file and CLAUDE.md on
   branch ai-sync-setup and accepted the sync setup. Claude will read this file
   first and update it at the end of every Illumo session.
+- 2026-10-24 — D3D12 backend confirmed present on `release/v26.10`
+  (sources verified by jed; passes/works per Ryan). jed's earlier
+  "OpenGL + Vulkan only" claim was a branch-scope error from inspecting
+  `main`. Backend claims must name their branch.
 
 ## Handoff note template (use for each session)
 
@@ -117,3 +140,15 @@ into a reusable library. The Game of Life sim is CSim.
   Linux narrow-include fix plus the two stale Linux docs.
 - Files changed: AI_SYNC.md only. (libgtkmm-3.0-dev was installed in the
   ephemeral session container only; nothing in the repo.)
+
+### 2026-10-24 — jed (Muse) — AI_SYNC backend and Linux status correction
+- Did: Corrected the renderer bullets (D3D12 present on release/v26.10
+  only; branch-scope gotcha; BackendParity scope kept at OpenGL + Vulkan)
+  and the Linux paragraph (narrow-include experiment finished: full build
+  succeeds, 626/626 tests pass; patch prepared, still uncommitted).
+  Landed at Ryan's approval via PR on both branches.
+- Verified: D3D12 source listing on release/v26.10 @ 108f687 via GitHub
+  (file names and sizes in Current state). Main has no D3D12 directory.
+- Left open / next: Linux narrow-include fix still unlanded in the repo.
+  D3D12 parity not recorded. TaskGraph decision unchanged.
+- Files changed: AI_SYNC.md only.
