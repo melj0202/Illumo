@@ -21,15 +21,22 @@ toward a general-purpose engine. It began as a terminal Conway's Game of
 Life sim, was rewritten for OpenGL, and the renderer/engine code was split
 into a reusable library. The Game of Life sim is CSim.
 
-## Current state — as of 2026-10-24 (renderer and Linux sections updated 2026-10-24)
+## Current state — as of 2026-10-25 (renderer and Linux sections updated 2026-10-24; D3D12 parity and size corrected 2026-10-25)
 
 - Renderer is multi-backend. On `main`: OpenGL + Vulkan, OpenGL default.
 - On `release/v26.10` (HEAD 108f687, checked 2026-10-24) there is also a
-  DirectX 12 backend: `Illumo/Source/Rendering/D3D12/` with ~175 KB of
-  sources (DeviceCommands 43.5 KB, DeviceResources 33 KB, Device 27 KB,
-  DevicePresent 23.5 KB, ShaderCompiler 12.5 KB). Status per Ryan
+  DirectX 12 backend: `Illumo/Source/Rendering/D3D12/` with 14 source
+  files, 196 KB (162 KB .cpp + 34 KB .h, from git ls-tree at 108f687;
+  the earlier "~175 KB" was low), plus an AGENTS.md. Largest files:
+  DeviceCommands 43.5 KB, DeviceResources 33 KB, Device 27 KB,
+  DevicePresent 23.5 KB, Device.h 22 KB. Status per Ryan
   (2026-10-24): it passes and works — he has run it. jed verified the
   sources exist; jed has NOT run the D3D12 backend.
+  The release branch's own docs agree: docs/d3d12-backend-plan.md says
+  "Status: complete, M0-M8 (D-R36)"; D-R36 is in
+  docs/architecture-consensus.md (decided 2026-10-01). Selection:
+  `GraphicsAPI` `DIRECTX12`/`d3d12` or `--graphics-api d3d12`; a failed
+  start falls back to OpenGL.
 - Branch-scope gotcha: `main` has no D3D12 directory, and jed's local
   clone is main-only. A grep of main or of the local clone does NOT
   settle questions about release-branch features. State the branch
@@ -43,8 +50,16 @@ into a reusable library. The Game of Life sim is CSim.
   Vulkan backends, matching within one pixel. Full Release build passes
   709 tests, clang-tidy clean. Every package holds 60 FPS on both of
   those backends on RTX 4080; uncapped Vulkan is at or above OpenGL.
-  No D3D12 parity result is recorded — do not extend the parity claim
-  to D3D12.
+  D3D12 parity — CORRECTION 2026-10-25 (the 2026-10-24 text said no D3D12
+  parity result is recorded; that was true for `main` only): on
+  `release/v26.10`, BackendParity also covers D3D12
+  (Illumo/Tests/Gpu/GpuBackendParity.cpp creates the D3D12 backend).
+  docs/d3d12-backend-plan.md section 10 (M5) and D-R36 record: all seven
+  scenes match OpenGL within tolerance, D3D12 as closely as Vulkan (the
+  world scene differs in one pixel on both); Illumo.Gpu.D3D12*Parity and
+  `IllumoCaptureGpuTests --api d3d12` pass. These are repo records.
+  Neither jed nor Claude has run them. The plan says non-NVIDIA drivers
+  are not verified.
 - CSim runs through Vulkan: it has a Renderer row in its Video tab, and
   title-scene tests / package captures run on both backends.
 - Verified on Windows / NVIDIA only. No validation layers on the
@@ -100,7 +115,10 @@ into a reusable library. The Game of Life sim is CSim.
       three Linux GTK files. This keeps D-F3 (one exception mode for every
       target, cmake/IllumoBuild.cmake). A per-file -fexceptions workaround
       would break that rule. Fix the two stale Linux docs (see Current
-      state) in the same change. Not started in the repo.
+      state) in the same change. Patch prepared by jed (+3/-3, 626/626
+      tests on jed's VM, 2026-10-23); not committed to any branch. As of
+      2026-10-25 both `main` and `release/v26.10` still include <gtkmm.h>
+      and carry the stale doc wording.
 
 ## Decision log
 
@@ -116,6 +134,12 @@ into a reusable library. The Game of Life sim is CSim.
   (sources verified by jed; passes/works per Ryan). jed's earlier
   "OpenGL + Vulkan only" claim was a branch-scope error from inspecting
   `main`. Backend claims must name their branch.
+- 2026-10-25 — Claude corrected the D3D12 parity line: `release/v26.10`
+  records D3D12 BackendParity results (D-R36; d3d12-backend-plan.md M5).
+  The 2026-10-24 "no D3D12 parity recorded" was the same branch-scope error:
+  the release branch's sources were checked, but not its docs. Rule: for a
+  release-branch feature, read that branch's docs and tests as well as its
+  sources before saying what is or is not recorded.
 
 ## Handoff note template (use for each session)
 
@@ -151,4 +175,22 @@ into a reusable library. The Game of Life sim is CSim.
   (file names and sizes in Current state). Main has no D3D12 directory.
 - Left open / next: Linux narrow-include fix still unlanded in the repo.
   D3D12 parity not recorded. TaskGraph decision unchanged.
+- Files changed: AI_SYNC.md only.
+
+### 2026-10-25 — Claude (Claude Code on the web) — Check of jed's 2026-10-24 update
+- Did: Read jed's sync update and the merged AI_SYNC.md on `main` and
+  `release/v26.10`. Checked its claims against both branches. Corrected the
+  D3D12 parity line and the D3D12 source size. Updated the Linux open item.
+  Branch `ai-sync-setup` restarted from `main` (03d593c) for this change.
+- Verified: Merges 03d593c (PR #107, main) and 13a44de (PR #108, release)
+  exist, and AI_SYNC.md was identical on both before this change. D3D12
+  directory: present at 108f687, absent on main. D3D12 parity is recorded on
+  release (see Current state). Both branches still include <gtkmm.h> in the
+  three Linux GTK files. Not verified: Ryan's D3D12 run, the recorded GPU
+  results, and the 626/626 Linux result (no Windows/GPU here; the Linux
+  patch is not in the repo).
+- Left open / next: This correction is on `ai-sync-setup` only. It needs a
+  PR to `main` and the same commit on `release/v26.10`. The commit applies
+  cleanly to both. Linux narrow-include patch still unlanded. TaskGraph
+  decision unchanged.
 - Files changed: AI_SYNC.md only.
