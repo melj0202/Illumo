@@ -67,7 +67,13 @@ private:
 // primary camera node, else a default view of the origin. Registers
 // play_node <id> (logs a node's position) and play_status for scripts and
 // tests.
-class GuestPlayScene final : public ProgramScene
+//
+// A game that needs more than the played document (an overlay, its own
+// console commands, a reaction to the load) subclasses it and emplaces the
+// subclass from GuestPlayProgram::createScenes. The overrides of start,
+// enter, update, dispatch and stop must call the base; the hooks below need
+// nothing.
+class GuestPlayScene : public ProgramScene
 {
 public:
   explicit GuestPlayScene(GuestPlayProgram& program);
@@ -85,6 +91,15 @@ public:
 
   bool loaded() const { return m_loaded; }
   SceneBehaviours& behaviours() { return m_behaviours; }
+
+protected:
+  GuestPlayProgram& program() { return m_program; }
+  // After the document instantiated and its behaviours attached; the primary
+  // camera is applied right after.
+  virtual void sceneLoaded() {}
+  // After the content was added to the frame (whether or not a document is
+  // loaded): a game's own drawables, such as a reference grid.
+  virtual void dispatchOverlay(DrawList& frame) { (void)frame; }
 
 private:
   GuestPlayProgram& m_program;

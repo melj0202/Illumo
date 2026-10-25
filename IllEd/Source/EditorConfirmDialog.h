@@ -13,6 +13,8 @@ enum class EditorConfirmAction
 {
   None,
   Save,
+  // Save every dirty document (offered when more than one is).
+  SaveAll,
   Discard,
   Cancel
 };
@@ -26,7 +28,11 @@ public:
   EditorConfirmDialog(const EditorConfirmDialog&) = delete;
   EditorConfirmDialog& operator=(const EditorConfirmDialog&) = delete;
 
-  void open(const std::string& message);
+  // Save / [Save All /] Don't Save / Cancel.
+  void open(const std::string& message, bool offerSaveAll = false);
+  // `discardLabel` (destructive, Enter) / Cancel: for an action that only
+  // drops changes, such as Revert.
+  void openDiscard(const std::string& message, const std::string& discardLabel);
   void close();
   bool isOpen() const { return m_dialog.isOpen(); }
   void setFontSize(float sizePt);

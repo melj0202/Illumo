@@ -51,6 +51,8 @@ when it is cloned into the engine root (D-F5).
 \path{IllumoGuest/Include/IllumoGuest/Audio.h} & Audio service wire record and guest \texttt{GuestAudio} \\
 \path{IllumoGuest/Include/IllumoGuest/Launcher.h} & LaunchApp service wire records and guest \texttt{GuestLauncher} (D-E36) \\
 \path{Illumo/Include/Illumo/Wasm/RuntimeAppLauncher.h}, \path{Platform/ChildProcess.h} & Runtime app launcher and the owned child process (D-E36) \\
+\path{IllumoGuest/Include/IllumoGuest/Projects.h} & Project service wire records and guest \texttt{GuestProjects} (D-E42) \\
+\path{Illumo/Include/Illumo/Wasm/ProjectHost.h}, \path{RuntimeProjectHost.h} & Project host seam; recent list, folder dialog, scaffold and relaunch arguments (D-E42) \\
 \path{CSim/Source/Game/CSimSounds.*} & CSim sound cues and the \texttt{soundVolume} setting \\
 \path{Illumo/Include/Illumo/Content/} & \texttt{Illumo::Content} public API: paths, manifests, archives, file tree, scenes \\
 \path{Illumo/Source/Content/IlscCodec.cpp} & \texttt{.ilsc} format 2 strict parser and canonical encoder \\
@@ -96,7 +98,10 @@ when it is cloned into the engine root (D-F5).
 \path{CSim/Scenes/render3d-test.ilsc} & Scene behind the \texttt{render3dTest} diagnostic \\
 \path{CSim/Tests/} & \texttt{IllumoGame.*} product cases \\
 \path{CSim/illumo.json}, \path{IllEd/illumo.json}, \path{IllMeshViewer/illumo.json} & Package manifests (replace \texttt{app.json}) \\
-\path{IllEd/Source/EditorDocument.*} & The single mutation gateway over the editor scene's \texttt{SceneInstance} \\
+\path{IllEd/Source/EditorDocument.*} & The single mutation gateway over a document's own \texttt{SceneInstance} \\
+\path{IllEd/Source/EditorTab.h}, \path{EditorSceneTabs.cpp} & A tab owning its document, selection and state; tab switching, the open queue, Save All, the exit walk and project switching (D-E42) \\
+\path{IllEd/Source/EditorAutosave.*}, \path{EditorRecoveryDialog.*}, \path{EditorSceneAutosave.cpp} & Autosave records and slots, the recovery dialog, session restore \\
+\path{IllEd/tools/GpuSmoke.cpp} & \texttt{IllEd.Gpu.Smoke}: the package through a real window and its capture \\
 \path{IllEd/Source/EditorHistory.*}, \path{EditorSelection.*}, \path{EditorShortcuts.*} & Patch undo/redo, selection set, the one key table \\
 \path{IllEd/Source/EditorGizmo.*}, \path{EditorInspector.*}, \path{EditorClipboard.*} & Transform gizmos, typed inspector, fragment copy/paste \\
 \path{IllEd/Source/EditorAssetBrowser.*}, \path{EditorAssets.*} & File-tree browser, asset kinds, import checks \\

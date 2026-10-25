@@ -2252,6 +2252,15 @@ EditorInspector::beginEdit(const InspectorField& target)
   return false;
 }
 
+void
+EditorInspector::finishEdit(EditorDocument& document,
+                            const EditorSelection& selection)
+{
+  if (m_edit.active()) {
+    commitEdit(document, selection);
+  }
+}
+
 bool
 EditorInspector::commitEdit(EditorDocument& document,
                             const EditorSelection& selection)

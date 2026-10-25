@@ -10,6 +10,7 @@
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/RuntimeAppLauncher.h>
+#include <Illumo/Wasm/RuntimeProjectHost.h>
 #include <Illumo/Wasm/RuntimeShell.h>
 #include <Illumo/Wasm/WasmModuleCache.h>
 #include <Illumo/Wasm/WasmProgram.h>
@@ -694,8 +695,28 @@ prepareShell(Illumo& illumo)
     Logger::LogTrace("Audio disabled for capture and benchmark runs");
   }
   // An application allowed to launch others does so in child processes;
-  // captures and benchmarks stay one process.
+  // captures and benchmarks stay one process. The same applications keep
+  // project folders: a restart on a chosen project keeps the app, its
+  // mounts, storage and graphics API, and swaps the project.
   if (launchApps && capture.empty() && bench.frames == 0) {
+    std::vector<std::string> restartArguments{ "--app", application };
+    for (std::size_t index = 0; index + 1 < packageArguments.size();
+         index += 2) {
+      if (packageArguments[index] != "--project") {
+        restartArguments.push_back(packageArguments[index]);
+        restartArguments.push_back(packageArguments[index + 1]);
+      }
+    }
+    for (const char* kept : { "GuestStorage", "GuestGraphicsApi" }) {
+      const std::string value = environment->getVar(kept).value;
+      if (!value.empty()) {
+        restartArguments.push_back(
+          std::string(kept) == "GuestStorage" ? "--storage" : "--graphics-api");
+        restartArguments.push_back(value);
+      }
+    }
+    guest->setProjectHost(std::make_unique<RuntimeProjectHost>(
+      environment, application, std::move(restartArguments)));
     const std::filesystem::path play =
       std::filesystem::temp_directory_path() /
       ("illumo-play-" + application + "-" +

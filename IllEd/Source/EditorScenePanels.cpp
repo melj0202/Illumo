@@ -138,7 +138,7 @@ EditorScene::layoutDock()
   const GuiPanelFit view = GuiPanelLayout::viewport(ic->window, ic->renderer);
   m_dock.layout(view.virtualWidth,
                 view.virtualHeight,
-                m_toolbar->barHeight(),
+                m_toolbar->chromeTop(),
                 m_toolbar->statusHeight(),
                 view.layoutScale);
 }

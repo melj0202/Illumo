@@ -22,8 +22,183 @@ EditorToolbar::EditorToolbar(IRenderWindow* window, Renderer* renderer)
   m_visual.prepare(renderer);
   rebuildMenus();
   updateLayout();
-  m_viewport = { 0.0f, barHeight(), m_width, m_height - barHeight() };
+  m_viewport = { 0.0f, chromeTop(), m_width, m_height - chromeTop() };
   rebuildVisual();
+}
+
+void
+EditorToolbar::setTabs(const std::vector<EditorTabEntry>& tabs)
+{
+  m_tabs = tabs;
+}
+
+void
+EditorToolbar::setRecentProjects(const std::vector<std::string>& labels,
+                                 bool available)
+{
+  if (labels == m_recentProjects && available == m_projectsAvailable) {
+    return;
+  }
+  m_recentProjects = labels;
+  m_projectsAvailable = available;
+  rebuildMenus();
+}
+
+bool
+EditorToolbar::takeTabClick(int* index, bool* close)
+{
+  if (m_tabClick < 0) {
+    return false;
+  }
+  *index = m_tabClick;
+  *close = m_tabClickClose;
+  m_tabClick = -1;
+  m_tabClickClose = false;
+  return true;
+}
+
+GuiToolRect
+EditorToolbar::tabStripRect() const
+{
+  return { 0.0f, barHeight(), m_width, tabHeight() };
+}
+
+float
+EditorToolbar::tabWidth(const EditorTabEntry& tab) const
+{
+  const std::string label = tab.label + (tab.dirty ? "*" : "");
+  // Label, padding, and the close box.
+  return std::clamp(GuiToolStyle::textWidth(label, GuiToolStyle::kFontSize) +
+                      40.0f,
+                    72.0f,
+                    240.0f);
+}
+
+std::vector<GuiToolRect>
+EditorToolbar::tabRects() const
+{
+  std::vector<GuiToolRect> rects;
+  rects.reserve(m_tabs.size());
+  const GuiToolRect strip = tabStripRect();
+  float x = strip.x + 4.0f - m_tabScroll;
+  for (const EditorTabEntry& tab : m_tabs) {
+    const float width = tabWidth(tab);
+    rects.push_back({ x, strip.y + 2.0f, width, strip.h - 2.0f });
+    x += width + 2.0f;
+  }
+  return rects;
+}
+
+GuiToolRect
+EditorToolbar::tabCloseRect(const GuiToolRect& tab)
+{
+  const float size = 14.0f;
+  return {
+    tab.x + tab.w - size - 6.0f, tab.y + (tab.h - size) * 0.5f, size, size
+  };
+}
+
+bool
+EditorToolbar::tabRectForTesting(int index, GuiToolRect* rect) const
+{
+  const std::vector<GuiToolRect> rects = tabRects();
+  if (index < 0 || static_cast<std::size_t>(index) >= rects.size()) {
+    return false;
+  }
+  *rect = rects[static_cast<std::size_t>(index)];
+  return true;
+}
+
+bool
+EditorToolbar::tabCloseRectForTesting(int index, GuiToolRect* rect) const
+{
+  GuiToolRect tab;
+  if (!tabRectForTesting(index, &tab)) {
+    return false;
+  }
+  *rect = tabCloseRect(tab);
+  return true;
+}
+
+int
+EditorToolbar::tabAt(float x, float y) const
+{
+  if (!tabStripRect().contains(x, y)) {
+    return -1;
+  }
+  const std::vector<GuiToolRect> rects = tabRects();
+  for (std::size_t index = 0; index < rects.size(); ++index) {
+    if (rects[index].contains(x, y)) {
+      return static_cast<int>(index);
+    }
+  }
+  return -1;
+}
+
+void
+EditorToolbar::drawTabs()
+{
+  const GuiToolRect strip = tabStripRect();
+  m_visual.addFilledRect(
+    strip.x, strip.y, strip.w, strip.h, GuiToolPalette::panel);
+  m_visual.addFilledRect(
+    strip.x, strip.y + strip.h - 1.0f, strip.w, 1.0f, GuiToolPalette::border);
+  // Keep the active tab in view when the strip overflows.
+  std::vector<GuiToolRect> rects = tabRects();
+  for (std::size_t index = 0; index < rects.size(); ++index) {
+    if (!m_tabs[index].active) {
+      continue;
+    }
+    const GuiToolRect& active = rects[index];
+    if (active.x + active.w > strip.w - 4.0f) {
+      m_tabScroll += active.x + active.w - (strip.w - 4.0f);
+    } else if (active.x < strip.x + 4.0f) {
+      m_tabScroll -= strip.x + 4.0f - active.x;
+    }
+    m_tabScroll = std::max(0.0f, m_tabScroll);
+  }
+  rects = tabRects();
+  for (std::size_t index = 0; index < rects.size(); ++index) {
+    const EditorTabEntry& tab = m_tabs[index];
+    const GuiToolRect& rect = rects[index];
+    if (rect.x + rect.w < strip.x || rect.x > strip.x + strip.w) {
+      continue;
+    }
+    m_visual.addFilledRect(rect.x,
+                           rect.y,
+                           rect.w,
+                           rect.h,
+                           tab.active ? GuiToolPalette::window
+                                      : GuiToolPalette::bar);
+    m_visual.addOutlineRect(
+      rect.x, rect.y, rect.w, rect.h, GuiToolPalette::border, 1.0f);
+    if (tab.active) {
+      // The raised tab opens onto the viewport below it.
+      m_visual.addFilledRect(
+        rect.x, rect.y, rect.w, 2.0f, GuiToolPalette::accent);
+      m_visual.addFilledRect(rect.x + 1.0f,
+                             rect.y + rect.h - 1.0f,
+                             rect.w - 2.0f,
+                             1.0f,
+                             GuiToolPalette::window);
+    }
+    const GuiToolRect close = tabCloseRect(rect);
+    GuiToolStyle::fittedText(m_visual,
+                             tab.label + (tab.dirty ? "*" : ""),
+                             rect.x + 8.0f,
+                             rect.y + 5.0f,
+                             close.x - rect.x - 12.0f,
+                             GuiToolStyle::kFontSize,
+                             tab.active ? GuiToolPalette::text
+                                        : GuiToolPalette::dim);
+    GuiToolStyle::text(m_visual,
+                       "x",
+                       close.x + 4.0f,
+                       close.y,
+                       GuiToolStyle::kSmallFontSize,
+                       tab.active ? GuiToolPalette::dim
+                                  : GuiToolPalette::faint);
+  }
 }
 
 void
@@ -153,12 +328,40 @@ EditorToolbar::rebuildMenus()
   fileMenu.items.push_back(item("Open...", EditorCommand::OpenDocument));
   fileMenu.items.push_back(item("Save", EditorCommand::SaveDocument));
   fileMenu.items.push_back(item("Save As...", EditorCommand::SaveDocumentAs));
+  fileMenu.items.push_back(item("Save All", EditorCommand::SaveAll));
+  fileMenu.items.push_back(
+    item("Revert to Saved", EditorCommand::RevertDocument));
+  fileMenu.items.push_back(item("Close Tab", EditorCommand::CloseTab));
   fileMenu.items.push_back(separator());
   fileMenu.items.push_back(
     item("Save to Project", EditorCommand::SaveToProject));
   fileMenu.items.push_back(
     item("Import to Project...", EditorCommand::ImportAsset));
   fileMenu.items.push_back(item("Pack Project...", EditorCommand::PackProject));
+  if (m_projectsAvailable) {
+    fileMenu.items.push_back(separator());
+    fileMenu.items.push_back(
+      item("Open Project...", EditorCommand::OpenProject));
+    fileMenu.items.push_back(item("New Project...", EditorCommand::NewProject));
+    const EditorCommand recent[] = {
+      EditorCommand::RecentProject0, EditorCommand::RecentProject1,
+      EditorCommand::RecentProject2, EditorCommand::RecentProject3,
+      EditorCommand::RecentProject4, EditorCommand::RecentProject5,
+      EditorCommand::RecentProject6, EditorCommand::RecentProject7,
+      EditorCommand::RecentProject8, EditorCommand::RecentProject9
+    };
+    for (std::size_t index = 0;
+         index < m_recentProjects.size() && index < std::size(recent);
+         ++index) {
+      MenuItem entry = item("", recent[index]);
+      entry.label = std::to_string(index + 1) + ". " + m_recentProjects[index];
+      fileMenu.items.push_back(entry);
+    }
+    MenuItem clear =
+      item("Clear Recent Projects", EditorCommand::ClearRecentProjects);
+    clear.enabled = !m_recentProjects.empty();
+    fileMenu.items.push_back(clear);
+  }
   fileMenu.items.push_back(separator());
   // Alt+F4 is the window's own close path (closeRequested).
   MenuItem exit = item("Exit", EditorCommand::ExitEditor);
@@ -280,6 +483,9 @@ EditorToolbar::rebuildMenus()
   viewMenu.title = "View";
   viewMenu.items.push_back(
     item(m_playing ? "Stop Playing" : "Play", EditorCommand::PlayScene));
+  viewMenu.items.push_back(separator());
+  viewMenu.items.push_back(item("Next Tab", EditorCommand::NextTab));
+  viewMenu.items.push_back(item("Previous Tab", EditorCommand::PreviousTab));
   viewMenu.items.push_back(separator());
   MenuItem world2d = item("2D World", EditorCommand::SetMode2D);
   world2d.checked = !m_is3D;
@@ -481,7 +687,8 @@ EditorToolbar::itemAt(float x, float y) const
 bool
 EditorToolbar::containsScreenPoint(float x, float y) const
 {
-  if (barRect().contains(x, y) || popupRect().contains(x, y)) {
+  if (barRect().contains(x, y) || tabStripRect().contains(x, y) ||
+      popupRect().contains(x, y)) {
     return true;
   }
   return m_openMenu >= 0 && dropdownRect().contains(x, y);
@@ -625,12 +832,22 @@ EditorToolbar::update(InputManager* inputManager, float dt)
   m_consumedPress = false;
   if (m_pointer.clicked()) {
     const bool menuWasOpen = m_openMenu >= 0 || m_popupOpen;
-    const EditorCommand clicked = clickAt(x, y);
-    if (clicked != EditorCommand::None) {
-      command = clicked;
+    // A tab (or its close box) under the strip, unless a dropdown covers it.
+    const int tab = menuWasOpen ? -1 : tabAt(x, y);
+    if (tab >= 0) {
+      std::vector<GuiToolRect> rects = tabRects();
+      m_tabClick = tab;
+      m_tabClickClose =
+        tabCloseRect(rects[static_cast<std::size_t>(tab)]).contains(x, y);
+      m_consumedPress = true;
+    } else {
+      const EditorCommand clicked = clickAt(x, y);
+      if (clicked != EditorCommand::None) {
+        command = clicked;
+      }
+      m_consumedPress = command != EditorCommand::None || menuWasOpen ||
+                        containsScreenPoint(x, y);
     }
-    m_consumedPress = command != EditorCommand::None || menuWasOpen ||
-                      containsScreenPoint(x, y);
   }
   rebuildVisual();
   return command;
@@ -643,6 +860,7 @@ EditorToolbar::rebuildVisual()
   updateLayout();
   const std::vector<std::string> names = titles();
   GuiToolStyle::menuBar(m_visual, barRect(), names, m_openMenu, m_hoverMenu);
+  drawTabs();
 
   // The viewport's mode, plain, at its top left.
   const std::string mode = m_is3D ? "3D Perspective" : "2D Orthographic";

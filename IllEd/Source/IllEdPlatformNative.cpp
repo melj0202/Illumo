@@ -249,7 +249,111 @@ public:
   }
   void stopApp() override { IllEdNativeLauncher::running() = false; }
   bool appRunning() const override { return IllEdNativeLauncher::running(); }
+
+  bool canSwitchProject() const override
+  {
+    return IllEdNativeProjects::available();
+  }
+  void listProjects(ProjectListCallback done) override
+  {
+    done(IllEdNativeProjects::available(), IllEdNativeProjects::entries());
+  }
+  void chooseProject(ProjectPickCallback done) override { pick(done); }
+  void createProject(ProjectPickCallback done) override { pick(done); }
+  void openProject(std::uint32_t id, ProjectDoneCallback done) override
+  {
+    bool listed = false;
+    for (const ProjectEntry& entry : IllEdNativeProjects::entries()) {
+      listed = listed || entry.id == id;
+    }
+    if (!IllEdNativeProjects::available() || !listed) {
+      done(false);
+      return;
+    }
+    IllEdNativeProjects::opened() = id;
+    done(true);
+  }
+  void clearProjects(ProjectDoneCallback done) override
+  {
+    if (!IllEdNativeProjects::available()) {
+      done(false);
+      return;
+    }
+    IllEdNativeProjects::entries().clear();
+    done(true);
+  }
+
+private:
+  // The dialog "chooses" nextPick: a new first entry with fresh ids.
+  static void pick(const ProjectPickCallback& done)
+  {
+    if (!IllEdNativeProjects::available()) {
+      done(false, false, {});
+      return;
+    }
+    const std::string label = IllEdNativeProjects::nextPick();
+    if (label.empty()) {
+      done(true, true, {});
+      return;
+    }
+    std::vector<ProjectEntry>& entries = IllEdNativeProjects::entries();
+    for (std::size_t index = 0; index < entries.size();) {
+      if (entries[index].label == label) {
+        entries.erase(entries.begin() + static_cast<std::ptrdiff_t>(index));
+      } else {
+        ++index;
+      }
+    }
+    entries.insert(entries.begin(), { 0, label });
+    for (std::size_t index = 0; index < entries.size(); ++index) {
+      entries[index].id = static_cast<std::uint32_t>(index + 1);
+    }
+    done(true, false, entries.front());
+  }
 };
+
+static bool&
+projectsAvailable()
+{
+  static bool available = false;
+  return available;
+}
+
+void
+IllEdNativeProjects::setAvailable(bool available)
+{
+  projectsAvailable() = available;
+  entries().clear();
+  nextPick().clear();
+  opened() = 0;
+}
+
+bool
+IllEdNativeProjects::available()
+{
+  return projectsAvailable();
+}
+
+std::vector<IllEdPlatform::ProjectEntry>&
+IllEdNativeProjects::entries()
+{
+  static std::vector<IllEdPlatform::ProjectEntry> listed;
+  return listed;
+}
+
+std::string&
+IllEdNativeProjects::nextPick()
+{
+  static std::string pick;
+  return pick;
+}
+
+std::uint32_t&
+IllEdNativeProjects::opened()
+{
+  static std::uint32_t id = 0;
+  return id;
+}
 
 static bool&
 launcherAvailable()

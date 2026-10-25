@@ -246,12 +246,17 @@ testWindowServiceDecoder()
   closeTitle.title = "x";
   GuestWindowRequest retitleGeometry = openRequest(1);
   retitleGeometry.action = GuestWindowAction::SetTitle;
+  GuestWindowRequest closeMain;
+  closeMain.action = GuestWindowAction::Close;
+  closeMain.surface = 0;
   testTrue(counters,
            !decodes(zero) && !decodes(tooLarge) && !decodes(tooSmall) &&
              !decodes(farAway) && !decodes(control) && !decodes(longTitle) &&
              !decodes(invalidUtf8) && !decodes(closeGeometry) &&
-             !decodes(closeTitle) && !decodes(retitleGeometry),
-           "surface 0, sizes, offsets, titles and stray geometry are refused");
+             !decodes(closeTitle) && !decodes(retitleGeometry) &&
+             !decodes(closeMain),
+           "opening or closing surface 0, sizes, offsets, titles and stray "
+           "geometry are refused");
   GuestWindowRequest close;
   close.action = GuestWindowAction::Close;
   close.surface = 3;
@@ -259,9 +264,13 @@ testWindowServiceDecoder()
   retitle.action = GuestWindowAction::SetTitle;
   retitle.surface = 3;
   retitle.title = "Hierarchy";
+  GuestWindowRequest retitleMain;
+  retitleMain.action = GuestWindowAction::SetTitle;
+  retitleMain.surface = 0;
+  retitleMain.title = "scene.ilsc* - IllEd";
   testTrue(counters,
-           decodes(close) && decodes(retitle),
-           "close and retitle requests decode");
+           decodes(close) && decodes(retitle) && decodes(retitleMain),
+           "close and retitle requests decode, the main window's included");
   std::vector<std::byte> wrongVersion = bytes.data();
   wrongVersion[0] = std::byte{ 2 };
   std::vector<std::byte> trailing = bytes.data();
@@ -426,9 +435,21 @@ testFrameV5Surfaces()
   return counters.failures;
 }
 
+// The main window, recording the title the host sets on it.
+class TitledMainWindow final : public NullRenderWindow
+{
+public:
+  std::string title;
+  TitledMainWindow(int w, int h)
+    : NullRenderWindow(w, h)
+  {
+  }
+  void setTitle(const std::string& value) override { title = value; }
+};
+
 struct HostFixture
 {
-  NullRenderWindow window{ 640, 480 };
+  TitledMainWindow window{ 640, 480 };
   EnvVars env;
   Camera camera{ glm::vec2(0, 0), 1, &env };
   MockBackend mock;
@@ -720,6 +741,17 @@ testPanelWindowsLifecycle()
   testTrue(counters,
            frames.accept(gone.data()) && frames.surfaces().empty(),
            "a frame without surfaces drops their content");
+  // Surface 0 is the main window: a retitle reaches it and nothing else.
+  GuestWindowRequest retitleMain;
+  retitleMain.action = GuestWindowAction::SetTitle;
+  retitleMain.surface = 0;
+  retitleMain.title = "scene.ilsc* - IllEd";
+  testTrue(counters,
+           processes(services, windowServices(1000, retitleMain), results) &&
+             results.records[0].status == GuestServiceStatus::Complete &&
+             fixture.window.title == "scene.ilsc* - IllEd" &&
+             windows.openCount() == 0,
+           "a retitle of surface 0 reaches the main window only");
   return counters.failures;
 }
 

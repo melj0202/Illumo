@@ -34,7 +34,9 @@ enum class GuestService : std::uint32_t
   // completions carry no payload and are discarded by the queue).
   Audio = 18,
   // Launch capability: start, stop or poll a launched application.
-  LaunchApp = 19
+  LaunchApp = 19,
+  // Project capability: list, choose, create or open a project folder.
+  Project = 20
 };
 
 enum class GuestServiceStatus : std::uint32_t
@@ -97,7 +99,7 @@ struct GuestServices
       const std::uint32_t status = reader.u32();
       const std::span<const std::byte> payload = reader.bytes(reader.u32());
       if (!reader.valid() || record.request == 0 || operation < 1 ||
-          operation > static_cast<std::uint32_t>(GuestService::LaunchApp) ||
+          operation > static_cast<std::uint32_t>(GuestService::Project) ||
           (requests ? status != 0 : status < 1 || status > 2)) {
         return false;
       }

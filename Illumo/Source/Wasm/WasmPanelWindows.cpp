@@ -140,6 +140,10 @@ WasmPanelWindows::handle(const GuestWindowRequest& request,
     return true;
   }
   if (request.action == GuestWindowAction::SetTitle) {
+    if (request.surface == 0) {
+      m_mainWindow.setTitle(request.title);
+      return true;
+    }
     if (existing == nullptr) {
       return refuseWindow(request, reason, "No such window");
     }

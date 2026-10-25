@@ -39,9 +39,9 @@ struct EditorSceneDetail
 // records it as a history command; dirty means the history has moved since
 // the last save, so view-only changes (camera, grid) never ask to save.
 //
-// In the editor the instance is the program scene's content (D-E31), which
-// the document borrows; elsewhere (tools, tests, reloading a saved file) the
-// document owns one. Loads, clears and rebases replace the content in place.
+// The document owns its instance (D-E42): in the editor each tab holds one
+// and only the active tab's is bound to the render world; tools and tests
+// hold one directly. Loads, clears and rebases replace the content in place.
 class EditorDocument
 {
 public:
@@ -57,13 +57,8 @@ public:
   EditorDocument(EditorDocument&&) = delete;
   EditorDocument& operator=(EditorDocument&&) = delete;
 
-  // Edits `scene` from now on (the editor scene's content), moving the
-  // current document and history into it. `scene` must outlive the document
-  // and keeps its own asset manager and bindings.
-  void attach(SceneInstance& scene);
-  // Rebuilds an owned scene against an asset manager (nullptr draws
-  // placeholders), keeping the document and its history. A borrowed scene
-  // keeps the asset manager its owner gave it.
+  // Rebuilds the scene against an asset manager (nullptr draws
+  // placeholders), keeping the document and its history.
   void setAssetManager(AssetManager* assets);
   void setRenderer(Renderer* renderer);
   // Scene meshes draw through `world` when the host keeps one (nullptr
@@ -78,6 +73,12 @@ public:
   bool loadFromText(const std::string& text,
                     std::string* error,
                     const std::string& packageRoot = {});
+  // The same for an already parsed document.
+  bool loadParsed(const SceneDocument& document,
+                  std::string* error,
+                  const std::string& packageRoot = {});
+  // The document is dirty until its next save (recovered unsaved work).
+  void markRecovered();
   std::string packageRoot() const
   {
     return std::string(m_scene->packageRoot());
@@ -274,9 +275,9 @@ private:
   AssetManager* m_assets = nullptr;
   Renderer* m_renderer = nullptr;
   IRenderWorld* m_renderWorld = nullptr;
-  // Null once the document borrows a scene.
   std::unique_ptr<SceneInstance> m_owned;
-  // The scene every edit goes to: m_owned or the borrowed one.
+  // The scene every edit goes to; always m_owned, kept as a pointer so a
+  // rebuild (setAssetManager) swaps it in one place.
   SceneInstance* m_scene = nullptr;
   uint64_t m_sceneGeneration = 0;
   const BehaviourSchema* m_behaviours = nullptr;

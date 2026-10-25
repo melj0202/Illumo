@@ -32,21 +32,36 @@ GuestSceneFetches::~GuestSceneFetches()
   }
 }
 
-void
+std::uint64_t
 GuestSceneFetches::fetch(const std::vector<std::string>& paths, Callback done)
 {
   Fetch fetch;
   fetch.set = m_cache.fetch(paths);
+  fetch.ticket = m_nextTicket++;
   fetch.paths = paths;
   fetch.done = std::move(done);
   m_fetches.push_back(std::move(fetch));
+  return fetch.ticket;
+}
+
+void
+GuestSceneFetches::release(std::uint64_t ticket)
+{
+  for (std::size_t index = 0; index < m_held.size();) {
+    if (m_held[index].ticket == ticket) {
+      m_cache.release(m_held[index].set);
+      m_held.erase(m_held.begin() + static_cast<std::ptrdiff_t>(index));
+    } else {
+      ++index;
+    }
+  }
 }
 
 void
 GuestSceneFetches::release()
 {
-  for (std::uint64_t set : m_held) {
-    m_cache.release(set);
+  for (const Held& held : m_held) {
+    m_cache.release(held.set);
   }
   m_held.clear();
 }
@@ -63,7 +78,7 @@ GuestSceneFetches::pump()
     }
     Fetch fetch = std::move(m_fetches[index]);
     m_fetches.erase(m_fetches.begin() + static_cast<std::ptrdiff_t>(index));
-    m_held.push_back(fetch.set);
+    m_held.push_back({ fetch.ticket, fetch.set });
     if (fetch.materials) {
       // Materials are optional: an OBJ without its MTL still loads.
       missing.clear();
@@ -87,6 +102,7 @@ GuestSceneFetches::pump()
     if (!libraries.empty()) {
       Fetch next;
       next.set = m_cache.fetch(libraries);
+      next.ticket = fetch.ticket;
       next.paths = libraries;
       next.materials = true;
       next.missing = std::move(missing);

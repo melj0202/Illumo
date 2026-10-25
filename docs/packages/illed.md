@@ -17,7 +17,9 @@ a `GuestProgram`) with one `EditorScene` (D-E31).
 `IllEdCore` stays a native library for the `IllEdTests` oracle suite. The
 guest requires the Render, Assets, Storage, SelectedFiles, Clipboard, Console
 and Display capabilities, and enables its project commands only when the host
-also grants `ProjectFiles` (offered with `--project`).
+also grants `ProjectFiles` (offered with `--project`). Open Project, New
+Project and the recent list need the `Project` capability (D-E42), offered
+to `launchApps` apps in interactive runs.
 
 ## Ownership
 
@@ -31,9 +33,11 @@ also grants `ProjectFiles` (offered with `--project`).
 `SceneGraph` remains a runtime hierarchy and never serializes itself.
 `EditorDocument` edits one `SceneInstance` (with pick proxies, so empty, light
 and camera nodes are selectable) plus `EditorHistory`, and is the only
-mutation gateway. In the editor that instance is the `EditorScene`'s
-`content()`, which the document borrows (`attach`); tools and tests give the
-document its own. `SceneInstance` draws every node; the editor adds no
+mutation gateway. A document owns its instance (D-E42): in the editor each
+open document is an `EditorTab` holding its document, selection and view
+state, only the active tab is bound to the render world, and the program
+scene's `content()` stays empty; tools and tests hold a document directly.
+`SceneInstance` draws every node; the editor adds no
 per-node attachments. Stable ids are graph node names; handles are never
 persisted. IllEd has no private codec: its format 1 `IlscCodec` and
 `EditorAttachment` were deleted (D-E25, superseding D-E10).
@@ -360,6 +364,35 @@ Fields are rebuilt from the document every frame.
   location). Without a project these commands explain that `--project` is
   needed. Tree documents use `vfs:<virtual path>` locations
   (`IllEdPlatform::kTreePrefix`).
+- **Switching projects** (D-E42): File > Open Project (the OS folder dialog),
+  New Project (a scaffolded folder), the recent list and Clear Recent
+  Projects go through `IllEdPlatform`'s project operations (the `Project`
+  service in the guest, `IllEdNativeProjects` as the oracle). Choosing a
+  folder runs the exit walk over dirty tabs, asks the host to open it (which
+  records `--project <dir>` as the relaunch arguments) and requests a
+  restart, so the runtime comes back on the chosen folder. Saving a project
+  scene first copies the file being overwritten to `scenes/.backup/<name>`
+  (one generation; `Pack Project` skips dot entries), and File > Revert to
+  Saved reloads the file after a confirmation.
+
+## Tabs, autosave and recovery
+
+Every open document is a tab in the strip under the menu bar
+(`EditorSceneTabs.cpp`, D-E42): opening a document reuses a pristine active
+tab or adds one, Ctrl+Tab and Ctrl+Shift+Tab cycle, Ctrl+W closes (the last
+tab becomes empty), Save All (Ctrl+Alt+S) walks the dirty tabs, and closing
+the window walks them one by one with Save, Discard, Save All or Cancel.
+Switching tabs commits a focused inspector field and moves the camera,
+hierarchy state and render-world binding; it is refused while a file
+operation is in flight. Each dirty tab is autosaved into a private storage
+slot (`autosave-<n>.ilsc`, eight slots, an `illed.autosave` extension naming
+the origin) after idle time or 120 s, freed by a save or a clean close
+(`EditorSceneAutosave.cpp`); the next start offers every live slot in the
+Unsaved Work Found dialog (`EditorRecoveryDialog`: Recover all into tabs,
+Discard all, Later). The `sessionTabs` and `sessionActive` settings reopen
+the last session's tree documents when `restoreSession` is on (the default).
+The OS window title shows the active document's name and dirty mark through
+the Window service's surface 0.
 
 ## Play
 
@@ -380,8 +413,9 @@ game window closes (polled about twice a second). Without the capability
 IllEd registers `scene_select [id...]`, `scene_place <virtual path> [x] [y]`,
 `scene_save_project`, `scene_undo`, `scene_redo`, `scene_frame`,
 `scene_field <inspector key>` (activates a field as a click would; a swatch
-opens its picker) and `scene_play`. Capture scripts and package tests use
-them to reach the same flows as the UI.
+opens its picker), `scene_play`, `scene_create <shape>`, `scene_autosave`,
+`scene_recover`, `scene_status`, `scene_tab` and `scene_project`. Capture
+scripts and package tests use them to reach the same flows as the UI.
 
 ## UI
 
@@ -457,7 +491,13 @@ save in place); `IllEd.Wasm.ProjectPackage` runs it with a writable
 cache, and saves into the project; `IllEd.Wasm.PlayPackage` mounts a game's
 `behaviours.json` at `/apps/playground`, opens a scene using it and checks
 that Play hands a recording launcher the scene with its game and root, and
-that Play again stops it. `IllEdCloseWindowTests` checks close
+that Play again stops it. `IllEd.Module.Tabs`, `CloseAllTabs`, `SaveAll`,
+`Autosave`, `Recovery`, `SessionRestore`, `Backup`, `Revert`,
+`WindowTitle` and `Projects` cover the wave 4 flows natively;
+`IllEd.Wasm.Recovery`, `IllEd.Wasm.Tabs` and `IllEd.Wasm.Projects` run them
+through the generic host, and `IllEd.Gpu.Smoke` (label `IllumoGpu`) drives
+the package through a real window, checking the capture's pixels and a saved
+scene (skip 77 where no window opens). `IllEdCloseWindowTests` checks close
 confirmation in a real hidden GLFW window. Import and Pack dialogs cannot be
 scripted natively; their host halves are covered by `Illumo.Wasm.MountedFiles`
 and `Illumo.Wasm.MountedDeny`.

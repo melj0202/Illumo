@@ -37,7 +37,9 @@ if(WIN32)
     Source/Platform/Windows/WinPathText.cpp
     Source/Platform/Windows/WinPixelWindowPresent.cpp
     Source/Platform/Windows/WinSessionState.cpp)
-  list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Winmm Gdi32 Advapi32 Wtsapi32)
+  # Ole32 and Uuid: the common item dialog (folder picker) in WinSaveLoad.
+  list(APPEND ILLUMO_PLATFORM_LIBRARIES Comdlg32 Ole32 Uuid Winmm Gdi32
+    Advapi32 Wtsapi32)
 elseif(UNIX)
   find_package(PkgConfig REQUIRED)
   find_package(Threads REQUIRED)

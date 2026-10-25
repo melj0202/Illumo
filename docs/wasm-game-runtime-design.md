@@ -319,6 +319,26 @@ act on one sound's voices. The per-guest budget is 128 MiB of samples,
 arriving sounds charged at their whole size. `GuestAudio` keeps requests the
 queue cannot take in an ordered backlog, pumped each update.
 
+Note (2026-10-22): `GuestCapability::Project` (bit 14) was added, so
+`KnownCapabilities` is now `(1 << 15) - 1` (D-E42). The host offers it to
+the same applications as `Launch` (manifest `app.launchApps`, interactive
+runs only). With it, `GuestService::Project` (20) carries
+`GuestProjectRequest` version 1: `List`, `Choose`, `Create` and `Clear`
+carry no id, `Open` carries a listed entry's id. Every accepted request
+completes with a `GuestProjectResult`: `List` the recent entries (ids plus
+folder names, at most 16, newest first), `Choose` and `Create` the one entry
+the OS folder dialog produced (or `cancelled`), `Open` and `Clear` nothing.
+Host paths never cross: an id is valid until the next listing.
+`RuntimeProjectHost` keeps `recentProjects.<app>` in the runtime's own
+settings (never a launch option), scaffolds a new project (`illumo.json`
+plus `scenes/`, `meshes/`, `textures/`, `assets/`), and on `Open` hands
+`RelaunchCurrentProcess` the application's base arguments plus
+`--project <folder>` (`SetRelaunchArguments`); the guest then asks to
+restart (`GuestUpdateFlags::RequestRestart`, Display grant required). A
+child process could not do this, since a launched child ends with its
+parent. The guest SDK exposes the service as `GuestProjects`
+(`GuestProgram::projects()`); IllEd's File menu uses it.
+
 Quotas cover linear memory, aggregate child-worker memory, tables/stack, compiled
 module input, instructions/time, pending requests, handles, upload bytes and GPU
 allocations. Game packages cannot raise ceilings themselves. Proposed starting

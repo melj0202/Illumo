@@ -1,3 +1,4 @@
+#include "EditorAutosave.h"
 #include "EditorDocument.h"
 #include "IllEdPlatform.h"
 #include <Illumo/Content/IlscCodec.h>
@@ -14,6 +15,7 @@
 #include <Illumo/Testing/TestAccess.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
+#include <Illumo/Wasm/ProjectHost.h>
 #include <Illumo/Wasm/WasmProgram.h>
 #include <IllumoGuest/Dialog.h>
 #include <chrono>
@@ -630,6 +632,384 @@ playPackage()
   return counters.failures == 0;
 }
 
+// One editor run over shared package and storage folders, driven through
+// console commands whose printed lines the test reads.
+struct RecoveryRun
+{
+  const WasmFileRoots& files;
+  NullRenderWindow window{ 1280, 720 };
+  EnvVars env;
+  Camera camera{ glm::vec2(0, 0), 1, &env };
+  MockBackend mock;
+  Renderer renderer{ &window, &env, &camera, &mock, false };
+  CommandRegistry commands;
+  CommandLine console{ &env, &commands, &window, &renderer, "Test" };
+  InputManager input{ nullptr };
+  IllumoContext context;
+  std::unique_ptr<WasmProgram> editor;
+
+  explicit RecoveryRun(const WasmFileRoots& roots)
+    : files(roots)
+  {
+    env.setVar("WinX", 1280);
+    env.setVar("WinY", 720);
+    env.setVar("fullscreen", false);
+    env.setVar("logLevel", 2);
+    mock.Initialize();
+    renderer.ensureBuiltinStyles();
+    Logger::setContext(&env, &console);
+    context.renderer = &renderer;
+    context.window = &window;
+    context.inputManager = &input;
+    context.envVars = &env;
+    context.commandRegistry = &commands;
+    context.commandLine = &console;
+  }
+  ~RecoveryRun()
+  {
+    if (editor) {
+      editor->stop();
+    }
+    Logger::setContext(nullptr, nullptr);
+  }
+
+  // A project host handed to the program before it starts (Project
+  // capability), and whether a restart request is honoured.
+  std::unique_ptr<IProjectHost> projectHost;
+  bool restartAllowed = false;
+
+  bool start()
+  {
+    editor = std::make_unique<WasmProgram>(readBytes(ILLUMO_ILLED_GUEST),
+                                           std::vector<std::byte>{},
+                                           editorLimits(),
+                                           std::vector<std::byte>{},
+                                           std::vector<std::byte>{},
+                                           files);
+    if (projectHost) {
+      editor->setProjectHost(std::move(projectHost));
+    }
+    editor->setRestartAllowed(restartAllowed);
+    if (!editor->start(context)) {
+      std::printf("%s\n", editor->error().c_str());
+      return false;
+    }
+    return true;
+  }
+
+  // Runs a console command once the guest registered it; the status line
+  // printed after it (scene_status) is returned.
+  std::string run(const std::string& name,
+                  const std::vector<std::string>& args = {})
+  {
+    bool queued = false;
+    std::size_t lines = 0;
+    std::string status;
+    pumpUntil(*editor, [&]() {
+      if (!queued && commands.HasCommand(name) &&
+          commands.HasCommand("scene_status")) {
+        commands.QueueCommand(name, args);
+        commands.QueueCommand("scene_status", {});
+        lines = console.getHistory().size();
+        commands.ExecuteQueue();
+        queued = true;
+      }
+      if (!queued || console.getHistory().size() <= lines) {
+        return false;
+      }
+      for (const CommandLine::historyBuffer& entry : console.getHistory()) {
+        if (entry.content.rfind("scene_status #", 0) == 0) {
+          status = entry.content;
+        }
+      }
+      return !status.empty();
+    });
+    return status;
+  }
+
+  void dump(const TestCounters& counters)
+  {
+    if (counters.failures == 0) {
+      return;
+    }
+    if (editor && !editor->error().empty()) {
+      std::printf("guest error: %s\n", editor->error().c_str());
+    }
+    for (const CommandLine::historyBuffer& entry : console.getHistory()) {
+      std::printf("console: %s\n", entry.content.c_str());
+    }
+  }
+};
+
+// Autosave and recovery through the generic host: one run autosaves an
+// Tabs through the generic host: a second document opens beside the first,
+// switching keeps each one's state, and closing a dirty tab asks first.
+static bool
+tabsPackage()
+{
+  TestCounters counters;
+  const std::filesystem::path root =
+    std::filesystem::temp_directory_path() /
+    ("illumo-illed-tabs-" +
+     std::to_string(
+       std::chrono::steady_clock::now().time_since_epoch().count()));
+  WasmFileRoots files{ root / "package", root / "storage", {}, false };
+  std::filesystem::create_directories(files.package / "Assets" / "IllEd");
+  std::filesystem::create_directories(files.storage);
+  std::filesystem::copy_file(ILLUMO_ILLED_DEFAULTS,
+                             files.package / "envvars.json");
+  std::filesystem::copy_file(ILLUMO_ILLED_ATLAS,
+                             files.package / "Assets" / "IllEd" /
+                               "editor-ui-atlas.jpg");
+  {
+    RecoveryRun run(files);
+    testTrue(counters, run.start(), "The editor starts");
+    if (!run.editor) {
+      return false;
+    }
+    std::string status = run.run("scene_create", { "cube" });
+    testTrue(counters,
+             status.find(" 1 nodes dirty") != std::string::npos &&
+               status.find(" tab 1/1 ") != std::string::npos,
+             "the first tab holds the edit");
+    status = run.run("scene_tab", { "open" });
+    testTrue(counters,
+             status.find(" 0 nodes clean") != std::string::npos &&
+               status.find(" tab 2/2 ") != std::string::npos,
+             "a second, empty tab opens beside it and is active");
+    status = run.run("scene_tab", { "prev" });
+    testTrue(counters,
+             status.find(" 1 nodes dirty") != std::string::npos &&
+               status.find(" tab 1/2 ") != std::string::npos,
+             "switching back shows the first tab's document again");
+    // Ctrl+Tab cycles forward; Ctrl+W asks before closing the dirty tab.
+    run.input.getKeyQueue().push({ KeyCode::Tab, InputAction::Press, 2 });
+    status = run.run("scene_status");
+    testTrue(counters,
+             status.find(" tab 2/2 ") != std::string::npos,
+             "Ctrl+Tab cycles to the next tab");
+    run.input.getKeyQueue().push({ KeyCode::Tab, InputAction::Press, 3 });
+    status = run.run("scene_status");
+    testTrue(counters,
+             status.find(" tab 1/2 ") != std::string::npos,
+             "Ctrl+Shift+Tab cycles back");
+    run.input.getKeyQueue().push({ KeyCode::W, InputAction::Press, 2 });
+    bool asked = false;
+    pumpUntil(*run.editor, [&]() {
+      asked = !run.editor->closeRequested() &&
+              run.run("scene_status").find(" tab 1/2 ") != std::string::npos;
+      return asked;
+    });
+    testTrue(counters, asked, "Ctrl+W on a dirty tab asks before closing");
+    run.input.getKeyQueue().push({ KeyCode::N, InputAction::Press, 0 });
+    status = run.run("scene_status");
+    testTrue(counters,
+             status.find(" tab 1/1 ") != std::string::npos &&
+               status.find(" 0 nodes clean") != std::string::npos,
+             "Don't Save closes the tab and the empty one remains");
+    testTrue(counters,
+             !historyContains(run.console, "Frame dropped") &&
+               !historyContains(run.console, "Failed"),
+             "Every frame completed");
+    run.dump(counters);
+  }
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  return counters.failures == 0;
+}
+
+// A project host whose recent list the guest reads and whose open it asks
+// for; the restart request that follows reaches the host window.
+class FakeProjectHost final : public IProjectHost
+{
+public:
+  bool available() const override { return true; }
+  std::vector<ProjectHostEntry> list() override
+  {
+    ++lists;
+    return { { 1, "Forest" }, { 2, "Town" } };
+  }
+  bool choose(ProjectHostEntry* chosen, bool* cancelled, std::string&) override
+  {
+    *cancelled = false;
+    *chosen = { 1, "Chosen" };
+    return true;
+  }
+  bool create(ProjectHostEntry* created, bool* cancelled, std::string&) override
+  {
+    *cancelled = false;
+    *created = { 1, "Created" };
+    return true;
+  }
+  bool open(std::uint32_t id, std::string&) override
+  {
+    opened = id;
+    return true;
+  }
+  void clear() override {}
+
+  int lists = 0;
+  std::uint32_t opened = 0;
+};
+
+// Projects through the generic host: the guest lists the host's recent
+// projects, and opening one makes it ask the host to restart.
+static bool
+projectsPackage()
+{
+  TestCounters counters;
+  const std::filesystem::path root =
+    std::filesystem::temp_directory_path() /
+    ("illumo-illed-projects-" +
+     std::to_string(
+       std::chrono::steady_clock::now().time_since_epoch().count()));
+  WasmFileRoots files{ root / "package", root / "storage", {}, false };
+  std::filesystem::create_directories(files.package / "Assets" / "IllEd");
+  std::filesystem::create_directories(files.storage);
+  std::filesystem::copy_file(ILLUMO_ILLED_DEFAULTS,
+                             files.package / "envvars.json");
+  std::filesystem::copy_file(ILLUMO_ILLED_ATLAS,
+                             files.package / "Assets" / "IllEd" /
+                               "editor-ui-atlas.jpg");
+  {
+    RecoveryRun run(files);
+    std::unique_ptr<FakeProjectHost> owned =
+      std::make_unique<FakeProjectHost>();
+    FakeProjectHost* host = owned.get();
+    run.projectHost = std::move(owned);
+    run.restartAllowed = true;
+    testTrue(counters, run.start(), "The editor starts with a project host");
+    if (!run.editor) {
+      return false;
+    }
+    // The listing lands a few updates after the start.
+    testTrue(counters,
+             pumpUntil(*run.editor,
+                       [&]() {
+                         run.run("scene_project");
+                         return historyContains(run.console,
+                                                "available 2 recent");
+                       }),
+             "The guest lists the host's two recent projects");
+    testTrue(counters,
+             historyContains(run.console, "scene_project 1 Forest") &&
+               historyContains(run.console, "scene_project 2 Town"),
+             "The listing names them in order");
+    run.run("scene_project", { "open", "2" });
+    testTrue(counters,
+             pumpUntil(*run.editor,
+                       [&]() {
+                         return host->opened == 2 &&
+                                run.window.restartRequested();
+                       }),
+             "Opening a project asks the host for it and then to restart");
+    testTrue(counters,
+             !historyContains(run.console, "Frame dropped") &&
+               !historyContains(run.console, "Failed"),
+             "Every frame completed");
+    run.dump(counters);
+  }
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  return counters.failures == 0;
+}
+
+// edited document into the package's storage, the next offers it back.
+static bool
+recoveryPackage()
+{
+  TestCounters counters;
+  const std::filesystem::path root =
+    std::filesystem::temp_directory_path() /
+    ("illumo-illed-recovery-" +
+     std::to_string(
+       std::chrono::steady_clock::now().time_since_epoch().count()));
+  WasmFileRoots files{ root / "package", root / "storage", {}, false };
+  std::filesystem::create_directories(files.package / "Assets" / "IllEd");
+  std::filesystem::create_directories(files.storage);
+  std::filesystem::copy_file(ILLUMO_ILLED_DEFAULTS,
+                             files.package / "envvars.json");
+  std::filesystem::copy_file(ILLUMO_ILLED_ATLAS,
+                             files.package / "Assets" / "IllEd" /
+                               "editor-ui-atlas.jpg");
+  const std::filesystem::path slot =
+    files.storage / EditorAutosaveRecord::slotName(0);
+  {
+    RecoveryRun first(files);
+    testTrue(counters, first.start(), "The first editor run starts");
+    if (!first.editor) {
+      return false;
+    }
+    std::string status = first.run("scene_create", { "cube" });
+    testTrue(counters,
+             status.find(" 1 nodes dirty") != std::string::npos,
+             "scene_create makes the document dirty");
+    first.run("scene_autosave");
+    // The storage write lands on a later update; the guest learns of it
+    // later still.
+    testTrue(counters,
+             pumpUntil(*first.editor,
+                       [&]() {
+                         return std::filesystem::exists(slot) &&
+                                std::filesystem::file_size(slot) > 0;
+                       }),
+             "scene_autosave writes the slot into the package's storage");
+    testTrue(counters,
+             pumpUntil(*first.editor,
+                       [&]() {
+                         return first.run("scene_status").find("autosaved") !=
+                                std::string::npos;
+                       }),
+             "The guest sees its autosave complete");
+    SceneDocument autosaved;
+    EditorAutosaveRecord record;
+    std::string text;
+    std::string error;
+    testTrue(counters,
+             IllEdNativeFiles::readText(slot.string(), &text, &error) &&
+               IlscCodec::parse(text, autosaved, error) &&
+               autosaved.nodes.size() == 1 && record.read(autosaved) &&
+               !record.savedAt.empty(),
+             "The slot carries the scene and its illed.autosave record");
+    testTrue(counters,
+             !first.editor->closeRequested(),
+             "The dirty document still asks before closing");
+    first.dump(counters);
+    // Stopped without an answer, as a crash would leave it.
+  }
+  {
+    RecoveryRun second(files);
+    testTrue(counters, second.start(), "The second editor run starts");
+    if (!second.editor) {
+      return false;
+    }
+    std::string status;
+    testTrue(counters,
+             pumpUntil(*second.editor,
+                       [&]() {
+                         status = second.run("scene_status");
+                         return status.find("recovery") != std::string::npos;
+                       }),
+             "The next start offers the autosaved document");
+    status = second.run("scene_recover", { "recover" });
+    testTrue(counters,
+             status.find(" 1 nodes dirty") != std::string::npos &&
+               status.find("Untitled (recovered)") != std::string::npos,
+             "Recover loads the lost node as a dirty recovered document");
+    testTrue(counters,
+             !second.editor->closeRequested(),
+             "Recovered work asks before closing");
+    testTrue(counters,
+             !historyContains(second.console, "Frame dropped") &&
+               !historyContains(second.console, "Failed"),
+             "Every frame and transfer completed");
+    second.dump(counters);
+  }
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  return counters.failures == 0;
+}
+
 int
 main(int argc, char** argv)
 {
@@ -637,6 +1017,9 @@ main(int argc, char** argv)
     std::puts("IllEd.Wasm.Package");
     std::puts("IllEd.Wasm.ProjectPackage");
     std::puts("IllEd.Wasm.PlayPackage");
+    std::puts("IllEd.Wasm.Recovery");
+    std::puts("IllEd.Wasm.Tabs");
+    std::puts("IllEd.Wasm.Projects");
     return 0;
   }
   if (argc != 3 || std::string(argv[1]) != "--run") {
@@ -647,6 +1030,15 @@ main(int argc, char** argv)
   }
   if (std::string(argv[2]) == "IllEd.Wasm.PlayPackage") {
     return playPackage() ? 0 : 1;
+  }
+  if (std::string(argv[2]) == "IllEd.Wasm.Recovery") {
+    return recoveryPackage() ? 0 : 1;
+  }
+  if (std::string(argv[2]) == "IllEd.Wasm.Tabs") {
+    return tabsPackage() ? 0 : 1;
+  }
+  if (std::string(argv[2]) == "IllEd.Wasm.Projects") {
+    return projectsPackage() ? 0 : 1;
   }
   if (std::string(argv[2]) != "IllEd.Wasm.Package") {
     return 2;

@@ -292,7 +292,10 @@ manifest decoder, ABI decoders and host services; `Illumo.Runtime.Help`,
 `--capture-script` drives a capture to a later screen (menus, overlays) for
 visual checks. Real-GPU capture is checked with `python
 tools/verify_capture.py build-workspace/Release/IllumoRuntime.exe
---output-dir <dir>`. Performance is measured with `--bench-frames`,
+--output-dir <dir>`, and `IllEd.Gpu.Smoke` (label `IllumoGpu`, skipped
+with 77 where no render window opens) drives the IllEd package through a
+real window: a scripted node, a save into a scratch project, and the
+capture's pixels. Performance is measured with `--bench-frames`,
 `IllumoGame.Sim.RunnerBench` and `IllumoGame.Wasm.PackageBench` (label
 `IllumoBenchmark`; see `docs/frame-capture.md`). `tools/perf_bench.py` runs
 the benchmark cases repeatedly, records medians and compares two builds with

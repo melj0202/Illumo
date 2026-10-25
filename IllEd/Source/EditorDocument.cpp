@@ -10,6 +10,7 @@
 #include <cmath>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <limits>
 #include <unordered_map>
 #include <utility>
 
@@ -60,33 +61,12 @@ EditorDocument::makeScene() const
 }
 
 void
-EditorDocument::attach(SceneInstance& scene)
-{
-  if (&scene == m_scene) {
-    return;
-  }
-  std::string error;
-  if (!scene.load(m_scene->document(), m_scene->packageRoot(), error)) {
-    Logger::LogWarning("The document could not move into the editor scene "
-                       "and starts empty: " +
-                       error);
-    scene.load(SceneDocument{}, kLocalPackageRoot, error);
-  }
-  m_scene = &scene;
-  m_owned.reset();
-  ++m_sceneGeneration;
-}
-
-void
 EditorDocument::setAssetManager(AssetManager* assets)
 {
   if (assets == m_assets) {
     return;
   }
   m_assets = assets;
-  if (!m_owned) {
-    return;
-  }
   const SceneDocument current = m_scene->document();
   const std::string root(m_scene->packageRoot());
   std::unique_ptr<SceneInstance> scene = makeScene();
@@ -159,6 +139,15 @@ EditorDocument::loadFromText(const std::string& text,
     }
     return false;
   }
+  return loadParsed(document, error, packageRoot);
+}
+
+bool
+EditorDocument::loadParsed(const SceneDocument& document,
+                           std::string* error,
+                           const std::string& packageRoot)
+{
+  std::string message;
   // A failed load leaves the scene as it was.
   if (!m_scene->load(document,
                      packageRoot.empty() ? std::string(kLocalPackageRoot)
@@ -173,6 +162,13 @@ EditorDocument::loadFromText(const std::string& text,
   m_history.clear();
   m_savedUid = 0;
   return true;
+}
+
+void
+EditorDocument::markRecovered()
+{
+  // No history uid ever reaches this value.
+  m_savedUid = std::numeric_limits<uint64_t>::max();
 }
 
 std::string

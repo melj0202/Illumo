@@ -2432,19 +2432,30 @@ registerEditorSceneTests(IllumoTestRegistry& registry)
              "deletion invalidates the original generational handle");
     return g.failures;
   });
-  registry.add("IllEd.Module.DocumentIsContent", []() {
+  registry.add("IllEd.Module.ActiveDocumentIsDrawn", []() {
     g = {};
-    testSection("EditorScene: the document edits the scene's content");
+    testSection("EditorScene: the active tab's document owns the scene that "
+                "is edited and drawn");
     EditorFixture fixture;
     testTrue(g, fixture.started, "editor starts");
     EditorDocument& document = EditorSceneTestAccess::document(fixture.module);
-    SceneInstance* content = &fixture.module.content();
+    SceneInstance* content = &document.scene();
     testTrue(g,
-             &document.scene() == content,
-             "the document borrows the scene's content");
+             content != &fixture.module.content() &&
+               fixture.module.content().nodeCount() == 0,
+             "the document owns its instance; the program scene's content "
+             "stays empty");
     EditorSceneTestAccess::createNode(fixture.module,
                                        EditorCommand::CreateCube);
     testTrue(g, content->nodeCount() == 1, "edits land in the content");
+    fixture.scene.ClearDrawables();
+    fixture.module.dispatch(fixture.scene);
+    bool drawn = false;
+    for (DrawableBase* drawable :
+         fixture.scene.drawablesIn(RenderLayerId::World)) {
+      drawn = drawn || drawable == &content->drawable();
+    }
+    testTrue(g, drawn, "the active document's drawable is dispatched");
     const std::string saved = document.encode();
     const uint64_t generation = document.sceneGeneration();
     std::string error;
@@ -2604,9 +2615,15 @@ registerEditorSceneTests(IllumoTestRegistry& registry)
              "reset command restores camera origin and zoom");
     EditorSceneTestAccess::handleCommand(fixture.module,
                                          EditorCommand::NewDocument);
-    testEqSize(g, document.nodeCount(), 0u, "new document clears nodes");
+    // New opens beside a used tab; the active document is the new one.
+    EditorDocument& created = EditorSceneTestAccess::document(fixture.module);
     testTrue(g,
-             document.path().empty() && !document.isDirty(),
+             EditorSceneTestAccess::tabCount(fixture.module) == 2 &&
+               &created != &document && document.nodeCount() == 1,
+             "new document opens in its own tab beside the saved one");
+    testEqSize(g, created.nodeCount(), 0u, "new document clears nodes");
+    testTrue(g,
+             created.path().empty() && !created.isDirty(),
              "new document is clean and untitled");
     testTrue(g,
              EditorSceneTestAccess::selectedId(fixture.module).empty(),

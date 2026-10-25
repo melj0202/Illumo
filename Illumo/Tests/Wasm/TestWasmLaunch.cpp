@@ -155,19 +155,19 @@ testLaunchServiceDecoder()
                                encode(plainRequest(GuestLaunchAction::Stop)) });
   GuestWireWriter known;
   services.write(known);
-  services.records[0].operation = static_cast<GuestService>(20);
+  services.records[0].operation = static_cast<GuestService>(21);
   GuestWireWriter unknown;
   services.write(unknown);
   GuestServices read;
   testTrue(counters,
            GuestServices::read(known.data(), read, true) &&
              !GuestServices::read(unknown.data(), read, true),
-           "LaunchApp is the newest service operation");
+           "Project is the newest service operation");
   testTrue(counters,
            (GuestEnvelope::KnownCapabilities &
             static_cast<std::uint32_t>(GuestCapability::Launch)) != 0 &&
-             (GuestEnvelope::KnownCapabilities >> 14u) == 0,
-           "Launch is the newest known capability");
+             (GuestEnvelope::KnownCapabilities >> 15u) == 0,
+           "Project is the newest known capability");
   return counters.failures;
 }
 

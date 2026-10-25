@@ -4,6 +4,7 @@
 #include <Illumo/Foundation/RollingMetric.h>
 #include <Illumo/Services/FileTreeSource.h>
 #include <Illumo/Wasm/AppLauncher.h>
+#include <Illumo/Wasm/ProjectHost.h>
 #include <Illumo/Wasm/WasmFrameRenderer.h>
 #include <Illumo/Wasm/WasmGameServices.h>
 #include <Illumo/Wasm/WasmGuest.h>
@@ -69,6 +70,14 @@ public:
   {
     m_launcher = std::move(launcher);
   }
+  // Recent project folders, folder dialogs and a restart on a chosen
+  // project for the guest (Project capability), owned. Null, the default,
+  // withholds the capability; so does a host that is not available. Call
+  // before start.
+  void setProjectHost(std::unique_ptr<IProjectHost> host)
+  {
+    m_projectHost = std::move(host);
+  }
   // Whether a guest's restart request (GuestUpdateFlags::RequestRestart,
   // Display grant required) relaunches the application after it closes.
   // Off by default (tests, capture, benchmarks): the request then only
@@ -116,8 +125,9 @@ private:
   WasmGuest m_guest;
   std::unique_ptr<WasmGuest> m_mod;
   std::unique_ptr<WasmFrameRenderer> m_frames;
-  // Before the services, which borrow it until they are destroyed.
+  // Before the services, which borrow them until they are destroyed.
   std::unique_ptr<IAppLauncher> m_launcher;
+  std::unique_ptr<IProjectHost> m_projectHost;
   std::unique_ptr<WasmGameServices> m_services;
   ISurfaceWindowFactory* m_surfaceWindows = &PlatformSurfaceWindows();
   std::unique_ptr<WasmPanelWindows> m_windows;

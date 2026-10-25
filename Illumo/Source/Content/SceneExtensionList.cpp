@@ -29,11 +29,13 @@ SceneExtensionList::read(const std::vector<SceneExtension>& extensions,
   return values;
 }
 
-void
-SceneExtensionList::write(std::vector<SceneExtension>& extensions,
-                          std::string_view key,
-                          std::string_view member,
-                          const std::vector<std::string>& values)
+// Replaces one member of the extension with `value` (null removes it),
+// keeping the others; the extension goes when nothing is left in it.
+static void
+writeMember(std::vector<SceneExtension>& extensions,
+            std::string_view key,
+            std::string_view member,
+            Json value)
 {
   std::vector<SceneExtension>::iterator found = std::find_if(
     extensions.begin(), extensions.end(), [key](const SceneExtension& entry) {
@@ -48,8 +50,8 @@ SceneExtensionList::write(std::vector<SceneExtension>& extensions,
   }
   const std::string name(member);
   data.erase(name);
-  if (!values.empty()) {
-    data[name] = values;
+  if (!value.is_null()) {
+    data[name] = std::move(value);
   }
   if (data.empty()) {
     if (found != extensions.end()) {
@@ -65,4 +67,56 @@ SceneExtensionList::write(std::vector<SceneExtension>& extensions,
     return;
   }
   extensions.push_back({ std::string(key), text });
+}
+
+void
+SceneExtensionList::write(std::vector<SceneExtension>& extensions,
+                          std::string_view key,
+                          std::string_view member,
+                          const std::vector<std::string>& values)
+{
+  writeMember(extensions, key, member, values.empty() ? Json() : Json(values));
+}
+
+std::string
+SceneExtensionText::read(const std::vector<SceneExtension>& extensions,
+                         std::string_view key,
+                         std::string_view member)
+{
+  for (const SceneExtension& extension : extensions) {
+    if (extension.key != key) {
+      continue;
+    }
+    const Json data = Json::parse(extension.data, nullptr, false);
+    const std::string name(member);
+    if (!data.is_object() || !data.contains(name) || !data[name].is_string()) {
+      return {};
+    }
+    return data[name].get<std::string>();
+  }
+  return {};
+}
+
+void
+SceneExtensionText::write(std::vector<SceneExtension>& extensions,
+                          std::string_view key,
+                          std::string_view member,
+                          const std::string& value)
+{
+  writeMember(extensions, key, member, value.empty() ? Json() : Json(value));
+}
+
+bool
+SceneExtensionText::remove(std::vector<SceneExtension>& extensions,
+                           std::string_view key)
+{
+  const std::vector<SceneExtension>::iterator found = std::find_if(
+    extensions.begin(), extensions.end(), [key](const SceneExtension& entry) {
+      return entry.key == key;
+    });
+  if (found == extensions.end()) {
+    return false;
+  }
+  extensions.erase(found);
+  return true;
 }

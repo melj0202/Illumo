@@ -1,35 +1,23 @@
 #include "EditorConfirmDialog.h"
 #include "EditorToolbar.h"
 
+static GuiButtonDef
+cancelButton()
+{
+  GuiButtonDef cancel;
+  cancel.label = "Cancel";
+  cancel.actionId = static_cast<int>(EditorConfirmAction::Cancel);
+  cancel.isCancel = true;
+  cancel.shortcutKey = KeyCode::Escape;
+  return cancel;
+}
+
 EditorConfirmDialog::EditorConfirmDialog(IRenderWindow* window,
                                          Renderer* renderer)
   : m_dialog(window, renderer)
 {
   m_dialog.setTitle("Unsaved Changes");
   m_dialog.setFontSize(EditorToolbar::kDefaultFontSize);
-
-  GuiButtonDef saveBtn;
-  saveBtn.label = "Save";
-  saveBtn.actionId = static_cast<int>(EditorConfirmAction::Save);
-  saveBtn.isDefault = true;
-  saveBtn.shortcutKey = KeyCode::Enter;
-
-  GuiButtonDef discardBtn;
-  discardBtn.label = "Don't Save";
-  discardBtn.actionId = static_cast<int>(EditorConfirmAction::Discard);
-  discardBtn.isDestructive = true;
-  discardBtn.shortcutKey = KeyCode::N;
-
-  GuiButtonDef cancelBtn;
-  cancelBtn.label = "Cancel";
-  cancelBtn.actionId = static_cast<int>(EditorConfirmAction::Cancel);
-  cancelBtn.isCancel = true;
-  cancelBtn.shortcutKey = KeyCode::Escape;
-
-  m_dialog.addButton(saveBtn);
-  m_dialog.addButton(discardBtn);
-  m_dialog.addButton(cancelBtn);
-
   setVisible(false);
 }
 
@@ -40,8 +28,52 @@ EditorConfirmDialog::setFontSize(float sizePt)
 }
 
 void
-EditorConfirmDialog::open(const std::string& message)
+EditorConfirmDialog::open(const std::string& message, bool offerSaveAll)
 {
+  GuiButtonDef save;
+  save.label = "Save";
+  save.actionId = static_cast<int>(EditorConfirmAction::Save);
+  save.isDefault = true;
+  save.shortcutKey = KeyCode::Enter;
+
+  GuiButtonDef saveAll;
+  saveAll.label = "Save All";
+  saveAll.actionId = static_cast<int>(EditorConfirmAction::SaveAll);
+  saveAll.shortcutKey = KeyCode::A;
+
+  GuiButtonDef discard;
+  discard.label = "Don't Save";
+  discard.actionId = static_cast<int>(EditorConfirmAction::Discard);
+  discard.isDestructive = true;
+  discard.shortcutKey = KeyCode::N;
+
+  m_dialog.clearButtons();
+  m_dialog.addButton(save);
+  if (offerSaveAll) {
+    m_dialog.addButton(saveAll);
+  }
+  m_dialog.addButton(discard);
+  m_dialog.addButton(cancelButton());
+  m_dialog.setTitle("Unsaved Changes");
+  m_dialog.open(message);
+  setVisible(true);
+}
+
+void
+EditorConfirmDialog::openDiscard(const std::string& message,
+                                 const std::string& discardLabel)
+{
+  GuiButtonDef discard;
+  discard.label = discardLabel;
+  discard.actionId = static_cast<int>(EditorConfirmAction::Discard);
+  discard.isDestructive = true;
+  discard.isDefault = true;
+  discard.shortcutKey = KeyCode::Enter;
+
+  m_dialog.clearButtons();
+  m_dialog.addButton(discard);
+  m_dialog.addButton(cancelButton());
+  m_dialog.setTitle(discardLabel);
   m_dialog.open(message);
   setVisible(true);
 }
@@ -60,6 +92,8 @@ EditorConfirmDialog::update(InputManager* inputManager, float dt)
   switch (action) {
     case static_cast<int>(EditorConfirmAction::Save):
       return EditorConfirmAction::Save;
+    case static_cast<int>(EditorConfirmAction::SaveAll):
+      return EditorConfirmAction::SaveAll;
     case static_cast<int>(EditorConfirmAction::Discard):
       return EditorConfirmAction::Discard;
     case static_cast<int>(EditorConfirmAction::Cancel):

@@ -162,9 +162,17 @@ GuestPanelSurfaces::close(std::uint32_t surface)
 void
 GuestPanelSurfaces::setTitle(std::uint32_t surface, const std::string& title)
 {
-  const Surface* existing = find(surface);
-  if (existing == nullptr || existing->state != PanelSurfaceState::Open) {
-    return;
+  if (surface == kMainSurface) {
+    // The main window is always open; the host retitles it when the
+    // Windows capability was granted.
+    if (!m_granted) {
+      return;
+    }
+  } else {
+    const Surface* existing = find(surface);
+    if (existing == nullptr || existing->state != PanelSurfaceState::Open) {
+      return;
+    }
   }
   GuestWindowRequest request;
   request.action = GuestWindowAction::SetTitle;

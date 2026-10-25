@@ -161,7 +161,15 @@ owned by `Illumo::Content`.
   default scene, into `content()` (collect, fetch, instantiate, as
   IllMeshViewer does), own a `SceneBehaviours`, and use the scene's primary
   camera. A game supports Play by deriving from `GuestPlayProgram` and
-  registering its behaviours.
+  registering its behaviours. A game that needs more than the played
+  document derives from `GuestPlayScene` too (it is not final) and emplaces
+  its scene from `createScenes`: `sceneLoaded()` runs after the document
+  instantiated and its behaviours attached, `dispatchOverlay(DrawList&)`
+  after the content was added to the frame (a reference grid, debug
+  drawing), and the overrides of `start`, `update`, `dispatch` and `stop`
+  call the base. Saturn (`Saturn/Source/Wasm/SaturnScene.cpp`, the nested
+  program) is the first game built this way; the Playground uses the scene
+  as it is.
 - **IllEd:** Play/Stop in the View menu, Ctrl+P (Unity's binding; the host
   already takes F5 for asset reloads), a status-bar state,
   and a toast when the scene names no game or the host refuses.

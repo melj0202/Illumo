@@ -14,6 +14,14 @@ class InputManager;
 class IRenderWindow;
 class Renderer;
 
+// One open document as the tab strip shows it.
+struct EditorTabEntry
+{
+  std::string label;
+  bool dirty = false;
+  bool active = false;
+};
+
 // One dock panel as the View menu lists it.
 struct EditorPanelMenuEntry
 {
@@ -25,8 +33,9 @@ struct EditorPanelMenuEntry
 };
 
 // The main window's chrome in the plain tool look (D-UI7): the menu bar with
-// its dropdowns, the viewport's mode label, toasts and the status bar. Menu
-// items come from the EditorShortcuts table, so every hint shown works.
+// its dropdowns, the tab strip of open documents under it, the viewport's
+// mode label, toasts and the status bar. Menu items come from the
+// EditorShortcuts table, so every hint shown works.
 class EditorToolbar : public DrawableBase
 {
 public:
@@ -35,6 +44,7 @@ public:
   static constexpr float kDefaultStatusHeight = GuiToolStyle::kStatusHeight;
   static constexpr float kBarHeight = kDefaultBarHeight;
   static constexpr float kStatusHeight = kDefaultStatusHeight;
+  static constexpr float kTabHeight = 24.0f;
 
   EditorToolbar(IRenderWindow* window, Renderer* renderer);
   ~EditorToolbar() override = default;
@@ -48,6 +58,17 @@ public:
   float fontSize() const { return m_fontSize; }
   float barHeight() const { return kDefaultBarHeight; }
   float statusHeight() const { return kDefaultStatusHeight; }
+  float tabHeight() const { return kTabHeight; }
+  // The menu bar and the tab strip: where the dock and viewport begin.
+  float chromeTop() const { return barHeight() + tabHeight(); }
+  // The open documents, in order; the active one is drawn raised.
+  void setTabs(const std::vector<EditorTabEntry>& tabs);
+  // A click on a tab (or on its close box) since the last call.
+  bool takeTabClick(int* index, bool* close);
+  // The strip's rectangle and a tab's (for tests); false past the end.
+  GuiToolRect tabStripRect() const;
+  bool tabRectForTesting(int index, GuiToolRect* rect) const;
+  bool tabCloseRectForTesting(int index, GuiToolRect* rect) const;
 
   EditorCommand update(InputManager* inputManager, float dt = 0.016f);
   void setAtlas(TextureHandle atlas) { m_atlas = atlas; }
@@ -66,6 +87,11 @@ public:
   // The View menu's panel items.
   void setPanels(const std::vector<EditorPanelMenuEntry>& panels,
                  bool canDetach);
+  // File > Open Project, New Project and the recent list (newest first, at
+  // most ten shown); `available` false hides them all (a host without
+  // projects).
+  void setRecentProjects(const std::vector<std::string>& labels,
+                         bool available);
   // Edit menu shows "Undo <label>" / "Redo <label>"; empty disables the item.
   void setHistoryLabels(const std::string& undoLabel,
                         const std::string& redoLabel);
@@ -154,8 +180,21 @@ private:
   std::string m_redoLabel;
   std::vector<EditorPanelMenuEntry> m_panels;
   bool m_canDetach = false;
+  std::vector<std::string> m_recentProjects;
+  bool m_projectsAvailable = false;
+  std::vector<EditorTabEntry> m_tabs;
+  // Horizontal offset keeping the active tab in view when they overflow.
+  float m_tabScroll = 0.0f;
+  int m_tabClick = -1;
+  bool m_tabClickClose = false;
 
   static MenuItem item(const char* label, EditorCommand command);
+  // Lays the tabs out left to right at the current scroll.
+  std::vector<GuiToolRect> tabRects() const;
+  static GuiToolRect tabCloseRect(const GuiToolRect& tab);
+  float tabWidth(const EditorTabEntry& tab) const;
+  int tabAt(float x, float y) const;
+  void drawTabs();
   static MenuItem separator();
   void rebuildMenus();
   void updateLayout();

@@ -7,35 +7,101 @@ class EditorSceneTestAccess
 public:
   static void setCameraTargetHeight(EditorScene& module, float height)
   {
-    module.m_cameraTargetY = height;
+    module.activeTab().cameraTargetY = height;
   }
   static bool confirmationOpen(const EditorScene& module)
   {
     return module.m_confirm && module.m_confirm->isOpen();
   }
+  // Tabs.
+  static std::size_t tabCount(const EditorScene& module)
+  {
+    return module.m_tabs.size();
+  }
+  static std::size_t activeTab(const EditorScene& module)
+  {
+    return module.m_activeTab;
+  }
+  static bool activateTab(EditorScene& module, std::size_t index)
+  {
+    return module.activateTab(index);
+  }
+  static EditorTab& tab(EditorScene& module, std::size_t index)
+  {
+    return *module.m_tabs[index];
+  }
+  static void openTab(EditorScene& module)
+  {
+    module.tabForOpening();
+    module.newDocument();
+  }
+  static void requestCloseTab(EditorScene& module) { module.requestCloseTab(); }
+  static void saveAll(EditorScene& module) { module.saveAll({}); }
+  static std::size_t pendingOpens(const EditorScene& module)
+  {
+    return module.m_openQueue.size();
+  }
+  // Projects.
+  static const std::vector<IllEdPlatform::ProjectEntry>& recentProjects(
+    const EditorScene& module)
+  {
+    return module.m_recentProjects;
+  }
+  static std::uint32_t switchingTo(const EditorScene& module)
+  {
+    return module.m_switchProjectId;
+  }
+  static std::string confirmationMessage(const EditorScene& module)
+  {
+    return module.m_confirm ? module.m_confirm->messageForTesting()
+                            : std::string();
+  }
+  static bool recoveryOpen(const EditorScene& module)
+  {
+    return module.m_recovery && module.m_recovery->isOpen();
+  }
+  static std::string recoveryMessage(const EditorScene& module)
+  {
+    return module.m_recovery ? module.m_recovery->messageForTesting()
+                             : std::string();
+  }
+  // This session's autosave slot (-1 before the scan finished) and whether
+  // it holds the document.
+  static int autosaveSlot(const EditorScene& module)
+  {
+    return module.activeTab().autosave.slot;
+  }
+  static bool autosaveLive(const EditorScene& module)
+  {
+    return module.activeTab().autosave.live;
+  }
+  static void autosaveNow(EditorScene& module)
+  {
+    module.autosaveNow(module.activeTab());
+  }
   static EditorDocument& document(EditorScene& module)
   {
-    return module.m_document;
+    return module.document();
   }
 
   static SceneGraph& graph(EditorScene& module)
   {
-    return module.m_document.graph();
+    return module.document().graph();
   }
 
   static EditorSelection& selection(EditorScene& module)
   {
-    return module.m_selection;
+    return module.selection();
   }
 
   static const std::string& selectedId(const EditorScene& module)
   {
-    return module.m_selection.primary();
+    return module.selection().primary();
   }
 
   static void setSelectedId(EditorScene& module, const std::string& id)
   {
-    module.m_selection.set(id);
+    module.selection().set(id);
   }
 
   static void refreshView(EditorScene& module) { module.refreshView(); }
@@ -45,7 +111,7 @@ public:
   {
     module.m_activeTool = tool;
     module.applyActiveToolAt(0.0f, 0.0f);
-    return module.m_selection.primary();
+    return module.selection().primary();
   }
 
   static void deleteSelection(EditorScene& module)
@@ -66,13 +132,16 @@ public:
   // The node outlined under the cursor (empty for none).
   static const std::string& hoverId(const EditorScene& module)
   {
-    return module.m_hoverId;
+    return module.activeTab().hoverId;
   }
   static bool createAtContextPoint(EditorScene& module, EditorCommand command)
   {
     return module.createAtContextPoint(command);
   }
-  static bool isolated(const EditorScene& module) { return module.m_isolated; }
+  static bool isolated(const EditorScene& module)
+  {
+    return module.activeTab().isolated;
+  }
   // The grid's centre and half extent in world units.
   static Vector3 gridWindow(const EditorScene& module)
   {

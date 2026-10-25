@@ -4,8 +4,8 @@
 #include <Illumo/Engine/IllumoContext.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
-#include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Rendering/DrawList.h>
+#include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/InputManager.h>
@@ -20,6 +20,7 @@
 #include <IllumoGuest/FontProvider.h>
 #include <IllumoGuest/Launcher.h>
 #include <IllumoGuest/PanelSurfaces.h>
+#include <IllumoGuest/Projects.h>
 #include <IllumoGuest/RecordingBackend.h>
 #include <IllumoGuest/RenderWorld.h>
 #include <IllumoGuest/SceneWorlds.h>
@@ -120,6 +121,8 @@ protected:
   // Other installed applications (Launch capability); unavailable unless
   // granted.
   GuestLauncher& launcher() { return m_launcher; }
+  // Project folders (Project capability); unavailable unless granted.
+  GuestProjects& projects() { return m_projects; }
   const IllumoContext& context() const { return m_context; }
   // The product may publish extra services through the context.
   IllumoContext& programContext() { return m_context; }
@@ -176,6 +179,7 @@ private:
   // when granted.
   GuestAudio m_audio;
   GuestLauncher m_launcher;
+  GuestProjects m_projects;
   // Host-owned world objects (HostRender capability), one world per scene;
   // IllumoContext::renderWorld follows the active scene's.
   std::unique_ptr<GuestSceneWorlds> m_worlds;

@@ -49,10 +49,37 @@ if(BUILD_TESTING)
   # Launch capability.
   add_test(NAME IllEd.Wasm.PlayPackage
     COMMAND IllEdWasmPackageTests --run IllEd.Wasm.PlayPackage)
+  # Autosave into the package's storage and recovery on the next run.
+  add_test(NAME IllEd.Wasm.Recovery
+    COMMAND IllEdWasmPackageTests --run IllEd.Wasm.Recovery)
+  # Document tabs driven through console commands and the key map.
+  add_test(NAME IllEd.Wasm.Tabs
+    COMMAND IllEdWasmPackageTests --run IllEd.Wasm.Tabs)
+  # Projects: the host's recent list and a switch by restart.
+  add_test(NAME IllEd.Wasm.Projects
+    COMMAND IllEdWasmPackageTests --run IllEd.Wasm.Projects)
   set_tests_properties(IllEd.Wasm.Package IllEd.Wasm.ProjectPackage
-    IllEd.Wasm.PlayPackage PROPERTIES
+    IllEd.Wasm.PlayPackage IllEd.Wasm.Recovery IllEd.Wasm.Tabs
+    IllEd.Wasm.Projects PROPERTIES
     LABELS "IllEd;IllumoWorkspace" TIMEOUT 300
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllEdWasmPackageTests>")
   add_dependencies(IllumoRunTests IllEdWasmPackageTests)
+
+  # Real-GPU smoke (label IllumoGpu, not a workspace gate): the package
+  # through a real window with a scripted edit and save, and the capture's
+  # pixels. Returns 77 (skipped) where no render window can be created.
+  add_executable(IllEdGpuSmoke "${_illed}/tools/GpuSmoke.cpp")
+  target_link_libraries(IllEdGpuSmoke PRIVATE Illumo::Content Illumo::Illumo)
+  target_include_directories(IllEdGpuSmoke SYSTEM PRIVATE
+    "${CMAKE_SOURCE_DIR}/Illumo"
+    "${CMAKE_SOURCE_DIR}/Illumo/thirdparty/json/single_include")
+  illumo_configure_runtime_target(IllEdGpuSmoke)
+  illumo_stage_msvc_asan(IllEdGpuSmoke)
+  add_dependencies(IllEdGpuSmoke IllumoRuntime)
+  add_test(NAME IllEd.Gpu.Smoke
+    COMMAND IllEdGpuSmoke "$<TARGET_FILE:IllumoRuntime>")
+  set_tests_properties(IllEd.Gpu.Smoke PROPERTIES
+    LABELS "IllumoGpu" SKIP_RETURN_CODE 77 TIMEOUT 120
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoRuntime>")
 endif()
 unset(_illed)

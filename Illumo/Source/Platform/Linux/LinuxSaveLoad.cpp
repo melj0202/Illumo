@@ -117,6 +117,28 @@ SaveLoad::GetLoadLocation(const SaveLoadDialogSpec& specification)
   return chooseFile(specification, false);
 }
 
+// Compiled, not smoke tested: Linux has no runnable applications yet
+// (docs/packages/platform-linux.md).
+std::string
+SaveLoad::GetFolderLocation(const std::string& title)
+{
+  if (!EnsureLinuxGtkInitialized()) {
+    return std::string();
+  }
+  Gtk::FileChooserDialog dialog(title.empty() ? "Choose Folder" : title,
+                                Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+  dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+  dialog.add_button("_Select", Gtk::RESPONSE_OK);
+  dialog.set_default_response(Gtk::RESPONSE_OK);
+  const int response = dialog.run();
+  dialog.hide();
+  if (response != Gtk::RESPONSE_OK) {
+    return std::string();
+  }
+  const Glib::ustring filename = dialog.get_filename();
+  return filename.empty() ? std::string() : std::string(filename);
+}
+
 std::string
 SaveLoad::GetSaveLocation(const SaveLoadDialogSpec& specification)
 {

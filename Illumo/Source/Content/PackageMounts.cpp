@@ -337,6 +337,10 @@ PackageMounts::packMounted(const VirtualFileSystem& vfs,
         error = "The directory holds too many entries to pack";
         return false;
       }
+      // Dot entries are working files (an editor's .backup/), not content.
+      if (!entry.name.empty() && entry.name[0] == '.') {
+        continue;
+      }
       const std::string child =
         relative.empty() ? entry.name : relative + "/" + entry.name;
       if (entry.kind == VfsKind::Directory) {

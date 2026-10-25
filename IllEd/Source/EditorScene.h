@@ -1,13 +1,16 @@
 #pragma once
 
 #include "EditorAssetBrowser.h"
+#include "EditorAutosave.h"
 #include "EditorBehaviours.h"
 #include "EditorConfirmDialog.h"
 #include "EditorDocument.h"
 #include "EditorGizmo.h"
 #include "EditorInspector.h"
+#include "EditorRecoveryDialog.h"
 #include "EditorSceneGraphView.h"
 #include "EditorSelection.h"
+#include "EditorTab.h"
 #include "EditorToolbar.h"
 #include "EditorToolsPanel.h"
 #include "IllEdPlatform.h"
@@ -25,21 +28,24 @@
 enum class EditorPendingAction
 {
   None,
-  NewDocument,
-  OpenDocument,
-  // Opens m_pendingLocation (a scene picked in the asset browser).
-  OpenLocation,
+  // Reloads the document's saved location.
+  RevertDocument,
+  // Closes the active tab.
+  CloseTab,
   ExitEditor
 };
 
-// The editor, as the IllEd program's one scene: panels, viewport input, gizmo and file flows around one
-// EditorDocument. The Hierarchy, Assets, Tools and Inspector panels live in a
+// The editor, as the IllEd program's one scene: panels, viewport input, gizmo
+// and file flows around the open documents (EditorTab), one of which is
+// active. The Hierarchy, Assets, Tools and Inspector panels live in a
 // GuiPanelDock (D-UI7): docked in the left and right columns or popped out
 // into their own windows. Implementation is split by concern:
 //   EditorScene.cpp          lifetime, per-frame update, dock, drawables
 //   EditorScenePanels.cpp    dock layout, panel placement, layout saving
 //   EditorSceneCommands.cpp  command dispatch, file flows, node commands
 //   EditorSceneViewport.cpp  camera, grid, picking, gizmo and selection input
+//   EditorSceneTabs.cpp      tabs: opening, switching, closing, Save All
+//   EditorSceneAutosave.cpp  autosave slots, recovery at start, session record
 class EditorScene : public ProgramScene
 {
   friend class EditorSceneTestAccess;
@@ -56,21 +62,32 @@ public:
   void dispatch(DrawList& frame) override;
   void stop() override;
   bool closeRequested() override;
-  // The edited document is this scene's content, which picks through proxies.
+  // Every document picks through proxies (the tabs own their instances; the
+  // program scene's content stays unused).
   SceneInstanceOptions contentOptions() const override;
   EditorSceneDetail sceneDetail() const;
+
+  // The open documents and the active one; there is always at least one.
+  const std::vector<std::unique_ptr<EditorTab>>& tabs() const { return m_tabs; }
+  std::size_t activeTabIndex() const { return m_activeTab; }
+  EditorTab& activeTab() { return *m_tabs[m_activeTab]; }
+  const EditorTab& activeTab() const { return *m_tabs[m_activeTab]; }
+  EditorDocument& document() { return activeTab().document; }
+  const EditorDocument& document() const { return activeTab().document; }
+  EditorSelection& selection() { return activeTab().selection; }
+  const EditorSelection& selection() const { return activeTab().selection; }
 
 private:
   // The services this scene started with.
   IllumoContext* ic{ nullptr };
-  // Before the document, which borrows its schema.
+  // Before the documents, which borrow its schema.
   EditorBehaviours m_behaviours;
-  EditorDocument m_document;
-  EditorSelection m_selection;
+  std::vector<std::unique_ptr<EditorTab>> m_tabs;
+  std::size_t m_activeTab = 0;
+  uint64_t m_nextTabSerial = 1;
   std::unique_ptr<EditorToolbar> m_toolbar;
   std::unique_ptr<EditorSceneGraphView> m_sceneGraphView;
   std::unique_ptr<EditorAssetBrowser> m_assetBrowser;
-  IllEdLocation m_pendingLocation;
   std::unique_ptr<EditorToolsPanel> m_tools;
   std::unique_ptr<EditorInspector> m_inspector;
   GuiPanelDock m_dock;
@@ -133,13 +150,12 @@ private:
   std::vector<Transform3D> m_dragStartLocal;
   // Each drag gets its own history merge key, so one drag is one undo step.
   uint64_t m_dragSerial = 0;
-  float m_cameraTargetY = 0.0f;
   // A dialog, read or write is in flight (always briefly: guest services
-  // complete on a later update). Editing input is held until it finishes.
+  // complete on a later update). Editing input is held until it finishes,
+  // and the active tab cannot change, so the operation's completion still
+  // finds it active.
   bool m_busy = false;
   bool m_closeAfterBusy = false;
-  // The node under the cursor in the viewport, outlined; empty for none.
-  std::string m_hoverId;
   // A right press in the viewport, to tell a click (the context menu) from
   // an orbit or pan drag.
   bool m_rightDown = false;
@@ -151,10 +167,6 @@ private:
   bool m_contextPointValid = false;
   float m_contextWorldX = 0.0f;
   float m_contextWorldY = 0.0f;
-  // Isolation (Shift+H): the scene generation it was made for, since a new
-  // document ends it.
-  bool m_isolated = false;
-  uint64_t m_isolatedGeneration = 0;
   // Consecutive nudges share one history command.
   uint64_t m_nudgeSerial = 0;
   // The game Play launched (empty when none runs), and a launch in flight.
@@ -163,6 +175,126 @@ private:
   // Expires on Exit so late platform completions never touch a stopped
   // module.
   std::shared_ptr<bool> m_lifetime;
+
+  // Autosave and recovery (EditorSceneAutosave.cpp). Every dirty tab is
+  // written to its own storage slot on a cadence and the slot is emptied
+  // once the document is clean; at start every slot is read and the live
+  // ones are offered back, each into its own tab, through the recovery
+  // dialog.
+  std::unique_ptr<EditorRecoveryDialog> m_recovery;
+  struct RecoveryEntry
+  {
+    int slot = 0;
+    SceneDocument document;
+    EditorAutosaveRecord record;
+  };
+  // Offered newest first; what is left when the dialog closes stays on
+  // disk for the next start.
+  std::vector<RecoveryEntry> m_recoverable;
+  bool m_autosaveScanning = false;
+  bool m_autosaveScanRead = false;
+  int m_autosaveScanSlot = 0;
+  // Slots holding content: a recoverable document, or a tab's.
+  std::array<bool, EditorAutosaveRecord::kSlots> m_slotTaken{};
+  double m_autosaveClock = 0.0;
+  bool m_autosaveWarned = false;
+  // A clean close waits for the slots' free writes to land.
+  bool m_closeAfterAutosave = false;
+  // scene_status lines carry a serial so the console never merges them.
+  unsigned m_statusSerial = 0;
+  // The OS window title last applied ("<name>* - IllEd").
+  std::string m_appliedTitle;
+
+  // Tabs (EditorSceneTabs.cpp). Documents to open one after another once
+  // the editor is not busy (the last session's scenes, recovered work); the
+  // tab to activate when the queue drains.
+  struct PendingOpen
+  {
+    IllEdLocation location;
+    std::shared_ptr<RecoveryEntry> recovery;
+  };
+  std::vector<PendingOpen> m_openQueue;
+  // The tab (by position) to activate once the queue drains; npos for the
+  // last one opened.
+  std::size_t m_openQueueActivateIndex = static_cast<std::size_t>(-1);
+  // Save All in progress: the tabs still to save, and what to do after.
+  std::vector<uint64_t> m_saveAllQueue;
+  std::function<void(bool saved)> m_saveAllDone;
+  // Tabs whose changes were discarded in the current exit negotiation.
+  std::vector<uint64_t> m_exitDiscarded;
+  // Projects the host keeps (File > Open Project, the recent list), and the
+  // one an exit negotiation switches to (0 for a plain exit): the editor
+  // restarts on it once every dirty tab was settled.
+  std::vector<IllEdPlatform::ProjectEntry> m_recentProjects;
+  bool m_projectsListed = false;
+  std::uint32_t m_switchProjectId = 0;
+
+  // EditorSceneTabs.cpp
+  // Appends an empty document bound to this scene's services (not active).
+  EditorTab& openTab();
+  // Makes a tab the one drawn and edited: camera, hierarchy state and the
+  // render world move with it. Refused while a file operation is busy.
+  bool activateTab(std::size_t index);
+  // Releases the tab's assets and autosave slot; the last tab is replaced
+  // by an empty one.
+  void closeTab(std::size_t index);
+  EditorTab* tabBySerial(uint64_t serial);
+  std::size_t tabIndex(uint64_t serial) const;
+  // Clean, unnamed and empty: reused rather than opened beside.
+  static bool pristine(const EditorTab& tab);
+  // The active tab when it is pristine, else a new tab made active.
+  EditorTab& tabForOpening();
+  // Ctrl+W: closes the active tab after the unsaved-changes confirm.
+  void requestCloseTab();
+  void cycleTab(int direction);
+  // The index of the first dirty tab not yet discarded in this exit
+  // negotiation, or npos.
+  std::size_t firstDirtyTab() const;
+  void syncTabStrip();
+  void queueOpen(const IllEdLocation& location);
+  // Opens the next queued document once nothing is in flight.
+  void drainOpenQueue();
+  // Saves every dirty tab in turn (activating each); done receives whether
+  // all were saved.
+  void saveAll(std::function<void(bool saved)> done);
+  void continueSaveAll(bool saved);
+  // Binds or unbinds a tab's document from the renderer and render world.
+  void bindTab(EditorTab& tab, bool active);
+  // Projects (EditorSceneTabs.cpp): the host's recent list into the File
+  // menu; the dialogs; the switch, which settles every dirty tab like an
+  // exit and then restarts the editor on the chosen project.
+  void refreshProjects();
+  void openProject(bool create);
+  void switchProject(std::uint32_t id);
+  void finishProjectSwitch();
+
+  // EditorSceneAutosave.cpp
+  // Issues the next slot reads (all of them at once on the synchronous
+  // native oracle); offers recovery once every slot was read.
+  void updateRecoveryScan();
+  void finishRecoveryScan();
+  void offerRecovery();
+  // Recovers every offered document into its own tab, discards them all,
+  // or keeps them for the next start.
+  void recoverAll();
+  void discardAll();
+  void deferRecovery();
+  // Loads a recovered document into the active tab, which adopts its slot.
+  void recoverInto(const std::shared_ptr<RecoveryEntry>& entry);
+  void updateAutosave(double dt);
+  // Writes a dirty tab to its slot now (nothing for a clean one).
+  void autosaveNow(EditorTab& tab);
+  // Empties a tab's slot, then `done`; immediate when it is already free.
+  void freeAutosaveSlot(EditorTab& tab, std::function<void()> done);
+  // Empties every live slot, then `done`.
+  void freeAllAutosaveSlots(std::function<void()> done);
+  int takeFreeSlot();
+  // Remembers the open tabs' tree locations and the active one for the
+  // next start (sessionTabs, sessionActive).
+  void recordSession();
+  // Queues the last session's tree documents; false when there are none or
+  // restoreSession is off.
+  bool restoreSession();
 
   // EditorScene.cpp
   void syncFontSize();
@@ -191,8 +323,17 @@ private:
   void performPendingAction();
   // `done` receives whether the document was saved (false on cancellation).
   void saveDocument(bool saveAs, std::function<void(bool saved)> done = {});
+  // A project scene's previous version is kept as scenes/.backup/<name>
+  // (one generation) before it is overwritten.
   void writeDocument(const IllEdLocation& location,
                      std::function<void(bool saved)> done);
+  void writeDocumentNow(const IllEdLocation& location,
+                        std::function<void(bool saved)> done);
+  // Revert to Saved: reloads the saved location after a confirm.
+  void revertDocument();
+  // "<name>* - IllEd" on the OS window, through the panel surfaces when the
+  // host granted them, else the window itself.
+  void applyWindowTitle();
   void openDocument();
   // `initial` loads the launch document: failures are logged, not toasted.
   // Asset references are fetched before the scene instantiates.

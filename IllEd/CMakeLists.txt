@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.25)
 add_library(IllEdCore STATIC
   Source/EditorAssetBrowser.cpp
   Source/EditorAssets.cpp
+  Source/EditorAutosave.cpp
   Source/EditorBehaviours.cpp
   Source/EditorClipboard.cpp
   Source/EditorConfirmDialog.cpp
@@ -10,7 +11,10 @@ add_library(IllEdCore STATIC
   Source/EditorGizmo.cpp
   Source/EditorHistory.cpp
   Source/EditorInspector.cpp
+  Source/EditorRecoveryDialog.cpp
   Source/EditorScene.cpp
+  Source/EditorSceneAutosave.cpp
+  Source/EditorSceneTabs.cpp
   Source/EditorSceneCommands.cpp
   Source/EditorScenePanels.cpp
   Source/EditorSceneViewport.cpp
@@ -57,6 +61,7 @@ if(BUILD_TESTING)
   add_executable(IllEdTests
     Tests/TestMain.cpp
     Tests/TestEditorAssets.cpp
+    Tests/TestEditorWorkflow.cpp
     Tests/TestEditorBehaviours.cpp
     Tests/TestEditorClipboard.cpp
     Tests/TestEditorDocument.cpp

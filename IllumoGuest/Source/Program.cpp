@@ -94,6 +94,7 @@ GuestProgram::GuestProgram(std::string applicationName,
   , m_panels(services(), m_window, m_camera)
   , m_audio(services())
   , m_launcher(services())
+  , m_projects(services())
   , m_commandLine(&m_settings,
                   &m_consoleBuiltins,
                   &m_window,
@@ -247,6 +248,7 @@ GuestProgram::start(std::span<const std::byte> startup)
   m_audio.setGranted(granted(GuestCapability::Audio));
   m_context.audio = granted(GuestCapability::Audio) ? &m_audio : nullptr;
   m_launcher.setGranted(granted(GuestCapability::Launch));
+  m_projects.setGranted(granted(GuestCapability::Project));
   if (granted(GuestCapability::HostRender)) {
     m_worlds = std::make_unique<GuestSceneWorlds>(m_backend);
   }

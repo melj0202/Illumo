@@ -18,4 +18,7 @@ public:
     const SaveLoadDialogSpec& specification = SaveLoadDialogSpec{});
   static std::string GetSaveLocation(
     const SaveLoadDialogSpec& specification = SaveLoadDialogSpec{});
+  // A directory chooser; `title` names the dialog. Returns the chosen
+  // directory, or empty on cancellation or failure.
+  static std::string GetFolderLocation(const std::string& title);
 };

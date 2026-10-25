@@ -128,9 +128,9 @@ place.
 Loading 2,000 nodes takes about 3.8\,ms and 1,000 batched transform edits
 about 0.8\,ms in Release (\texttt{Illumo.Content.Bench.Instantiate2000}).
 
-IllEd's \texttt{EditorDocument} edits its \texttt{EditorScene}'s content, one
-\texttt{SceneInstance}, and is the only mutation gateway; the editor adds no
-per-node attachments. IllMeshViewer
+IllEd's \texttt{EditorDocument} edits one \texttt{SceneInstance} it owns (a
+tab's; only the active tab's is bound to the render world, D-E42) and is the
+only mutation gateway; the editor adds no per-node attachments. IllMeshViewer
 opens scenes through the same class, and IllumoGame's \texttt{render3dTest}
 diagnostic is \pathref{CSim/Scenes/render3d-test.ilsc} instantiated by
 it. Journal overflow resynchronizes bindings without rebuilding nodes. Capture

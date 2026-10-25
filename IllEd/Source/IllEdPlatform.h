@@ -93,13 +93,16 @@ public:
   virtual bool hasProject() const { return false; }
   // Makes virtual paths readable by the document's AssetManager before a
   // scene instantiates them; done receives the paths that could not be read.
-  // Fetched bytes stay until releaseAssets().
-  virtual void fetchAssets(const std::vector<std::string>& paths,
-                           FetchCallback done)
+  // Fetched bytes stay until the returned ticket (0 on a host that reads
+  // files directly) or everything is released.
+  virtual std::uint64_t fetchAssets(const std::vector<std::string>& paths,
+                                    FetchCallback done)
   {
     (void)paths;
     done({});
+    return 0;
   }
+  virtual void releaseAssets(std::uint64_t ticket) { (void)ticket; }
   virtual void releaseAssets() {}
   // Picks a file and copies it into /project/<folder>/<its name>; done
   // receives the new virtual path. Images over the texture cap are refused.
@@ -139,6 +142,40 @@ public:
   // Whether the launched application still runs; refreshed while it does.
   virtual bool appRunning() const { return false; }
 
+  // --- Projects: the host's recent project folders (the Project
+  // capability). An entry's id is valid until the next listing; its label
+  // is the folder's name. Host paths never reach the editor. ---
+  struct ProjectEntry
+  {
+    std::uint32_t id = 0;
+    std::string label;
+  };
+  using ProjectListCallback =
+    std::function<void(bool ok, std::vector<ProjectEntry> entries)>;
+  using ProjectPickCallback =
+    std::function<void(bool ok, bool cancelled, ProjectEntry entry)>;
+  using ProjectDoneCallback = std::function<void(bool ok)>;
+  // Whether this host keeps projects for the editor.
+  virtual bool canSwitchProject() const { return false; }
+  virtual void listProjects(ProjectListCallback done) { done(false, {}); }
+  // Folder dialogs: an existing project, or a new one the host scaffolds.
+  virtual void chooseProject(ProjectPickCallback done)
+  {
+    done(false, false, {});
+  }
+  virtual void createProject(ProjectPickCallback done)
+  {
+    done(false, false, {});
+  }
+  // Prepares the host's restart on a listed project; the editor then asks
+  // to restart.
+  virtual void openProject(std::uint32_t id, ProjectDoneCallback done)
+  {
+    (void)id;
+    done(false);
+  }
+  virtual void clearProjects(ProjectDoneCallback done) { done(false); }
+
   // Defined once per link: the native oracle or the guest service adapter.
   static IllEdPlatform& current();
 };
@@ -171,6 +208,21 @@ public:
   static std::vector<Launch>& launches();
   // Whether the recorded launch still "runs"; tests end it by hand.
   static bool& running();
+};
+
+// The native oracle's projects, for tests: once available, the entries are
+// listed, a dialog returns nextPick (empty cancels) as a new first entry,
+// and opens are recorded.
+class IllEdNativeProjects
+{
+public:
+  static void setAvailable(bool available);
+  static bool available();
+  static std::vector<IllEdPlatform::ProjectEntry>& entries();
+  // What the next folder dialog "chooses"; empty cancels it.
+  static std::string& nextPick();
+  // The id the last open asked for (0 when none).
+  static std::uint32_t& opened();
 };
 
 // Native scene file access by UTF-8 path, used by the native platform and the

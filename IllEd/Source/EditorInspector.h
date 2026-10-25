@@ -113,6 +113,10 @@ public:
               float dt);
   // A text field has focus: keyboard shortcuts and camera keys must wait.
   bool editing() const { return m_edit.active(); }
+  // Lands the typed value (as Enter would) before the document changes
+  // under the inspector, such as a tab switch; nothing when no field is
+  // focused.
+  void finishEdit(EditorDocument& document, const EditorSelection& selection);
   bool consumedPress() const { return m_consumedPress; }
   bool containsScreenPoint(float x, float y) const;
 

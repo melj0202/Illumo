@@ -62,8 +62,11 @@ serializes itself.
 - Chunked texture creation. The existing guest upload cap (payload below
   16 MiB; cubemap faces about 836 px, `Services.h:145-149,278-280`) stays and
   imports validate against it.
-- A folder-chooser dialog, recent-project lists, or persisted mounts. Launch
-  options remain unpersisted.
+- Persisted mounts. Launch options remain unpersisted. (The folder-chooser
+  dialog and the recent-project list this effort also declined arrived with
+  IllEd wave 4, `docs/illed-editing-wave4-plan.md` 5.5: the runtime keeps
+  `recentProjects.<app>` in its own settings, apart from the launch
+  options, and switches projects by restarting itself.)
 - ZIP64, multi-disk archives, encryption, or compression methods other than
   stored (0) and deflate (8).
 - Host-side decoding of package content for guests (section 9.4).

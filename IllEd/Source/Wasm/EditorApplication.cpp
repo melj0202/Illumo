@@ -94,10 +94,14 @@ public:
   }
   bool hasProject() const override { return m_project; }
   void setProject(bool project) { m_project = project; }
-  void fetchAssets(const std::vector<std::string>& paths,
-                   FetchCallback done) override
+  std::uint64_t fetchAssets(const std::vector<std::string>& paths,
+                            FetchCallback done) override
   {
-    m_fetches.fetch(paths, std::move(done));
+    return m_fetches.fetch(paths, std::move(done));
+  }
+  void releaseAssets(std::uint64_t ticket) override
+  {
+    m_fetches.release(ticket);
   }
   void releaseAssets() override { m_fetches.release(); }
   void importIntoProject(const SaveLoadDialogSpec& specification,
@@ -232,6 +236,48 @@ public:
   {
     return m_launcher != nullptr && m_launcher->running();
   }
+  void setProjects(GuestProjects* projects) { m_projects = projects; }
+  bool canSwitchProject() const override
+  {
+    return m_projects != nullptr && m_projects->available();
+  }
+  void listProjects(ProjectListCallback done) override
+  {
+    if (!canSwitchProject() ||
+        !m_projects->list([done](bool ok, GuestProjects::EntryList list) {
+          std::vector<ProjectEntry> entries;
+          for (const GuestProjectEntry& entry : list) {
+            entries.push_back({ entry.id, entry.label });
+          }
+          done(ok, std::move(entries));
+        })) {
+      done(false, {});
+    }
+  }
+  void chooseProject(ProjectPickCallback done) override
+  {
+    if (!canSwitchProject() || !m_projects->choose(picker(done))) {
+      done(false, false, {});
+    }
+  }
+  void createProject(ProjectPickCallback done) override
+  {
+    if (!canSwitchProject() || !m_projects->create(picker(done))) {
+      done(false, false, {});
+    }
+  }
+  void openProject(std::uint32_t id, ProjectDoneCallback done) override
+  {
+    if (!canSwitchProject() || !m_projects->open(id, done)) {
+      done(false);
+    }
+  }
+  void clearProjects(ProjectDoneCallback done) override
+  {
+    if (!canSwitchProject() || !m_projects->clear(done)) {
+      done(false);
+    }
+  }
   void pump()
   {
     m_documents.pump();
@@ -239,6 +285,9 @@ public:
     m_tree.pump();
     m_fetches.pump();
     pumpLauncher();
+    if (m_projects != nullptr) {
+      m_projects->pump();
+    }
     if (m_pasteWaiting && m_clipboard.idle()) {
       std::function<void(const std::string& text)> done =
         std::move(m_pasteWaiting);
@@ -248,6 +297,12 @@ public:
   }
 
 private:
+  static GuestProjects::PickCallback picker(ProjectPickCallback done)
+  {
+    return [done](bool ok, bool cancelled, GuestProjectEntry entry) {
+      done(ok, cancelled, { entry.id, entry.label });
+    };
+  }
   // Completes a launch once its request does, and while the launched
   // application runs asks about twice a second whether it still does.
   void pumpLauncher()
@@ -294,6 +349,7 @@ private:
   std::function<void(const std::string& text)> m_pasteWaiting;
   IllEdLocation m_launch;
   GuestLauncher* m_launcher = nullptr;
+  GuestProjects* m_projects = nullptr;
   LaunchCallback m_launchDone;
   int m_statusFrames = 0;
 };
@@ -354,8 +410,10 @@ protected:
     if (launchFile() != nullptr) {
       m_platform.setLaunch(*launchFile());
     }
-    // Play (Ctrl+P) launches the scene's game when the host granted Launch.
+    // Play (Ctrl+P) launches the scene's game when the host granted Launch;
+    // File > Open Project switches projects when it granted Project.
     m_platform.setLauncher(&launcher());
+    m_platform.setProjects(&projects());
     m_platform.setProject(granted(GuestCapability::ProjectFiles));
     Logger::LogTrace(granted(GuestCapability::ProjectFiles)
                        ? "IllEd has project access: saves, imports and packs "

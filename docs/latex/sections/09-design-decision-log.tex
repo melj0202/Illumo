@@ -4002,6 +4002,61 @@ indefinitely. Moving nodes and raycasting each frame went from 636 to
 \textbf{Refines:} D-E12
 \end{decisionbox}
 
+\subsection*{D-E42 --- Projects without the command line; the editor owns its documents}
+\begin{decisionbox}[title={D-E42 \quad 2026-10-22}]
+\textbf{Decision:} A new \texttt{Project} capability (bit 14; \\
+\texttt{KnownCapabilities} is now $(1 \ll 15) - 1$) and
+\texttt{GuestService::Project} (20) let a guest list, choose, create, open
+and clear projects without ever seeing a host path.
+\texttt{GuestProjectRequest} version 1 carries \texttt{List}, \texttt{Choose},
+\texttt{Create}, \texttt{Open} (a listed entry's id) and \texttt{Clear}; every
+accepted request completes with a \texttt{GuestProjectResult} (the recent
+entries as ids plus folder names, at most 16, newest first; the one entry an
+OS folder dialog produced, or cancelled; or nothing). The runtime offers the
+capability to the same applications as \texttt{Launch} (manifest
+\texttt{app.launchApps}), never for \texttt{--capture} or \texttt{--bench-*}.
+\symbolref{RuntimeProjectHost} implements \texttt{IProjectHost}: the OS
+folder dialog is \texttt{SaveLoad::GetFolderLocation} (the common item dialog
+in folder mode on Windows, gtkmm on Linux), the recent list is
+\texttt{recentProjects.<app>} in the runtime's own settings (at most 10,
+missing folders dropped on listing, never a launch option), a created project
+is scaffolded with \texttt{illumo.json} and the \texttt{scenes}, \texttt{meshes},
+\texttt{textures} and \texttt{assets} folders, and \texttt{Open} records
+\texttt{--project <dir>} through \texttt{SetRelaunchArguments}, which
+\texttt{RelaunchCurrentProcess} replays instead of the original command line.
+The guest then asks the window to restart (D-UI13), so a project switch is the
+ordinary close (IllEd's exit walk over its dirty tabs) followed by one
+relaunch. In IllEd every open document is an \texttt{EditorTab} that owns its
+\texttt{SceneInstance}, selection, hover, isolation, camera, hierarchy and
+autosave state; \texttt{document()} and \texttt{selection()} are the active
+tab's, only the active tab is bound to the render world, and the program
+scene's \texttt{content()} stays empty. \texttt{EditorDocument::attach} is
+gone: a document never borrows a scene.\\
+\textbf{Why:} Wave 4 (\pathref{docs/illed-editing-wave4-plan.md}) makes the
+editor the tool Saturn is built with. \texttt{--project} was the only way to
+open a writable project and the host alone may touch folders, so the chooser
+and the recent list belong to the runtime; a project is a mount table fixed
+per launch (D-E20), so switching is a relaunch. A child runtime (D-E36) is not
+a switch, since it ends with its parent. Tabs, autosave slots and recovery need
+documents that outlive the one program scene, which D-E31's borrowed content
+could not give.\\
+\textbf{Consequences:} The capability is the gate, so a deny test refuses a
+guest without the bit while \texttt{Launch} stays granted; a malformed
+request fails the exchange. \texttt{Choose} and \texttt{Create} block on the
+dialog like the file dialogs. Entry ids are valid until the next listing.
+Restarting replays the replacement arguments verbatim, so other launch
+options (mounts, storage, window size) survive the switch and nothing is
+persisted. Inactive tabs keep their instances and GPU assets alive until
+closed. \texttt{IllEd.Gpu.Smoke} (label \texttt{IllumoGpu}, skip 77 without a
+render window) now drives the real package through a window in the suite.
+Cases: \texttt{Illumo.Wasm.ProjectServiceDecoder}, \texttt{ProjectDeny},
+\texttt{GuestProjects}, \texttt{RuntimeProjectHost}; \texttt{IllEd.Module.Tabs},
+\texttt{Projects}, \texttt{Autosave}, \texttt{Recovery}; \texttt{IllEd.Wasm.Tabs},
+\texttt{Projects}, \texttt{Recovery}.\\
+\textbf{Extends:} D-E22, D-E36, D-UI13; \textbf{Refines:} D-E31 (IllEd's
+document is no longer its scene's content), D-E25
+\end{decisionbox}
+
 \subsection*{D-F2 --- Calendar build versions}
 \begin{decisionbox}[title={D-F2 \quad 2026-09-25}]
 \textbf{Decision:} A build's version is \texttt{vYY.MM\_B}, for example

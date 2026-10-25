@@ -36,16 +36,16 @@ EditorScene::applyWorldCamera()
   if (ic == nullptr || ic->camera == nullptr) {
     return;
   }
-  if (m_document.worldMode() != SceneWorldMode::World3D) {
+  if (document().worldMode() != SceneWorldMode::World3D) {
     ic->camera->setProjectionType(ProjectionType::Orthographic);
     return;
   }
-  const SceneEditorState& state = m_document.editorState();
+  const SceneEditorState& state = document().editorState();
   const glm::dvec2 position = ic->camera->GetPositionPrecise();
   const float zoom = ic->camera->GetZoom();
   const float distance = std::max(2.0f, 12.0f / std::max(0.15f, zoom / 32.0f));
   const glm::vec3 target(static_cast<float>(position.x),
-                         m_cameraTargetY,
+                         activeTab().cameraTargetY,
                          static_cast<float>(position.y));
   const glm::vec3 eye =
     target + glm::vec3(std::cos(state.pitch) * std::sin(state.yaw) * distance,
@@ -89,7 +89,7 @@ EditorScene::followGrid()
   if (ic == nullptr || ic->camera == nullptr || !m_gridBuilt) {
     return;
   }
-  const float spacing = std::max(0.001f, m_document.editorState().gridSpacing);
+  const float spacing = std::max(0.001f, document().editorState().gridSpacing);
   float width = 0.0f;
   float height = 0.0f;
   viewportPixels(&width, &height, nullptr, nullptr);
@@ -97,7 +97,7 @@ EditorScene::followGrid()
   float centerX = 0.0f;
   float centerY = 0.0f;
   float half = 0.0f;
-  gridWindowFor(m_document.worldMode() == SceneWorldMode::World3D,
+  gridWindowFor(document().worldMode() == SceneWorldMode::World3D,
                 spacing,
                 static_cast<float>(position.x),
                 static_cast<float>(position.y),
@@ -124,8 +124,8 @@ EditorScene::rebuildGrid()
     return;
   }
   m_grid->clearPrimitives();
-  const float spacing = std::max(0.001f, m_document.editorState().gridSpacing);
-  const bool is3D = m_document.worldMode() == SceneWorldMode::World3D;
+  const float spacing = std::max(0.001f, document().editorState().gridSpacing);
+  const bool is3D = document().worldMode() == SceneWorldMode::World3D;
   float width = 1280.0f;
   float height = 720.0f;
   viewportPixels(&width, &height, nullptr, nullptr);
@@ -243,8 +243,8 @@ EditorScene::updateCamera(double dt)
   const bool keyboardFree =
     !ic->inputManager->isControlPressed() && !ic->inputManager->isAltPressed();
 
-  if (m_document.worldMode() == SceneWorldMode::World3D) {
-    const SceneEditorState& camState = m_document.editorState();
+  if (document().worldMode() == SceneWorldMode::World3D) {
+    const SceneEditorState& camState = document().editorState();
     const float sinYaw = std::sin(camState.yaw);
     const float cosYaw = std::cos(camState.yaw);
     // Camera right on XZ: (cosYaw, 0, -sinYaw); forward: (-sinYaw, 0, -cosYaw)
@@ -267,10 +267,10 @@ EditorScene::updateCamera(double dt)
         pan -= forwardDir * speed;
       }
       if (ic->inputManager->isKeyPressed(KeyCode::PageUp)) {
-        m_cameraTargetY += static_cast<float>(speed);
+        activeTab().cameraTargetY += static_cast<float>(speed);
       }
       if (ic->inputManager->isKeyPressed(KeyCode::PageDown)) {
-        m_cameraTargetY -= static_cast<float>(speed);
+        activeTab().cameraTargetY -= static_cast<float>(speed);
       }
       if (pan.x != 0.0 || pan.y != 0.0) {
         ic->camera->Pan(pan);
@@ -293,14 +293,14 @@ EditorScene::updateCamera(double dt)
     }
 
     if (right) {
-      SceneEditorState state = m_document.editorState();
+      SceneEditorState state = document().editorState();
       state.yaw += static_cast<float>(mouse[0] - m_lastMouseX) * 0.01f;
       state.yaw = std::remainder(state.yaw, 6.28318530718f);
       state.pitch = std::clamp(
         state.pitch + static_cast<float>(m_lastMouseY - mouse[1]) * 0.01f,
         0.05f,
         1.5f);
-      m_document.setEditorState(state);
+      document().setEditorState(state);
     }
   } else {
     if (keyboardFree) {
@@ -337,7 +337,7 @@ EditorScene::updateCamera(double dt)
   double* scroll = ic->inputManager->getMouseScrollOffset();
   if (scroll != nullptr && *scroll != 0.0) {
     const float factor = *scroll > 0.0 ? 1.1f : 0.9f;
-    if (m_document.worldMode() != SceneWorldMode::World3D) {
+    if (document().worldMode() != SceneWorldMode::World3D) {
       // Anchored in the view ZoomAt works in, so quick notches stay under
       // the cursor while the camera still eases.
       const glm::dvec2 worldMouse =
@@ -356,10 +356,10 @@ EditorScene::frameSelection()
   if (ic == nullptr || ic->camera == nullptr || ic->window == nullptr) {
     return;
   }
-  const SceneGraph& graph = m_document.graph();
+  const SceneGraph& graph = document().graph();
   bool any = false;
   AxisAlignedBounds3 bounds;
-  const std::vector<std::string>& ids = m_selection.ids();
+  const std::vector<std::string>& ids = selection().ids();
   std::vector<std::string> all;
   if (ids.empty()) {
     for (SceneNodeHandle node = graph.firstNode(); !node.isNull();
@@ -369,7 +369,7 @@ EditorScene::frameSelection()
   }
   for (const std::string& id : ids.empty() ? all : ids) {
     AxisAlignedBounds3 world;
-    const SceneNodeHandle handle = m_document.nodeHandle(id);
+    const SceneNodeHandle handle = document().nodeHandle(id);
     if (!graph.getWorldBounds(handle, &world)) {
       Matrix4 matrix(1.0f);
       graph.getWorldTransform(handle, &matrix);
@@ -393,7 +393,7 @@ EditorScene::frameSelection()
   float width = 0.0f;
   float height = 0.0f;
   viewportPixels(&width, &height, nullptr, nullptr);
-  if (m_document.worldMode() == SceneWorldMode::World3D) {
+  if (document().worldMode() == SceneWorldMode::World3D) {
     const float radius = glm::length(size) * 0.5f;
     const float distance = std::max(2.0f, radius * 2.6f);
     placeCamera(center, std::clamp(32.0f * 12.0f / distance, 0.5f, 100.0f));
@@ -453,7 +453,7 @@ EditorScene::placeCamera(const Vector3& point, float zoom)
   float offsetY = 0.0f;
   viewportPixels(nullptr, nullptr, &offsetX, &offsetY);
   ic->camera->SetZoom(zoom);
-  if (m_document.worldMode() == SceneWorldMode::World3D) {
+  if (document().worldMode() == SceneWorldMode::World3D) {
     // World units per pixel at the target, from the editor camera's fixed
     // 50 degree field of view and its zoom-to-distance mapping.
     const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
@@ -461,7 +461,7 @@ EditorScene::placeCamera(const Vector3& point, float zoom)
       std::max(2.0f, 12.0f / std::max(0.15f, zoom / 32.0f));
     const float perPixel = 2.0f * distance * std::tan(glm::radians(25.0f)) /
                            static_cast<float>(std::max(1, dimensions[1]));
-    const SceneEditorState& state = m_document.editorState();
+    const SceneEditorState& state = document().editorState();
     const Vector3 right(std::cos(state.yaw), 0.0f, -std::sin(state.yaw));
     const Vector3 up(-std::sin(state.pitch) * std::sin(state.yaw),
                      std::cos(state.pitch),
@@ -469,7 +469,7 @@ EditorScene::placeCamera(const Vector3& point, float zoom)
     const Vector3 target =
       point - right * (offsetX * perPixel) + up * (offsetY * perPixel);
     ic->camera->SetPositionPrecise(target.x, target.z);
-    m_cameraTargetY = target.y;
+    activeTab().cameraTargetY = target.y;
   } else {
     ic->camera->SetPositionPrecise(point.x - offsetX / zoom,
                                    point.y + offsetY / zoom);
@@ -535,7 +535,7 @@ EditorScene::showDropPreview(const std::string& path,
       // Where placeAsset would put the node: a unit box for a mesh, the
       // default sprite square for a texture.
       const Matrix4 world =
-        m_document.makeEditPlaneTransform(worldX, worldY).toMatrix();
+        document().makeEditPlaneTransform(worldX, worldY).toMatrix();
       const float depth = kind == EditorAssetKind::Mesh ? 0.5f : 0.0f;
       m_dropPreview->clearPrimitives();
       addOrientedBox(*m_dropPreview,
@@ -561,20 +561,20 @@ EditorScene::rebuildSelectionOverlay()
   }
   m_selectionOverlay->clearPrimitives();
   // The node under the cursor, thin and pale, unless it is selected.
-  if (!m_hoverId.empty() && !m_selection.contains(m_hoverId) &&
-      m_document.findNode(m_hoverId) != nullptr) {
+  if (!activeTab().hoverId.empty() && !selection().contains(activeTab().hoverId) &&
+      document().findNode(activeTab().hoverId) != nullptr) {
     AxisAlignedBounds3 local;
-    if (!m_document.scene().localBounds(m_hoverId, &local)) {
+    if (!document().scene().localBounds(activeTab().hoverId, &local)) {
       local = AxisAlignedBounds3{ Vector3(-0.25f), Vector3(0.25f) };
     }
     addOrientedBox(*m_selectionOverlay,
-                   m_document.worldMatrix(m_hoverId),
+                   document().worldMatrix(activeTab().hoverId),
                    local,
                    1.04f,
                    ColorRgba{ 196, 208, 226, 90 });
   }
-  const std::string& primary = m_selection.primary();
-  if (primary.empty() || m_document.findNode(primary) == nullptr) {
+  const std::string& primary = selection().primary();
+  if (primary.empty() || document().findNode(primary) == nullptr) {
     return;
   }
   const float pulse = 0.82f + 0.18f * std::sin(m_animTime * 4.0f);
@@ -583,12 +583,12 @@ EditorScene::rebuildSelectionOverlay()
                         static_cast<unsigned char>(60.0f * pulse),
                         255 };
   const ColorRgba secondary{ 120, 190, 255, 220 };
-  for (const std::string& id : m_selection.ids()) {
+  for (const std::string& id : selection().ids()) {
     AxisAlignedBounds3 local;
-    if (!m_document.scene().localBounds(id, &local)) {
+    if (!document().scene().localBounds(id, &local)) {
       local = AxisAlignedBounds3{ Vector3(-0.25f), Vector3(0.25f) };
     }
-    const Matrix4 world = m_document.worldMatrix(id);
+    const Matrix4 world = document().worldMatrix(id);
     addOrientedBox(*m_selectionOverlay,
                    world,
                    local,
@@ -622,13 +622,13 @@ GizmoFrame
 EditorScene::gizmoFrame(const std::string& id) const
 {
   GizmoFrame frame;
-  const Matrix4 world = m_document.worldMatrix(id);
+  const Matrix4 world = document().worldMatrix(id);
   frame.origin = Vector3(world[3]);
   Vector3 center(0.0f);
   if (m_pivotCenter && selectionCenter(&center)) {
     frame.origin = center;
   }
-  frame.is3D = m_document.worldMode() == SceneWorldMode::World3D;
+  frame.is3D = document().worldMode() == SceneWorldMode::World3D;
   frame.scale = gizmoScale(frame.origin);
   if (m_gizmoSpace == GizmoSpace::Local) {
     for (int axis = 0; axis < 3; ++axis) {
@@ -647,9 +647,9 @@ EditorScene::selectionCenter(Vector3* center) const
 {
   bool any = false;
   AxisAlignedBounds3 all;
-  for (const std::string& id : m_selection.topLevel(m_document.scene())) {
+  for (const std::string& id : selection().topLevel(document().scene())) {
     AxisAlignedBounds3 bounds;
-    if (!m_document.subtreeWorldBounds(id, &bounds)) {
+    if (!document().subtreeWorldBounds(id, &bounds)) {
       continue;
     }
     if (!any) {
@@ -668,7 +668,7 @@ EditorScene::selectionCenter(Vector3* center) const
 GizmoSnap
 EditorScene::snapSettings() const
 {
-  const SceneEditorState& state = m_document.editorState();
+  const SceneEditorState& state = document().editorState();
   GizmoSnap snap;
   // Ctrl inverts the snap setting for the duration of a drag.
   const bool invert = ic != nullptr && ic->inputManager != nullptr &&
@@ -686,7 +686,7 @@ EditorScene::beginDrag(GizmoPart part,
                         const Vector3& rayDirection,
                         GizmoMode mode)
 {
-  const std::string primary = m_selection.primary();
+  const std::string primary = selection().primary();
   if (!m_gizmo.begin(
         gizmoFrame(primary), mode, part, rayOrigin, rayDirection)) {
     m_dragging = false;
@@ -694,12 +694,12 @@ EditorScene::beginDrag(GizmoPart part,
   }
   ++m_dragSerial;
   m_dragging = true;
-  m_dragIds = m_selection.topLevel(m_document.scene());
+  m_dragIds = selection().topLevel(document().scene());
   m_dragStartWorld.clear();
   m_dragStartLocal.clear();
   for (const std::string& id : m_dragIds) {
-    m_dragStartWorld.push_back(m_document.worldMatrix(id));
-    m_dragStartLocal.push_back(m_document.findNode(id)->transform);
+    m_dragStartWorld.push_back(document().worldMatrix(id));
+    m_dragStartLocal.push_back(document().findNode(id)->transform);
   }
 }
 
@@ -732,9 +732,9 @@ EditorScene::applyDrag(const Vector3& rayOrigin, const Vector3& rayDirection)
       target = pivot * glm::mat4_cast(delta.rotation) * unpivot * start;
     }
     const SceneNodeHandle parent =
-      m_document.graph().getParent(m_document.nodeHandle(m_dragIds[index]));
+      document().graph().getParent(document().nodeHandle(m_dragIds[index]));
     Matrix4 parentWorld(1.0f);
-    m_document.graph().getWorldTransform(parent, &parentWorld);
+    document().graph().getWorldTransform(parent, &parentWorld);
     Transform3D local = m_dragStartLocal[index];
     if (m_gizmo.mode() == GizmoMode::Scale) {
       // Scale stays in each node's own axes; positions spread from the pivot.
@@ -752,7 +752,7 @@ EditorScene::applyDrag(const Vector3& rayOrigin, const Vector3& rayDirection)
     }
     transforms.push_back(local);
   }
-  m_document.setTransforms(m_dragIds, transforms, dragMergeKey());
+  document().setTransforms(m_dragIds, transforms, dragMergeKey());
 }
 
 bool
@@ -763,7 +763,7 @@ EditorScene::worldToScreen(const Vector3& world,
   if (ic == nullptr || ic->camera == nullptr || ic->window == nullptr) {
     return false;
   }
-  if (m_document.worldMode() != SceneWorldMode::World3D) {
+  if (document().worldMode() != SceneWorldMode::World3D) {
     // The 2D camera maps screen to world affinely without rotation.
     const glm::dvec2 origin = ic->camera->ScreenToWorldPrecise(glm::dvec2(0.0));
     const glm::dvec2 right =
@@ -798,13 +798,13 @@ EditorScene::boxSelect(float x0, float y0, float x1, float y1, bool additive)
   const float right = std::max(x0, x1);
   const float top = std::min(y0, y1);
   const float bottom = std::max(y0, y1);
-  const SceneGraph& graph = m_document.graph();
+  const SceneGraph& graph = document().graph();
   std::vector<std::string> hits;
   for (SceneNodeHandle node = graph.firstNode(); !node.isNull();
        node = graph.nextNode(node)) {
     // Hidden nodes are not pickable, so they are not box-selectable either.
     if (!graph.isEffectivelyVisible(node) ||
-        m_document.isLocked(std::string(graph.getName(node)))) {
+        document().isLocked(std::string(graph.getName(node)))) {
       continue;
     }
     Vector3 center(0.0f);
@@ -824,10 +824,10 @@ EditorScene::boxSelect(float x0, float y0, float x1, float y1, bool additive)
     }
   }
   if (!additive) {
-    m_selection.set(hits);
+    selection().set(hits);
   } else {
     for (const std::string& id : hits) {
-      m_selection.add(id);
+      selection().add(id);
     }
   }
   rebuildSelectionOverlay();
@@ -873,7 +873,7 @@ EditorScene::updateSelection(double dt)
   const float mouseScreenX = static_cast<float>(mouse[0]);
   const float mouseScreenY = static_cast<float>(mouse[1]);
   const bool left = ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
-  const std::string primary = m_selection.primary();
+  const std::string primary = selection().primary();
   glm::vec3 rayOrigin{ 0.0f };
   glm::vec3 rayDir{ 0.0f, 0.0f, -1.0f };
   const bool haveRay =
@@ -914,8 +914,8 @@ EditorScene::updateSelection(double dt)
   }
 
   if (uiBlocksWorld(uiX, uiY)) {
-    if (!m_hoverId.empty()) {
-      m_hoverId.clear();
+    if (!activeTab().hoverId.empty()) {
+      activeTab().hoverId.clear();
       rebuildSelectionOverlay();
     }
     m_mouseWasDown = left;
@@ -923,15 +923,15 @@ EditorScene::updateSelection(double dt)
   }
   std::string underCursor;
   if (haveRay) {
-    m_document.pickRay(rayOrigin, rayDir, &underCursor);
+    document().pickRay(rayOrigin, rayDir, &underCursor);
   }
-  if (underCursor != m_hoverId) {
-    m_hoverId = underCursor;
+  if (underCursor != activeTab().hoverId) {
+    activeTab().hoverId = underCursor;
     rebuildSelectionOverlay();
   }
 
   const bool hasSelection =
-    !primary.empty() && m_document.findNode(primary) != nullptr;
+    !primary.empty() && document().findNode(primary) != nullptr;
   if (!m_dragging && hasSelection && haveRay) {
     const GizmoPart hovered =
       EditorGizmo::hitTest(gizmoFrame(primary), m_gizmoMode, rayOrigin, rayDir);
@@ -973,14 +973,14 @@ EditorScene::updateSelection(double dt)
         }
       }
       std::string hit;
-      const bool picked = m_document.pickRay(rayOrigin, rayDir, &hit);
+      const bool picked = document().pickRay(rayOrigin, rayDir, &hit);
       if (picked && toggle) {
-        m_selection.toggle(hit);
+        selection().toggle(hit);
       } else if (picked) {
-        if (!m_selection.contains(hit)) {
-          m_selection.set(hit);
+        if (!selection().contains(hit)) {
+          selection().set(hit);
         } else {
-          m_selection.add(hit);
+          selection().add(hit);
         }
         // Grabbing a body moves the selection on the edit plane, keeping the
         // grabbed point under the cursor; with Alt, it moves copies.
@@ -993,7 +993,7 @@ EditorScene::updateSelection(double dt)
       } else {
         // Empty space: a click clears (unless adding); a drag box-selects.
         if (!toggle) {
-          m_selection.clear();
+          selection().clear();
         }
         m_dragging = false;
         m_gizmo.end();
@@ -1021,15 +1021,15 @@ nearestGroundAxis(float x, float z)
 void
 EditorScene::handleNudgeKeys()
 {
-  if (ic == nullptr || ic->inputManager == nullptr || m_selection.empty()) {
+  if (ic == nullptr || ic->inputManager == nullptr || selection().empty()) {
     return;
   }
-  const bool is3D = m_document.worldMode() == SceneWorldMode::World3D;
+  const bool is3D = document().worldMode() == SceneWorldMode::World3D;
   Vector3 right(1.0f, 0.0f, 0.0f);
   Vector3 away(0.0f, 1.0f, 0.0f);
   if (is3D) {
     // Arrows follow the view: right and away from the camera on the ground.
-    const SceneEditorState& state = m_document.editorState();
+    const SceneEditorState& state = document().editorState();
     right = nearestGroundAxis(std::cos(state.yaw), -std::sin(state.yaw));
     away = nearestGroundAxis(-std::sin(state.yaw), -std::cos(state.yaw));
   }
@@ -1132,10 +1132,10 @@ void
 EditorScene::duplicateForDrag()
 {
   const std::vector<std::string> copies =
-    m_document.duplicate(m_selection.topLevel(m_document.scene()));
+    document().duplicate(selection().topLevel(document().scene()));
   if (!copies.empty()) {
-    m_selection.set(copies);
-    m_hoverId.clear();
+    selection().set(copies);
+    activeTab().hoverId.clear();
   }
 }
 
@@ -1184,7 +1184,7 @@ EditorScene::openViewportMenu(float pixelX, float pixelY)
   glm::vec3 direction{ 0.0f };
   std::string hit;
   if (screenToWorldRay(pixelX, pixelY, &origin, &direction)) {
-    m_document.pickRay(origin, direction, &hit);
+    document().pickRay(origin, direction, &hit);
   }
   m_contextPointValid =
     screenToWorld(pixelX, pixelY, &m_contextWorldX, &m_contextWorldY);
@@ -1193,19 +1193,19 @@ EditorScene::openViewportMenu(float pixelX, float pixelY)
   if (!hit.empty()) {
     // The menu acts on what was clicked: it joins a selection holding it,
     // else replaces it.
-    if (!m_selection.contains(hit)) {
-      m_selection.set(hit);
+    if (!selection().contains(hit)) {
+      selection().set(hit);
     }
-    const SceneInstance& scene = m_document.scene();
+    const SceneInstance& scene = document().scene();
     bool children = false;
     bool parents = false;
     bool allLocked = true;
-    for (const std::string& id : m_selection.ids()) {
+    for (const std::string& id : selection().ids()) {
       children = children || !scene.childIds(id).empty();
       parents = parents || !scene.parentOf(id).empty();
-      allLocked = allLocked && m_document.isLockedSelf(id);
+      allLocked = allLocked && document().isLockedSelf(id);
     }
-    const SceneNode* node = m_document.findNode(hit);
+    const SceneNode* node = document().findNode(hit);
     entries.push_back(
       { node != nullptr && !node->name.empty() ? node->name : hit,
         EditorCommand::None });
@@ -1232,11 +1232,11 @@ EditorScene::openViewportMenu(float pixelX, float pixelY)
     entries.push_back(
       { allLocked ? "Unlock" : "Lock", EditorCommand::ToggleLock });
     entries.push_back({ "Hide", EditorCommand::ToggleVisible });
-    entries.push_back({ m_isolated ? "Show Everything" : "Isolate",
+    entries.push_back({ activeTab().isolated ? "Show Everything" : "Isolate",
                         EditorCommand::ToggleIsolate });
     entries.push_back({ "Drop to Floor", EditorCommand::DropToFloor });
   } else {
-    const bool is3D = m_document.worldMode() == SceneWorldMode::World3D;
+    const bool is3D = document().worldMode() == SceneWorldMode::World3D;
     entries.push_back({ "Paste", EditorCommand::Paste });
     entries.push_back({ "-", EditorCommand::None });
     entries.push_back({ "Create Empty", EditorCommand::CreateEmpty });
@@ -1252,9 +1252,9 @@ EditorScene::openViewportMenu(float pixelX, float pixelY)
     entries.push_back({ "Create Light", EditorCommand::CreateLight });
     entries.push_back({ "Create Camera", EditorCommand::CreateCamera });
     entries.push_back({ "-", EditorCommand::None });
-    entries.push_back({ m_selection.empty() ? "Frame All" : "Frame Selection",
+    entries.push_back({ selection().empty() ? "Frame All" : "Frame Selection",
                         EditorCommand::FrameSelection });
-    if (m_isolated) {
+    if (activeTab().isolated) {
       entries.push_back({ "Show Everything", EditorCommand::ToggleIsolate });
     }
   }
@@ -1274,14 +1274,14 @@ EditorScene::applyActiveToolAt(float worldX, float worldY)
   }
   // New nodes go to the root; reparent them in the hierarchy.
   const Transform3D transform =
-    m_document.makeEditPlaneTransform(worldX, worldY);
+    document().makeEditPlaneTransform(worldX, worldY);
   const std::string id =
-    m_document.createPrimitive(empty, shape, std::string(), transform);
+    document().createPrimitive(empty, shape, std::string(), transform);
   if (id.empty()) {
     return;
   }
-  m_selection.set(id);
-  const SceneNode* created = m_document.findNode(id);
+  selection().set(id);
+  const SceneNode* created = document().findNode(id);
   toast("Created " + (created ? created->name : std::string("node")),
         ColorRgba{ 60, 220, 120, 255 });
   m_activeTool = EditorCommand::SelectTool;
@@ -1297,7 +1297,7 @@ EditorScene::screenToWorld(float screenX,
       ic->camera == nullptr || ic->window == nullptr) {
     return false;
   }
-  if (m_document.worldMode() != SceneWorldMode::World3D) {
+  if (document().worldMode() != SceneWorldMode::World3D) {
     const glm::dvec2 world = ic->camera->ScreenToWorldPrecise(
       glm::dvec2(static_cast<double>(screenX), static_cast<double>(screenY)));
     *worldX = static_cast<float>(world.x);
@@ -1330,7 +1330,7 @@ EditorScene::screenToWorldRay(float screenX,
   if (dimensions[0] <= 0 || dimensions[1] <= 0) {
     return false;
   }
-  if (m_document.worldMode() != SceneWorldMode::World3D) {
+  if (document().worldMode() != SceneWorldMode::World3D) {
     const glm::dvec2 world = ic->camera->ScreenToWorldPrecise(
       glm::dvec2(static_cast<double>(screenX), static_cast<double>(screenY)));
     *rayOrigin = glm::vec3(
@@ -1366,7 +1366,7 @@ EditorScene::gizmoScale(const glm::vec3& worldPos) const
   if (ic == nullptr || ic->camera == nullptr) {
     return 1.0f;
   }
-  if (m_document.worldMode() != SceneWorldMode::World3D) {
+  if (document().worldMode() != SceneWorldMode::World3D) {
     const float zoom = ic->camera->GetZoom();
     return std::clamp(28.0f / std::max(1.0f, zoom), 0.35f, 3.0f);
   }
@@ -1390,6 +1390,6 @@ EditorScene::hitTestGizmo(float screenX,
   GizmoFrame frame;
   frame.origin = gizmoOrigin;
   frame.scale = scale;
-  frame.is3D = m_document.worldMode() == SceneWorldMode::World3D;
+  frame.is3D = document().worldMode() == SceneWorldMode::World3D;
   return EditorGizmo::hitTest(frame, m_gizmoMode, rayOrigin, rayDir);
 }

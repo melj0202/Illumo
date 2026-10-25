@@ -16,6 +16,17 @@ class InputManager;
 class IRenderWindow;
 class Renderer;
 
+// The hierarchy view state that belongs to one document (a tab): its scroll
+// offset, folded nodes and click anchors. The filter is session-wide.
+struct EditorHierarchyState
+{
+  float scroll = 0.0f;
+  std::unordered_set<std::string> folded;
+  std::string anchorId;
+  std::string lastClickId;
+  std::string revealedPrimary;
+};
+
 // The Hierarchy dock panel's content: the scene tree drawn into the
 // rectangle and surface it is given (docked or detached), with folding,
 // visibility eyes, drag reordering inside its own surface and a context menu.
@@ -37,6 +48,10 @@ public:
 
   void setFontSize(float sizePt);
   float fontSize() const { return m_fontSize; }
+  // Per-document state, saved when a tab deactivates and restored when it
+  // activates; a drag or menu in progress ends.
+  EditorHierarchyState takeState() const;
+  void applyState(const EditorHierarchyState& state);
   // The content rectangle and surface for this frame.
   void setPlacement(const GuiPanelPlacement& placement);
   const GuiPanelPlacement& placement() const { return m_placement; }

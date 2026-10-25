@@ -22,9 +22,10 @@ oracle suite.
 - Depend only on `Illumo::Illumo` and `Illumo::Content`. Do not link Game,
   Rulesets, or `IllumoGameCore`.
 - `EditorDocument` edits one `SceneInstance` (Content) plus `EditorHistory`
-  and is the only mutation gateway. In the editor the instance is
-  `EditorScene`'s content, which the document borrows (`attach`, D-E31);
-  standalone documents (tools, tests) own one. Loads, clears and rebases
+  and is the only mutation gateway. A document always owns its instance
+  (D-E42): in the editor each `EditorTab` holds one and only the active
+  tab's is bound to the render world, while the program scene's content stays
+  empty; tools and tests hold one directly. Loads, clears and rebases
   replace the content in place, since `SceneInstance::load` leaves the scene
   untouched on failure. Every edit is recorded as a patch
   command (node before/after states plus optional scene settings); dirty
@@ -101,6 +102,68 @@ oracle suite.
   entries reused). Scenes load collect-fetch-instantiate: references are
   fetched with `IllEdPlatform::fetchAssets` (the guest asset cache; an OBJ's
   MTL libraries in a second stage) before `loadFromText`.
+- Tabs (`EditorTab.h`, `EditorSceneTabs.cpp`, `docs/illed-editing-wave4-plan.md`
+  5.4): every open document is an `EditorTab` the scene owns (document
+  with its own `SceneInstance`, selection, hover, isolation, camera height,
+  guest asset-cache ticket, hierarchy view state, autosave state); there is
+  always at least one, from construction to after stop. Only the active
+  tab is bound to the render world, drawn, updated and edited; `document()`
+  and `selection()` are the active tab's. Every busy file operation pins
+  the active tab (switching is refused while `m_busy`), so a completion
+  finds the tab it started on; autosave and recovery resolve tabs by
+  serial. New, Open and the asset browser open into the active tab only
+  while it is pristine (`pristine`), else beside it. Switching commits a
+  focused inspector field, stores and restores the camera and the
+  hierarchy's scroll, folds and anchors (the filter is session-wide), and
+  resets drags. Closing a dirty tab asks; the last tab becomes an empty
+  document. An exit asks every dirty tab in turn (`firstDirtyTab`, discards
+  remembered in `m_exitDiscarded` until the negotiation ends) and offers
+  Save All when more than one is dirty; Save All (Ctrl+Alt+S) saves the
+  dirty tabs one after another by activating each. The toolbar's tab strip
+  sits under the menu bar (`chromeTop()` is where the dock starts); Ctrl+Tab
+  and Ctrl+Shift+Tab cycle, Ctrl+W closes. Console: `scene_tab
+  [open|next|prev|close|go <n>|list]`; `scene_status` names the tab.
+- Autosave (`EditorSceneAutosave.cpp`, `docs/illed-editing-wave4-plan.md`
+  5.2): every dirty tab is written to its own flat private-storage slot
+  (`autosave-<n>.ilsc`, `EditorAutosaveRecord::kSlots` of them) 30 s after
+  its last edit, at the latest 120 s after the slot last matched it, and
+  before Play; the file carries the `illed.autosave` extension (label, tree
+  location, root, time) through `SceneExtensionText`. Autosave never holds
+  input and never marks the document saved; a clean document empties its
+  slot (storage cannot be listed or deleted, so an empty file is a free
+  slot) and a close waits for that write. At start every slot is read and
+  the live ones are offered by `EditorRecoveryDialog` (Recover all,
+  Discard all, Later); each recovered document opens in its own tab, dirty
+  (`EditorDocument::markRecovered`), and the tab adopts its slot; slots are
+  taken lazily (`takeFreeSlot`) and stay with their tab until it closes.
+  `sessionTabs` and `sessionActive` (settings) record the open tree
+  documents and the active one, and `restoreSession` (default on) reopens
+  them through the open queue (`drainOpenQueue`, one per update) when
+  nothing was launched. Console commands for scripts and tests:
+  `scene_create`, `scene_autosave`, `scene_recover`, `scene_status`
+  (serialized so the console never merges its lines).
+- Projects without the command line (`docs/illed-editing-wave4-plan.md`
+  5.5): when the host granted the `Project` capability (the runtime does
+  so for a `launchApps` app in an interactive run), File offers Open
+  Project, New Project, the recent list (`RecentProject0..9`) and Clear
+  Recent Projects; `IllEdPlatform::listProjects/chooseProject/
+  createProject/openProject/clearProjects` wrap `GuestProjects` (the native
+  oracle: `IllEdNativeProjects`). Entries are ids plus folder names; host
+  paths never reach the editor. A switch (`switchProject`) runs the exit
+  walk over every dirty tab, then `openProject` (the host records the
+  restart's `--project`) and `IRenderWindow::requestRestart`; Cancel drops
+  it. Without the grant the items are absent and the status bar says "No
+  project". Console: `scene_project [list|open <n>|choose|new|clear|
+  refresh]`.
+- Saving a project scene (`vfs:/project/...`) first copies the file it
+  overwrites to `.backup/<name>` beside it (one generation; a failed backup
+  never blocks the save); other locations get none. `PackageMounts::
+  packMounted` leaves dot entries out, so `.backup/` never ships. Revert to
+  Saved (`EditorCommand::RevertDocument`) reloads the saved location after
+  `EditorConfirmDialog::openDiscard` ("Revert" / Cancel). `updateStatus`
+  also applies the OS window title `<name>* - IllEd` through
+  `IPanelSurfaces::setTitle(kMainSurface)` when the host granted windows,
+  else `IRenderWindow::setTitle` (the native oracle).
 - Tree documents use `vfs:<virtual path>` locations (`IllEdPlatform::
   kTreePrefix`). With `--project`, new documents resolve against `/project`,
   Save to Project writes `/project/scenes/<name>.ilsc`, Import copies a pick

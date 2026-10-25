@@ -11,6 +11,7 @@
 struct GuestAudioRequest;
 
 class IAppLauncher;
+class IProjectHost;
 class IRenderWindow;
 class WasmPanelWindows;
 class IEnvVars;
@@ -77,6 +78,9 @@ public:
   // borrowed; null rejects every launch request. cancel() stops the launched
   // application.
   void setLauncher(IAppLauncher* launcher) { m_launcher = launcher; }
+  // Project folders for the Project service (Project capability),
+  // borrowed; null rejects every project request.
+  void setProjectHost(IProjectHost* host) { m_projects = host; }
   // Most samples one guest may keep registered or arriving (128 MiB of float
   // samples: two maximal clips).
   static constexpr std::size_t kMaximumGuestSamples = 32u * 1024u * 1024u;
@@ -100,6 +104,7 @@ private:
   bool completeConsole(GuestServices& results);
   void completeWindows(GuestServices& results);
   void completeLaunches(GuestServices& results);
+  void completeProjects(GuestServices& results);
   // Audio requests run at once; each completes Complete or Rejected.
   void completeAudio(std::uint64_t request,
                      GuestAudioRequest& audio,
@@ -129,6 +134,8 @@ private:
   WasmPanelWindows* m_windows = nullptr;
   std::deque<GuestServiceRecord> m_launchRequests;
   IAppLauncher* m_launcher = nullptr;
+  std::deque<GuestServiceRecord> m_projectRequests;
+  IProjectHost* m_projects = nullptr;
   IAudio* m_audio = nullptr;
   // Guest sound id to the output's sound, plus that sound's sample count.
   struct AudioSound

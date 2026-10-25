@@ -386,6 +386,7 @@ Installed packages live in `apps\<name>\` (or `apps\<name>.ilpk`), each with an
 | `illed` | `IllEd.wasm` | `launchAccess: "edit"`, `launchApps: true` (Play); preloads `Assets/IllEd/editor-ui-atlas.jpg` | `storage\illed\` |
 | `meshviewer` | `IllMeshViewer.wasm` | `launchAccess: "read"`; preloads the engine's `/engine/Skybox/skybox-daylight.png` | `storage\meshviewer\` |
 | `playground` | `Playground.wasm` | `launchAccess: "read"`; ships `behaviours.json` and `Scenes/demo.ilsc` | `storage\playground\` |
+| `saturn` (needs `Saturn/`) | `Saturn.wasm` | `launchAccess: "read"`; ships `behaviours.json`, `Scenes/world.ilsc` and `Assets/Meshes/capsule.obj` | `storage\saturn\` |
 
 ```text
 IllumoRuntime.exe [--app name] [--open file] [-ww width] [-wh height] [--graphics-api opengl|vulkan|d3d12]
@@ -620,7 +621,8 @@ package-preloaded atlas, keyboard pan, Ctrl+S save in place) and
 `IllMeshViewer.Wasm.Package` (launch mesh as one retained host mesh, skybox
 cubemap). `Illumo.Runtime.Help` and `Illumo.Runtime.InvalidCaptureFrame`
 check the runtime command line headlessly; real captures are verified by
-`tools/verify_capture.py`. An exact `--test` name is resolved through
+`tools/verify_capture.py` and by `IllEd.Gpu.Smoke` (`ctest -L IllumoGpu`,
+skipped where no render window opens). An exact `--test` name is resolved through
 CTest first and then by discovered product or runner prefix. Each case gets an isolated
 directory under `build/Testing/<runner-label>/` (or the equivalent in
 `build-workspace` / `build-linux`).

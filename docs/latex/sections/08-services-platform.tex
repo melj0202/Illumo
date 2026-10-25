@@ -174,6 +174,17 @@ case-sensitive everywhere and a link that leaves the root does not resolve.
 Writes reach only \texttt{/project}, through \texttt{AtomicFile}, and
 \texttt{*.wasm} and \texttt{illumo.json} are refused there.
 
+An application whose manifest sets \texttt{app.launchApps} is also offered the
+\texttt{Project} capability in interactive runs (D-E42).
+\texttt{GuestService::Project} lets it list recent projects, choose or create
+one through the OS folder dialog (\texttt{SaveLoad::GetFolderLocation}),
+clear the list, and open an entry: \symbolref{RuntimeProjectHost} keeps the
+list as \texttt{recentProjects.<app>} in the runtime's settings, scaffolds a
+new project, and on open records \texttt{--project <dir>} as the arguments
+\texttt{RelaunchCurrentProcess} replays, so the guest's restart request
+closes the window and starts the runtime again on the chosen folder. Only ids
+and folder names cross the ABI.
+
 The host console command \texttt{vfs} (registered beside \texttt{wasm\_stats}
 when a tree exists) runs \texttt{VfsConsole}:
 \texttt{vfs mounts}, \texttt{vfs ls <path>}, \texttt{vfs tree <path> [depth]}

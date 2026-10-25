@@ -777,6 +777,33 @@ EditorSceneGraphView::applyDrop(const std::string& sourceId,
   return document->setParent(sourceId, parentId, insertBefore);
 }
 
+EditorHierarchyState
+EditorSceneGraphView::takeState() const
+{
+  EditorHierarchyState state;
+  state.scroll = m_scroll;
+  state.folded = m_folded;
+  state.anchorId = m_anchorId;
+  state.lastClickId = m_lastClickId;
+  state.revealedPrimary = m_revealedPrimary;
+  return state;
+}
+
+void
+EditorSceneGraphView::applyState(const EditorHierarchyState& state)
+{
+  m_scroll = state.scroll;
+  m_folded = state.folded;
+  m_anchorId = state.anchorId;
+  m_lastClickId = state.lastClickId;
+  m_revealedPrimary = state.revealedPrimary;
+  m_isDragging = false;
+  m_draggedNodeId.clear();
+  m_dropTargetNodeId.clear();
+  m_menuOpen = false;
+  m_hoverRow = -1;
+}
+
 bool
 EditorSceneGraphView::update(InputManager* inputManager,
                              EditorDocument* document,

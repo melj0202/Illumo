@@ -73,6 +73,8 @@ public:
   // Packs every file below a mounted directory into an .ilpk at destination
   // (atomically). The directory must hold a valid illumo.json; the walk is
   // iterative and stops past maximumBytes of content or 100000 entries.
+  // Entries whose name starts with "." (an editor's .backup/) are working
+  // files and are left out.
   static bool packMounted(const VirtualFileSystem& vfs,
                           const std::string& source,
                           const std::filesystem::path& destination,

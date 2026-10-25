@@ -35,6 +35,8 @@ void
 registerEditorSceneTests(IllumoTestRegistry& registry);
 void
 registerEditorPanelsTests(IllumoTestRegistry& registry);
+void
+registerEditorWorkflowTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -54,6 +56,7 @@ createRegistry()
   registerEditorUiAtlasTests(registry);
   registerEditorSceneTests(registry);
   registerEditorPanelsTests(registry);
+  registerEditorWorkflowTests(registry);
   return registry;
 }
 

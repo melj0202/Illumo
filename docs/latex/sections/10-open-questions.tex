@@ -85,9 +85,10 @@ the plan's validation log):
         checked against it. Larger images need chunked texture creation.
   \item \textbf{Material system:} MTL files beside an OBJ are found and parsed,
         but materials are not bound; glTF is not read.
-  \item \textbf{Folder dialog:} \texttt{--project <dir>} is the only way to
-        open a writable project; there is no folder chooser, recent-project
-        list, or persisted mount.
+  \item \textbf{Folder dialog:} \textbf{Resolved by D-E42:} the
+        \texttt{Project} service gives a folder chooser and a recent list in
+        the runtime's settings, and a switch relaunches the runtime on the
+        chosen folder. The mount is still never persisted as a launch option.
   \item \textbf{Ids inside opaque data:} duplicate and paste remap node ids in
         core records only; ids inside namespaced components and
         \texttt{extensions} are copied verbatim. Asset paths pasted between

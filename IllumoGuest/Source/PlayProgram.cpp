@@ -193,6 +193,7 @@ GuestPlayScene::load()
         }
         m_behaviours.attach(content());
         m_loaded = true;
+        sceneLoaded();
         applyView();
         Logger::LogInfo("Playing " + name + " (" +
                         std::to_string(content().nodeCount()) + " nodes, " +
@@ -281,6 +282,7 @@ void
 GuestPlayScene::dispatch(DrawList& frame)
 {
   dispatchContent(frame);
+  dispatchOverlay(frame);
 }
 
 void

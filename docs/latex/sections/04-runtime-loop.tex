@@ -238,7 +238,8 @@ and a camera per world waits for them.
 
 CSim's program has two scenes, the title screen and the canvas, and keeps the
 canvas across trips to the title. IllEd is one
-\texttt{EditorScene} whose \texttt{EditorDocument} edits the scene's content.
+\texttt{EditorScene} holding a tab per open document, each with its own
+\texttt{EditorDocument} and \texttt{SceneInstance} (D-E42).
 IllMeshViewer is one \texttt{MeshViewerScene} whose content is the opened
 document. \pathref{Templates/SpinningCube}, the template for new projects, is a
 \texttt{GuestProgram} with one \texttt{SpinningCubeScene} and a

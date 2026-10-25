@@ -8,6 +8,7 @@
 #include <Illumo/Services/IEnvVars.h>
 #include <Illumo/Services/Logger.h>
 #include <Illumo/Wasm/AppLauncher.h>
+#include <Illumo/Wasm/ProjectHost.h>
 #include <Illumo/Wasm/WasmGameServices.h>
 #include <Illumo/Wasm/WasmPanelWindows.h>
 #include <IllumoGuest/Audio.h>
@@ -17,6 +18,7 @@
 #include <IllumoGuest/Display.h>
 #include <IllumoGuest/FileProtocol.h>
 #include <IllumoGuest/Launcher.h>
+#include <IllumoGuest/Projects.h>
 #include <IllumoGuest/Protocol.h>
 #include <IllumoGuest/Windows.h>
 #include <algorithm>
@@ -146,6 +148,7 @@ WasmGameServices::cancel()
   m_clipboardRequests.clear();
   m_windowRequests.clear();
   m_launchRequests.clear();
+  m_projectRequests.clear();
   // A launched application ends with the guest that launched it.
   if (m_launcher != nullptr && hasGrant(m_grants, GuestCapability::Launch)) {
     m_launcher->stop();
@@ -400,6 +403,64 @@ WasmGameServices::completeLaunches(GuestServices& results)
     m_launchRequests.pop_front();
   }
 }
+void
+WasmGameServices::completeProjects(GuestServices& results)
+{
+  // Listing and folder dialogs run on the host now (dialogs block like the
+  // file dialogs do), so each request completes in this exchange.
+  while (!m_projectRequests.empty()) {
+    ILLUMO_PROFILE_ZONE("WasmGameServices.completeProject");
+    const GuestServiceRecord& record = m_projectRequests.front();
+    GuestServiceRecord response{
+      record.request, GuestService::Project, GuestServiceStatus::Rejected, {}
+    };
+    GuestProjectRequest request;
+    if (m_projects != nullptr && m_projects->available() &&
+        hasGrant(m_grants, GuestCapability::Project) &&
+        GuestProjectRequest::read(record.payload, request)) {
+      GuestProjectResult result;
+      bool accepted = true;
+      std::string reason;
+      if (request.action == GuestProjectAction::List) {
+        for (const ProjectHostEntry& entry : m_projects->list()) {
+          if (result.entries.size() >= GuestProjectResult::MaximumEntries) {
+            break;
+          }
+          result.entries.push_back({ entry.id, entry.label });
+        }
+      } else if (request.action == GuestProjectAction::Choose ||
+                 request.action == GuestProjectAction::Create) {
+        ProjectHostEntry entry;
+        bool cancelled = false;
+        const bool picked = request.action == GuestProjectAction::Choose
+                              ? m_projects->choose(&entry, &cancelled, reason)
+                              : m_projects->create(&entry, &cancelled, reason);
+        if (picked) {
+          result.entries.push_back({ entry.id, entry.label });
+        } else if (cancelled) {
+          result.cancelled = true;
+        } else {
+          accepted = false;
+        }
+      } else if (request.action == GuestProjectAction::Open) {
+        accepted = m_projects->open(request.id, reason);
+      } else {
+        m_projects->clear();
+      }
+      if (accepted) {
+        GuestWireWriter payload;
+        result.write(payload);
+        response.status = GuestServiceStatus::Complete;
+        response.payload = payload.take();
+      } else {
+        Logger::LogWarning("Project request refused: " + reason);
+      }
+    }
+    results.records.push_back(std::move(response));
+    m_projectRequests.pop_front();
+  }
+}
+
 void
 WasmGameServices::setAudio(IAudio* audio)
 {
@@ -889,7 +950,8 @@ WasmGameServices::process(std::span<const std::byte> requests,
   const std::size_t outstanding =
     m_render.pendingRequests() + m_displayRequests.size() +
     m_clipboardRequests.size() + m_windowRequests.size() +
-    m_launchRequests.size() + m_dialogRequests.size() +
+    m_launchRequests.size() + m_projectRequests.size() +
+    m_dialogRequests.size() +
     m_consoleRequests.size() + m_listenRequests.size() +
     (m_files ? m_files->pendingRequests() : 0u) +
     (m_job.request != 0 ? 1u : 0u) + laneJobs +
@@ -932,6 +994,12 @@ WasmGameServices::process(std::span<const std::byte> requests,
       GuestLaunchRequest request;
       if (!GuestLaunchRequest::read(record.payload, request)) {
         m_error = "Invalid launch request";
+        return false;
+      }
+    } else if (record.operation == GuestService::Project) {
+      GuestProjectRequest request;
+      if (!GuestProjectRequest::read(record.payload, request)) {
+        m_error = "Invalid project request";
         return false;
       }
     } else if (record.operation == GuestService::Audio) {
@@ -1011,6 +1079,8 @@ WasmGameServices::process(std::span<const std::byte> requests,
       m_windowRequests.push_back(record);
     } else if (record.operation == GuestService::LaunchApp) {
       m_launchRequests.push_back(record);
+    } else if (record.operation == GuestService::Project) {
+      m_projectRequests.push_back(record);
     } else if (record.operation == GuestService::Dialog) {
       m_dialogRequests.push_back(record);
     } else if (record.operation == GuestService::Console) {
@@ -1021,6 +1091,7 @@ WasmGameServices::process(std::span<const std::byte> requests,
   completeClipboard(results);
   completeWindows(results);
   completeLaunches(results);
+  completeProjects(results);
   completeDialog(results);
   completeConsole(results);
   // In request order, so a sound registered and played in one update plays.

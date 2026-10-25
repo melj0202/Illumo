@@ -32,11 +32,11 @@ EditorScene::toast(const std::string& message, ColorRgba color)
 std::string
 EditorScene::playApplication() const
 {
-  const std::string chosen = m_document.playApplication();
+  const std::string chosen = document().playApplication();
   if (!chosen.empty()) {
     return chosen;
   }
-  for (const SceneNode& node : m_document.scene().document().nodes) {
+  for (const SceneNode& node : document().scene().document().nodes) {
     for (const SceneComponent& component : node.components) {
       const SceneOpaqueComponent* opaque =
         std::get_if<SceneOpaqueComponent>(&component.value);
@@ -98,20 +98,22 @@ EditorScene::togglePlay()
           kToastBad);
     return;
   }
+  // A crash while the game runs must not lose the scene it plays.
+  autosaveNow(activeTab());
   // The game plays the scene as it is now, saved or not; relative references
   // resolve against the editor's package root.
-  SceneDocument copy = m_document.scene().document();
+  SceneDocument copy = document().scene().document();
   ScenePlay play;
   ScenePlay::read(copy.extensions, &play);
   play.application = application;
-  play.root = m_document.packageRoot();
+  play.root = document().packageRoot();
   ScenePlay::write(copy.extensions, play);
   m_playStarting = true;
   const std::weak_ptr<bool> alive = m_lifetime;
   platform.launchApp(application,
-                     playFileName(m_document.displayName().empty()
+                     playFileName(document().displayName().empty()
                                     ? std::string("Untitled")
-                                    : m_document.displayName()),
+                                    : document().displayName()),
                      IlscCodec::encode(copy, false),
                      [this, alive, application](bool started) {
                        if (alive.expired()) {
@@ -146,12 +148,12 @@ void
 EditorScene::groupSelection()
 {
   const std::string group =
-    m_document.groupNodes(m_selection.topLevel(m_document.scene()));
+    document().groupNodes(selection().topLevel(document().scene()));
   if (group.empty()) {
     toast("Select nodes to group", kToastInfo);
     return;
   }
-  m_selection.set(group);
+  selection().set(group);
   toast("Grouped", kToastGood);
 }
 
@@ -159,12 +161,12 @@ void
 EditorScene::ungroupSelection()
 {
   const std::vector<std::string> lifted =
-    m_document.ungroupNodes(m_selection.ids());
+    document().ungroupNodes(selection().ids());
   if (lifted.empty()) {
     toast("Nothing to ungroup: select a node with children", kToastInfo);
     return;
   }
-  m_selection.set(lifted);
+  selection().set(lifted);
   toast("Ungrouped " + std::to_string(lifted.size()) + " nodes", kToastGood);
 }
 
@@ -172,15 +174,15 @@ void
 EditorScene::selectRelatives(bool parents)
 {
   std::vector<std::string> next;
-  for (const std::string& id : m_selection.ids()) {
+  for (const std::string& id : selection().ids()) {
     std::vector<std::string> found;
     if (parents) {
-      const std::string parent = m_document.scene().parentOf(id);
+      const std::string parent = document().scene().parentOf(id);
       if (!parent.empty()) {
         found.push_back(parent);
       }
     } else {
-      found = m_document.scene().childIds(id);
+      found = document().scene().childIds(id);
     }
     for (const std::string& relative : found) {
       if (std::find(next.begin(), next.end(), relative) == next.end()) {
@@ -193,21 +195,21 @@ EditorScene::selectRelatives(bool parents)
           kToastInfo);
     return;
   }
-  m_selection.set(next);
+  selection().set(next);
 }
 
 void
 EditorScene::toggleLockSelection()
 {
-  const std::vector<std::string>& ids = m_selection.ids();
+  const std::vector<std::string>& ids = selection().ids();
   if (ids.empty()) {
     return;
   }
   bool allLocked = true;
   for (const std::string& id : ids) {
-    allLocked = allLocked && m_document.isLockedSelf(id);
+    allLocked = allLocked && document().isLockedSelf(id);
   }
-  if (m_document.setLocked(ids, !allLocked)) {
+  if (document().setLocked(ids, !allLocked)) {
     toast(allLocked ? "Unlocked: clicks select it again"
                     : "Locked: clicks in the viewport pass through",
           kToastInfo);
@@ -217,30 +219,30 @@ EditorScene::toggleLockSelection()
 void
 EditorScene::toggleIsolate()
 {
-  if (m_isolated) {
-    m_isolated = false;
-    m_document.setViewHidden({});
+  if (activeTab().isolated) {
+    activeTab().isolated = false;
+    document().setViewHidden({});
     toast("Showing everything", kToastInfo);
     return;
   }
-  if (m_selection.ids().empty()) {
+  if (selection().ids().empty()) {
     toast("Select what to isolate", kToastInfo);
     return;
   }
   // The selection's subtrees and their ancestors stay; everything else
   // hides from view (hiding a node hides its subtree).
   std::unordered_set<std::string> keep;
-  for (const std::string& id : m_selection.ids()) {
-    for (const std::string& below : m_document.scene().subtreeIds(id)) {
+  for (const std::string& id : selection().ids()) {
+    for (const std::string& below : document().scene().subtreeIds(id)) {
       keep.insert(below);
     }
-    for (std::string up = m_document.scene().parentOf(id); !up.empty();
-         up = m_document.scene().parentOf(up)) {
+    for (std::string up = document().scene().parentOf(id); !up.empty();
+         up = document().scene().parentOf(up)) {
       keep.insert(up);
     }
   }
   std::vector<std::string> hidden;
-  const SceneGraph& graph = m_document.graph();
+  const SceneGraph& graph = document().graph();
   for (SceneNodeHandle node = graph.firstNode(); !node.isNull();
        node = graph.nextNode(node)) {
     const std::string id(graph.getName(node));
@@ -248,9 +250,9 @@ EditorScene::toggleIsolate()
       hidden.push_back(id);
     }
   }
-  m_document.setViewHidden(hidden);
-  m_isolated = true;
-  m_isolatedGeneration = m_document.sceneGeneration();
+  document().setViewHidden(hidden);
+  activeTab().isolated = true;
+  activeTab().isolatedGeneration = document().sceneGeneration();
   toast("Isolated (Shift+H shows everything)", kToastInfo);
 }
 
@@ -259,15 +261,15 @@ EditorScene::dropSelectionToFloor()
 {
   std::vector<std::string> ids;
   std::vector<Vector3> deltas;
-  for (const std::string& id : m_selection.topLevel(m_document.scene())) {
+  for (const std::string& id : selection().topLevel(document().scene())) {
     AxisAlignedBounds3 bounds;
-    if (!m_document.subtreeWorldBounds(id, &bounds)) {
+    if (!document().subtreeWorldBounds(id, &bounds)) {
       continue;
     }
     // Cast down from the subtree's base, through itself, to the first
     // surface below; with none, the ground plane (y = 0).
     std::unordered_set<std::string> self;
-    for (const std::string& below : m_document.scene().subtreeIds(id)) {
+    for (const std::string& below : document().scene().subtreeIds(id)) {
       self.insert(below);
     }
     const Vector3 base((bounds.minimum.x + bounds.maximum.x) * 0.5f,
@@ -276,8 +278,8 @@ EditorScene::dropSelectionToFloor()
     float floor = 0.0f;
     std::string hit;
     AxisAlignedBounds3 surface;
-    if (m_document.pickRay(base, Vector3(0.0f, -1.0f, 0.0f), &hit, &self) &&
-        m_document.graph().getWorldBounds(m_document.nodeHandle(hit),
+    if (document().pickRay(base, Vector3(0.0f, -1.0f, 0.0f), &hit, &self) &&
+        document().graph().getWorldBounds(document().nodeHandle(hit),
                                           &surface) &&
         surface.maximum.y <= base.y) {
       floor = surface.maximum.y;
@@ -292,18 +294,18 @@ EditorScene::dropSelectionToFloor()
     toast("Already on the floor", kToastInfo);
     return;
   }
-  m_document.translateEach(ids, deltas, "Drop to Floor");
+  document().translateEach(ids, deltas, "Drop to Floor");
 }
 
 void
 EditorScene::nudgeSelection(const Vector3& direction)
 {
-  const std::vector<std::string> ids = m_selection.topLevel(m_document.scene());
+  const std::vector<std::string> ids = selection().topLevel(document().scene());
   if (ids.empty()) {
     return;
   }
-  const float step = std::max(0.001f, m_document.editorState().snapTranslate);
-  m_document.translate(
+  const float step = std::max(0.001f, document().editorState().snapTranslate);
+  document().translate(
     ids, direction * step, "nudge:" + std::to_string(m_nudgeSerial));
 }
 
@@ -326,8 +328,8 @@ EditorScene::saveDocument(bool saveAs, std::function<void(bool saved)> done)
     }
     return;
   }
-  if (!saveAs && !m_document.path().empty()) {
-    writeDocument({ m_document.path(), m_document.displayName() },
+  if (!saveAs && !document().path().empty()) {
+    writeDocument({ document().path(), document().displayName() },
                   std::move(done));
     return;
   }
@@ -350,16 +352,75 @@ EditorScene::saveDocument(bool saveAs, std::function<void(bool saved)> done)
     });
 }
 
+// The backup location of a project scene ("vfs:/project/scenes/a.ilsc" ->
+// "vfs:/project/scenes/.backup/a.ilsc"), or empty for any other location.
+static std::string
+backupLocation(const std::string& location)
+{
+  if (!IllEdPlatform::isTreeLocation(location)) {
+    return {};
+  }
+  const std::string path = IllEdPlatform::treePath(location);
+  const std::size_t slash = path.find_last_of('/');
+  if (path.rfind("/project/", 0) != 0 || slash == std::string::npos ||
+      slash + 1 >= path.size()) {
+    return {};
+  }
+  return std::string(IllEdPlatform::kTreePrefix) + path.substr(0, slash) +
+         "/.backup/" + path.substr(slash + 1);
+}
+
 void
 EditorScene::writeDocument(const IllEdLocation& location,
                             std::function<void(bool saved)> done)
+{
+  const std::string backup = backupLocation(location.location);
+  if (backup.empty()) {
+    writeDocumentNow(location, std::move(done));
+    return;
+  }
+  // Keep what is there now; a scene saved for the first time has nothing to
+  // keep, and a backup that cannot be written never blocks the save.
+  m_busy = true;
+  const std::weak_ptr<bool> alive = m_lifetime;
+  IllEdPlatform::current().read(
+    location.location,
+    [this, alive, location, backup, done](
+      bool exists, const std::string& previous, const std::string&) {
+      if (alive.expired()) {
+        return;
+      }
+      if (!exists) {
+        writeDocumentNow(location, done);
+        return;
+      }
+      IllEdPlatform::current().write(
+        backup,
+        previous,
+        [this, alive, location, backup, done](bool kept,
+                                              const std::string& error) {
+          if (alive.expired()) {
+            return;
+          }
+          if (!kept) {
+            Logger::LogWarning("Could not keep a backup at " + backup + ": " +
+                               error);
+          }
+          writeDocumentNow(location, done);
+        });
+    });
+}
+
+void
+EditorScene::writeDocumentNow(const IllEdLocation& location,
+                              std::function<void(bool saved)> done)
 {
   m_busy = true;
   storeCameraState();
   const std::weak_ptr<bool> alive = m_lifetime;
   IllEdPlatform::current().write(
     location.location,
-    m_document.encode(),
+    document().encode(),
     [this, alive, location, done](bool saved, const std::string& error) {
       if (alive.expired()) {
         return;
@@ -368,10 +429,10 @@ EditorScene::writeDocument(const IllEdLocation& location,
       if (saved) {
         // Input was held while the write was in flight, so nothing changed
         // since the encoded snapshot.
-        m_document.markSaved(location.location, location.label);
-        Logger::LogInfo("Saved scene " + m_document.displayName() + " (" +
-                        std::to_string(m_document.nodeCount()) + " nodes)");
-        toast("Saved scene: " + m_document.displayName(), kToastGood);
+        document().markSaved(location.location, location.label);
+        Logger::LogInfo("Saved scene " + document().displayName() + " (" +
+                        std::to_string(document().nodeCount()) + " nodes)");
+        toast("Saved scene: " + document().displayName(), kToastGood);
       } else {
         if (ic != nullptr && ic->commandLine != nullptr) {
           ic->commandLine->logError(error);
@@ -384,6 +445,52 @@ EditorScene::writeDocument(const IllEdLocation& location,
       }
       finishBusy();
     });
+}
+
+void
+EditorScene::revertDocument()
+{
+  if (m_busy) {
+    return;
+  }
+  if (document().path().empty()) {
+    toast("Nothing to revert to: the scene was never saved", kToastBad);
+    return;
+  }
+  if (!document().isDirty()) {
+    toast("No changes to revert", kToastInfo);
+    return;
+  }
+  m_pendingAction = EditorPendingAction::RevertDocument;
+  if (m_confirm) {
+    m_confirm->openDiscard("Revert to the saved " + document().displayName() +
+                             " and lose the changes?",
+                           "Revert");
+  }
+}
+
+void
+EditorScene::applyWindowTitle()
+{
+  if (ic == nullptr) {
+    return;
+  }
+  std::string title = document().displayName().empty()
+                        ? std::string("Untitled")
+                        : document().displayName();
+  if (document().isDirty()) {
+    title += "*";
+  }
+  title += " - IllEd";
+  if (title == m_appliedTitle) {
+    return;
+  }
+  m_appliedTitle = title;
+  if (ic->panelSurfaces != nullptr && ic->panelSurfaces->available()) {
+    ic->panelSurfaces->setTitle(IPanelSurfaces::kMainSurface, title);
+  } else if (ic->window != nullptr) {
+    ic->window->setTitle(title);
+  }
 }
 
 void
@@ -404,6 +511,8 @@ EditorScene::openDocument()
         finishBusy();
         return;
       }
+      // Into its own tab (or the active one while it is still empty).
+      tabForOpening();
       loadDocument(chosen, false);
     });
 }
@@ -442,9 +551,13 @@ EditorScene::loadDocument(const IllEdLocation& location, bool initial)
         finishLoad(location, initial, {}, root, { error });
         return;
       }
+      // The tab's earlier assets go; other tabs keep theirs.
       const SceneFetchList fetches = collectSceneFetches(parsed, root);
-      IllEdPlatform::current().releaseAssets();
-      IllEdPlatform::current().fetchAssets(
+      EditorTab& tab = activeTab();
+      if (tab.fetchTicket != 0) {
+        IllEdPlatform::current().releaseAssets(tab.fetchTicket);
+      }
+      tab.fetchTicket = IllEdPlatform::current().fetchAssets(
         fetches.paths,
         [this, alive, location, initial, text, root](
           std::vector<std::string> missing) {
@@ -464,14 +577,14 @@ EditorScene::finishLoad(const IllEdLocation& location,
 {
   m_busy = false;
   std::string error;
-  if (!text.empty() && m_document.loadFromText(text, &error, packageRoot)) {
-    m_document.setLocation(location.location, location.label);
-    m_selection.clear();
+  if (!text.empty() && document().loadFromText(text, &error, packageRoot)) {
+    document().setLocation(location.location, location.label);
+    selection().clear();
     restoreCameraState();
     Logger::LogInfo(
-      "Opened scene " + m_document.displayName() + " (" +
-      std::to_string(m_document.nodeCount()) + " nodes, " +
-      std::to_string(m_document.scene().document().assets.size()) +
+      "Opened scene " + document().displayName() + " (" +
+      std::to_string(document().nodeCount()) + " nodes, " +
+      std::to_string(document().scene().document().assets.size()) +
       " assets, root " + packageRoot + ")");
     if (!missing.empty() && ic != nullptr && ic->commandLine != nullptr) {
       for (const std::string& path : missing) {
@@ -480,7 +593,7 @@ EditorScene::finishLoad(const IllEdLocation& location,
     }
     if (!initial) {
       toast(missing.empty()
-              ? "Opened scene: " + m_document.displayName()
+              ? "Opened scene: " + document().displayName()
               : "Opened scene with " + std::to_string(missing.size()) +
                   " missing asset(s)",
             missing.empty() ? kToastInfo : kToastBad);
@@ -493,8 +606,8 @@ EditorScene::finishLoad(const IllEdLocation& location,
       ic->commandLine->logError(error);
     }
     if (initial) {
-      m_document.clear();
-      m_document.rebase(documentRoot({}));
+      document().clear();
+      document().rebase(documentRoot({}));
     } else {
       toast("Failed to load: " + error, kToastBad);
     }
@@ -512,12 +625,12 @@ EditorScene::saveToProject()
     return;
   }
   // Keep a project scene's own path; anything else goes to /project/scenes.
-  const std::string path = IllEdPlatform::treePath(m_document.path());
+  const std::string path = IllEdPlatform::treePath(document().path());
   if (path.rfind("/project/", 0) == 0) {
     saveDocument(false);
     return;
   }
-  std::string name = m_document.displayName();
+  std::string name = document().displayName();
   const std::size_t slash = name.find_last_of("/\\");
   if (slash != std::string::npos) {
     name = name.substr(slash + 1);
@@ -526,7 +639,7 @@ EditorScene::saveToProject()
     name = "Untitled";
   }
   name = IlscCodec::withExtension(name);
-  m_document.rebase("/project");
+  document().rebase("/project");
   writeDocument(
     { std::string(IllEdPlatform::kTreePrefix) + "/project/scenes/" + name,
       name },
@@ -604,7 +717,7 @@ EditorScene::createLightOrCamera(bool light)
 {
   SceneNode node;
   SceneComponent component;
-  const bool is3D = m_document.worldMode() == SceneWorldMode::World3D;
+  const bool is3D = document().worldMode() == SceneWorldMode::World3D;
   if (light) {
     node.name = "Light";
     component.value = SceneLight{};
@@ -619,9 +732,9 @@ EditorScene::createLightOrCamera(bool light)
       is3D ? Vector3(0.0f, 2.0f, 6.0f) : Vector3(0.0f, 0.0f, 10.0f));
   }
   node.components.push_back(component);
-  const std::string id = m_document.createNode(node, {});
+  const std::string id = document().createNode(node, {});
   if (!id.empty()) {
-    m_selection.set(id);
+    selection().set(id);
     toast("Created " + node.name, kToastGood);
   }
 }
@@ -646,7 +759,7 @@ EditorScene::placeDroppedAsset(const std::string& path,
       !screenToWorld(screenX, screenY, &worldX, &worldY)) {
     return;
   }
-  placeAssetAt(path, m_document.makeEditPlaneTransform(worldX, worldY));
+  placeAssetAt(path, document().makeEditPlaneTransform(worldX, worldY));
 }
 
 void
@@ -669,14 +782,14 @@ EditorScene::placeAssetAt(const std::string& path,
         toast("Cannot read " + path, kToastBad);
         return;
       }
-      const std::string id = m_document.placeAsset(path, transform);
+      const std::string id = document().placeAsset(path, transform);
       if (id.empty()) {
         Logger::LogWarning("The scene refused to place " + path);
         toast("Cannot place " + path, kToastBad);
         return;
       }
       Logger::LogTrace("Placed " + path + " as node " + id);
-      m_selection.set(id);
+      selection().set(id);
       toast("Placed " + path, kToastGood);
       refreshView();
     });
@@ -696,15 +809,15 @@ EditorScene::finishBusy()
 void
 EditorScene::newDocument()
 {
-  m_document.clear();
-  m_document.rebase(documentRoot({}));
-  m_selection.clear();
+  document().clear();
+  document().rebase(documentRoot({}));
+  selection().clear();
   if (ic != nullptr && ic->camera != nullptr) {
     ic->camera->Reset();
     ic->camera->SetZoom(32.0f);
   }
-  m_cameraTargetY = 0.0f;
-  Logger::LogInfo("Created a new scene under " + m_document.packageRoot());
+  activeTab().cameraTargetY = 0.0f;
+  Logger::LogInfo("Created a new scene under " + document().packageRoot());
   toast("Created new scene", kToastInfo);
   refreshView();
   updateStatus();
@@ -714,8 +827,8 @@ void
 EditorScene::undo()
 {
   std::string label;
-  if (m_document.undo(&label)) {
-    m_selection.prune(m_document.scene());
+  if (document().undo(&label)) {
+    selection().prune(document().scene());
     toast("Undo: " + label, kToastInfo);
   }
 }
@@ -724,8 +837,8 @@ void
 EditorScene::redo()
 {
   std::string label;
-  if (m_document.redo(&label)) {
-    m_selection.prune(m_document.scene());
+  if (document().redo(&label)) {
+    selection().prune(document().scene());
     toast("Redo: " + label, kToastInfo);
   }
 }
@@ -734,13 +847,13 @@ void
 EditorScene::duplicateSelection()
 {
   const std::vector<std::string> roots =
-    m_selection.topLevel(m_document.scene());
+    selection().topLevel(document().scene());
   if (roots.empty()) {
     return;
   }
-  const std::vector<std::string> created = m_document.duplicate(roots);
+  const std::vector<std::string> created = document().duplicate(roots);
   if (!created.empty()) {
-    m_selection.set(created);
+    selection().set(created);
     toast(created.size() == 1
             ? std::string("Duplicated node")
             : "Duplicated " + std::to_string(created.size()) + " nodes",
@@ -752,12 +865,12 @@ void
 EditorScene::deleteSelection()
 {
   const std::vector<std::string> roots =
-    m_selection.topLevel(m_document.scene());
+    selection().topLevel(document().scene());
   if (roots.empty()) {
     return;
   }
-  m_document.destroyNodes(roots);
-  m_selection.clear();
+  document().destroyNodes(roots);
+  selection().clear();
   toast(roots.size() == 1
           ? std::string("Deleted selected node")
           : "Deleted " + std::to_string(roots.size()) + " nodes",
@@ -768,8 +881,8 @@ void
 EditorScene::unparentSelection()
 {
   bool changed = false;
-  for (const std::string& id : m_selection.topLevel(m_document.scene())) {
-    changed = m_document.setParent(id, {}) || changed;
+  for (const std::string& id : selection().topLevel(document().scene())) {
+    changed = document().setParent(id, {}) || changed;
   }
   if (changed) {
     toast("Unparented to root", kToastInfo);
@@ -780,11 +893,11 @@ void
 EditorScene::copySelection(bool cut)
 {
   const std::vector<std::string> roots =
-    m_selection.topLevel(m_document.scene());
+    selection().topLevel(document().scene());
   if (roots.empty()) {
     return;
   }
-  const std::string text = EditorClipboard::copy(m_document.scene(), roots);
+  const std::string text = EditorClipboard::copy(document().scene(), roots);
   if (text.empty()) {
     Logger::LogWarning("Copy refused: the selection exceeds the 4 MiB "
                        "clipboard limit");
@@ -796,8 +909,8 @@ EditorScene::copySelection(bool cut)
                               ? std::string("node")
                               : std::to_string(roots.size()) + " nodes";
   if (cut) {
-    m_document.destroyNodes(roots);
-    m_selection.clear();
+    document().destroyNodes(roots);
+    selection().clear();
     toast("Cut " + count, kToastInfo);
   } else {
     toast("Copied " + count, kToastInfo);
@@ -813,9 +926,9 @@ EditorScene::pasteClipboard()
       if (alive.expired()) {
         return;
       }
-      const uint64_t revision = m_document.revision();
+      const uint64_t revision = document().revision();
       pasteText(text);
-      if (m_document.revision() != revision) {
+      if (document().revision() != revision) {
         refreshView();
       }
     });
@@ -833,20 +946,20 @@ EditorScene::pasteText(const std::string& text)
   }
   std::string parentId;
   std::string insertBefore;
-  const std::string primary = m_selection.primary();
-  if (!primary.empty() && m_document.findNode(primary) != nullptr) {
-    parentId = m_document.scene().parentOf(primary);
-    insertBefore = m_document.scene().nextSiblingId(primary);
+  const std::string primary = selection().primary();
+  if (!primary.empty() && document().findNode(primary) != nullptr) {
+    parentId = document().scene().parentOf(primary);
+    insertBefore = document().scene().nextSiblingId(primary);
   }
   const std::vector<std::string> pasted =
-    m_document.paste(fragment, parentId, insertBefore);
+    document().paste(fragment, parentId, insertBefore);
   if (pasted.empty()) {
     Logger::LogWarning("Paste refused: the scene rejected the clipboard "
                        "fragment");
     toast("Could not paste nodes", kToastBad);
     return false;
   }
-  m_selection.set(pasted);
+  selection().set(pasted);
   toast(pasted.size() == 1
           ? std::string("Pasted node")
           : "Pasted " + std::to_string(pasted.size()) + " nodes",
@@ -857,13 +970,13 @@ EditorScene::pasteText(const std::string& text)
 void
 EditorScene::toggleSelectionFlag(bool visibility)
 {
-  const std::vector<std::string>& ids = m_selection.ids();
+  const std::vector<std::string>& ids = selection().ids();
   if (ids.empty()) {
     return;
   }
   bool anyOn = false;
   for (const std::string& id : ids) {
-    const SceneNode* node = m_document.findNode(id);
+    const SceneNode* node = document().findNode(id);
     if (node != nullptr) {
       anyOn = anyOn || (visibility ? node->visible : node->enabled);
     }
@@ -871,7 +984,7 @@ EditorScene::toggleSelectionFlag(bool visibility)
   const bool value = !anyOn;
   const std::string label =
     visibility ? (value ? "Show" : "Hide") : (value ? "Enable" : "Disable");
-  m_document.editNodes(ids, label, {}, [visibility, value](SceneNode& node) {
+  document().editNodes(ids, label, {}, [visibility, value](SceneNode& node) {
     bool& flag = visibility ? node.visible : node.enabled;
     if (flag == value) {
       return false;
@@ -884,14 +997,14 @@ EditorScene::toggleSelectionFlag(bool visibility)
 void
 EditorScene::createChildOfPrimary()
 {
-  const std::string parent = m_selection.primary();
-  const std::string id = m_document.createPrimitive(
+  const std::string parent = selection().primary();
+  const std::string id = document().createPrimitive(
     true,
     ScenePrimitiveShape::Cube,
-    m_document.findNode(parent) != nullptr ? parent : std::string(),
+    document().findNode(parent) != nullptr ? parent : std::string(),
     Transform3D{});
   if (!id.empty()) {
-    m_selection.set(id);
+    selection().set(id);
   }
 }
 
@@ -899,18 +1012,18 @@ void
 EditorScene::selectAll()
 {
   std::vector<std::string> ids;
-  const SceneGraph& graph = m_document.graph();
+  const SceneGraph& graph = document().graph();
   for (SceneNodeHandle node = graph.firstNode(); !node.isNull();
        node = graph.nextNode(node)) {
     ids.emplace_back(graph.getName(node));
   }
-  m_selection.set(ids);
+  selection().set(ids);
 }
 
 void
 EditorScene::nudgeSelectedExtent()
 {
-  const SceneNode* node = m_document.findNode(m_selection.primary());
+  const SceneNode* node = document().findNode(selection().primary());
   const SceneComponent* component =
     node == nullptr ? nullptr : node->find(SceneComponentType::Primitive);
   if (component == nullptr) {
@@ -918,7 +1031,7 @@ EditorScene::nudgeSelectedExtent()
   }
   const Vector3 extent =
     std::get<ScenePrimitive>(component->value).extent * 1.15f;
-  if (m_document.setExtent(node->id, extent)) {
+  if (document().setExtent(node->id, extent)) {
     toast("Nudged node size", kToastInfo);
   }
 }
@@ -926,7 +1039,7 @@ EditorScene::nudgeSelectedExtent()
 void
 EditorScene::cycleSelectedColor()
 {
-  const SceneNode* node = m_document.findNode(m_selection.primary());
+  const SceneNode* node = document().findNode(selection().primary());
   const SceneComponent* component =
     node == nullptr ? nullptr : node->find(SceneComponentType::Primitive);
   if (component == nullptr) {
@@ -940,7 +1053,7 @@ EditorScene::cycleSelectedColor()
   } else {
     next = ColorRgba{ 210, 90, 70, 255 };
   }
-  if (m_document.setColor(node->id, next)) {
+  if (document().setColor(node->id, next)) {
     toast("Updated node color", next);
   }
 }
@@ -981,7 +1094,7 @@ stepLadder(float value, const std::vector<float>& ladder, bool up)
 bool
 EditorScene::handleSettingCommand(EditorCommand command)
 {
-  SceneEditorState state = m_document.editorState();
+  SceneEditorState state = document().editorState();
   switch (command) {
     case EditorCommand::ToggleGrid:
       state.gridVisible = !state.gridVisible;
@@ -1013,9 +1126,9 @@ EditorScene::handleSettingCommand(EditorCommand command)
       return false;
   }
   const bool respace =
-    state.gridSpacing != m_document.editorState().gridSpacing;
+    state.gridSpacing != document().editorState().gridSpacing;
   // View state is saved with the scene but never marks it dirty.
-  m_document.setEditorState(state);
+  document().setEditorState(state);
   if (respace) {
     rebuildGrid();
   }
@@ -1065,7 +1178,7 @@ EditorScene::handleArrangeCommand(EditorCommand command)
       return false;
   }
   const std::vector<std::string> roots =
-    m_selection.topLevel(m_document.scene());
+    selection().topLevel(document().scene());
   const size_t needed = distribute ? 3u : 2u;
   if (roots.size() < needed) {
     toast(distribute ? "Select three or more nodes to distribute"
@@ -1073,10 +1186,10 @@ EditorScene::handleArrangeCommand(EditorCommand command)
           kToastBad);
     return true;
   }
-  const bool moved = distribute ? m_document.distributeNodes(roots, axis)
-                                : m_document.alignNodes(roots, axis, side);
+  const bool moved = distribute ? document().distributeNodes(roots, axis)
+                                : document().alignNodes(roots, axis, side);
   if (moved) {
-    toast(m_document.history().undoLabel(), kToastInfo);
+    toast(document().history().undoLabel(), kToastInfo);
   }
   return true;
 }
@@ -1084,14 +1197,35 @@ EditorScene::handleArrangeCommand(EditorCommand command)
 void
 EditorScene::requestAction(EditorPendingAction action)
 {
-  if (m_document.isDirty()) {
-    m_pendingAction = action;
+  m_pendingAction = action;
+  if (action == EditorPendingAction::ExitEditor) {
+    // Every dirty tab is asked in turn; Save All is offered while more than
+    // one remains.
+    const std::size_t dirty = firstDirtyTab();
+    if (dirty == static_cast<std::size_t>(-1)) {
+      performPendingAction();
+      return;
+    }
+    activateTab(dirty);
+    std::size_t remaining = 0;
+    for (const std::unique_ptr<EditorTab>& tab : m_tabs) {
+      remaining += tab->document.isDirty() ? 1 : 0;
+    }
+    if (m_confirm) {
+      const std::string name = document().displayName().empty()
+                                 ? std::string("Untitled")
+                                 : document().displayName();
+      m_confirm->open("Save changes to " + name + " before closing?",
+                      remaining > 1);
+    }
+    return;
+  }
+  if (document().isDirty()) {
     if (m_confirm) {
       m_confirm->open("Save changes before continuing?");
     }
     return;
   }
-  m_pendingAction = action;
   performPendingAction();
 }
 
@@ -1099,18 +1233,31 @@ bool
 EditorScene::closeRequested()
 {
   if (m_exitApproved) {
-    // Another started module may veto this attempt after the editor accepts.
+    // Another started module may veto this attempt after the editor accepts;
+    // the discards of this negotiation are then void too.
     m_exitApproved = false;
+    m_exitDiscarded.clear();
     return true;
   }
   if (m_busy) {
     m_closeAfterBusy = true;
     return false;
   }
-  if (!m_document.isDirty()) {
+  if (firstDirtyTab() == static_cast<std::size_t>(-1)) {
+    // Clean documents leave no autosave behind: the slots' free writes
+    // must land before the process goes.
+    bool pending = false;
+    for (const std::unique_ptr<EditorTab>& tab : m_tabs) {
+      pending = pending || tab->autosave.live || tab->autosave.inFlight;
+    }
+    if (pending) {
+      m_closeAfterAutosave = true;
+      freeAllAutosaveSlots({});
+      return false;
+    }
     return true;
   }
-  // Preserve an existing confirmation (including New/Open) on repeated close.
+  // Preserve an existing confirmation on repeated close.
   if (!m_confirm || !m_confirm->isOpen()) {
     requestAction(EditorPendingAction::ExitEditor);
   }
@@ -1122,16 +1269,31 @@ EditorScene::performPendingAction()
 {
   const EditorPendingAction action = m_pendingAction;
   m_pendingAction = EditorPendingAction::None;
-  if (action == EditorPendingAction::NewDocument) {
-    newDocument();
-  } else if (action == EditorPendingAction::OpenDocument) {
-    openDocument();
-  } else if (action == EditorPendingAction::OpenLocation) {
-    loadDocument(m_pendingLocation, false);
+  if (action == EditorPendingAction::RevertDocument) {
+    loadDocument({ document().path(), document().displayName() }, false);
+  } else if (action == EditorPendingAction::CloseTab) {
+    closeTab(m_activeTab);
   } else if (action == EditorPendingAction::ExitEditor) {
+    // The next dirty tab is asked before anything closes.
+    if (firstDirtyTab() != static_cast<std::size_t>(-1)) {
+      requestAction(EditorPendingAction::ExitEditor);
+      return;
+    }
     if (ic != nullptr && ic->window != nullptr) {
-      m_exitApproved = true;
-      ic->window->requestClose();
+      // Discarded documents must not come back as recoverable work.
+      const std::weak_ptr<bool> alive = m_lifetime;
+      freeAllAutosaveSlots([this, alive]() {
+        if (alive.expired() || ic == nullptr || ic->window == nullptr) {
+          return;
+        }
+        // A project switch restarts the editor on it instead of closing.
+        if (m_switchProjectId != 0) {
+          finishProjectSwitch();
+          return;
+        }
+        m_exitApproved = true;
+        ic->window->requestClose();
+      });
     }
   }
 }
@@ -1153,13 +1315,13 @@ isCreateTool(EditorCommand command)
 void
 EditorScene::handleCommand(EditorCommand command)
 {
-  const uint64_t revision = m_document.revision();
+  const uint64_t revision = document().revision();
   if (command != EditorCommand::None) {
     // A nudge after any other command starts a new undo step.
     ++m_nudgeSerial;
   }
   dispatchCommand(command);
-  if (m_document.revision() != revision) {
+  if (document().revision() != revision) {
     refreshView();
   }
 }
@@ -1171,16 +1333,34 @@ EditorScene::dispatchCommand(EditorCommand command)
     case EditorCommand::None:
       return;
     case EditorCommand::NewDocument:
-      requestAction(EditorPendingAction::NewDocument);
+      // Into its own tab (or the active one while it is still empty), so
+      // nothing is lost and nothing needs a confirm.
+      tabForOpening();
+      newDocument();
       return;
     case EditorCommand::OpenDocument:
-      requestAction(EditorPendingAction::OpenDocument);
+      openDocument();
       return;
     case EditorCommand::SaveDocument:
       saveDocument(false);
       return;
     case EditorCommand::SaveDocumentAs:
       saveDocument(true);
+      return;
+    case EditorCommand::SaveAll:
+      saveAll({});
+      return;
+    case EditorCommand::RevertDocument:
+      revertDocument();
+      return;
+    case EditorCommand::CloseTab:
+      requestCloseTab();
+      return;
+    case EditorCommand::NextTab:
+      cycleTab(1);
+      return;
+    case EditorCommand::PreviousTab:
+      cycleTab(-1);
       return;
     case EditorCommand::SaveToProject:
       saveToProject();
@@ -1191,6 +1371,39 @@ EditorScene::dispatchCommand(EditorCommand command)
     case EditorCommand::PackProject:
       packProject();
       return;
+    case EditorCommand::OpenProject:
+      openProject(false);
+      return;
+    case EditorCommand::NewProject:
+      openProject(true);
+      return;
+    case EditorCommand::ClearRecentProjects: {
+      const std::weak_ptr<bool> alive = m_lifetime;
+      IllEdPlatform::current().clearProjects([this, alive](bool) {
+        if (!alive.expired()) {
+          refreshProjects();
+        }
+      });
+      return;
+    }
+    case EditorCommand::RecentProject0:
+    case EditorCommand::RecentProject1:
+    case EditorCommand::RecentProject2:
+    case EditorCommand::RecentProject3:
+    case EditorCommand::RecentProject4:
+    case EditorCommand::RecentProject5:
+    case EditorCommand::RecentProject6:
+    case EditorCommand::RecentProject7:
+    case EditorCommand::RecentProject8:
+    case EditorCommand::RecentProject9: {
+      const std::size_t index = static_cast<std::size_t>(
+        static_cast<int>(command) -
+        static_cast<int>(EditorCommand::RecentProject0));
+      if (index < m_recentProjects.size()) {
+        switchProject(m_recentProjects[index].id);
+      }
+      return;
+    }
     case EditorCommand::CreateLight:
       createLightOrCamera(true);
       return;
@@ -1231,14 +1444,14 @@ EditorScene::dispatchCommand(EditorCommand command)
       selectAll();
       return;
     case EditorCommand::DeselectAll:
-      m_selection.clear();
+      selection().clear();
       if (m_activeTool != EditorCommand::SelectTool) {
         m_activeTool = EditorCommand::SelectTool;
       }
       return;
     case EditorCommand::Rename:
-      if (m_inspector && m_selection.size() == 1) {
-        m_inspector->activateField("name", &m_document, &m_selection);
+      if (m_inspector && selection().size() == 1) {
+        m_inspector->activateField("name", &document(), &selection());
       }
       return;
     case EditorCommand::DeleteNode:
@@ -1269,19 +1482,19 @@ EditorScene::dispatchCommand(EditorCommand command)
       rebuildSelectionOverlay();
       return;
     case EditorCommand::ToggleSnap: {
-      SceneEditorState state = m_document.editorState();
+      SceneEditorState state = document().editorState();
       state.snapEnabled = !state.snapEnabled;
-      m_document.setEditorState(state);
+      document().setEditorState(state);
       toast(state.snapEnabled ? "Snapping on" : "Snapping off", kToastInfo);
       return;
     }
     case EditorCommand::SetMode2D:
-      if (m_document.setWorldMode(SceneWorldMode::World2D)) {
+      if (document().setWorldMode(SceneWorldMode::World2D)) {
         toast("Mode: 2D Orthographic (XY)", kToastGood);
       }
       return;
     case EditorCommand::SetMode3D:
-      if (m_document.setWorldMode(SceneWorldMode::World3D)) {
+      if (document().setWorldMode(SceneWorldMode::World3D)) {
         toast("Mode: 3D Perspective (XZ)", ColorRgba{ 70, 160, 255, 255 });
       }
       return;
@@ -1294,11 +1507,11 @@ EditorScene::dispatchCommand(EditorCommand command)
     case EditorCommand::ResetCamera:
       if (ic != nullptr && ic->camera != nullptr) {
         ic->camera->Reset();
-        m_cameraTargetY = 0.0f;
-        SceneEditorState state = m_document.editorState();
+        activeTab().cameraTargetY = 0.0f;
+        SceneEditorState state = document().editorState();
         state.yaw = SceneEditorState{}.yaw;
         state.pitch = SceneEditorState{}.pitch;
-        m_document.setEditorState(state);
+        document().setEditorState(state);
         // The origin sits at the centre of the visible viewport.
         placeCamera(Vector3(0.0f), 32.0f);
         toast("Camera reset to origin", kToastInfo);

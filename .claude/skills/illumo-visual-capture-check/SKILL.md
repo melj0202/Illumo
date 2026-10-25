@@ -31,8 +31,10 @@ options: `IllumoRuntime --help`.
   `IllumoRuntime --app game|illed|meshviewer --capture <file.png> --capture-frame N --storage <dir> [--graphics-api vulkan|d3d12]`
 - Later screens (menus, overlays): add `--capture-script <file>`. Scripts take
   console lines and single `@key <Name>` lines only: no modifiers, no mouse,
-  no right-click. IllEd exposes `scene_field <inspector key>` to open pickers
-  in scripts.
+  no right-click. IllEd exposes `scene_create [shape]` to add a node at the
+  origin, `scene_autosave`, `scene_recover [recover|discard|later]`,
+  `scene_tab [open|next|prev|close|go <n>|list]`, `scene_status`, and
+  `scene_field <inspector key>` to open pickers in scripts.
 - GPU parity proof: `IllumoGpuTests backendparity [--dump dir]` (CTest label
   `IllumoGpu`) and `IllumoCaptureGpuTests [--api vulkan]` (run by hand).
 

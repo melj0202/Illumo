@@ -7,7 +7,8 @@
 // Window service requests (Windows capability). A surface is a guest-drawn
 // top-level window: its content arrives in the frame's surfaces section
 // (frame schema v5) and its pointer, focus and lifecycle arrive in input v2.
-// Surface 0 is the main window and is never opened or closed here.
+// Surface 0 is the main window: it is never opened or closed here, but
+// SetTitle retitles it (a document's name and dirty mark).
 enum class GuestWindowAction : std::uint32_t
 {
   Open = 1,
@@ -74,11 +75,15 @@ struct GuestWindowRequest
     candidate.width = reader.u32();
     candidate.height = reader.u32();
     if (!reader.finished() || version != Version || action < 1 || action > 3 ||
-        candidate.surface == 0 || candidate.surface > MaximumSurfaceId ||
-        !validTitle(candidate.title)) {
+        candidate.surface > MaximumSurfaceId || !validTitle(candidate.title)) {
       return false;
     }
     candidate.action = static_cast<GuestWindowAction>(action);
+    // Only a retitle may name the main window.
+    if (candidate.surface == 0 &&
+        candidate.action != GuestWindowAction::SetTitle) {
+      return false;
+    }
     const bool geometryEmpty = candidate.x == 0 && candidate.y == 0 &&
                                candidate.width == 0 && candidate.height == 0;
     if (candidate.action == GuestWindowAction::Open) {
