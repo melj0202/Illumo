@@ -44,7 +44,7 @@ public headers, guests and products never see it.
   whose values persist like OpenGL program uniforms.
 - Updates are ordered with draws: an upload goes to the recording's upload
   command buffer until the resource is used in the main one, then inline.
-  `VulkanFrameStats::renderPassBreaks` counts inline breaks; the shipped apps
+  `GpuFrameStats::renderPassBreaks` counts inline breaks; the shipped apps
   take none per frame apart from the game menu's blur-target transition.
 - Compiled programs and the pipeline cache persist through `GpuShaderCache`
   (D-R38); refused pipeline-cache data must fall back to an empty cache, never

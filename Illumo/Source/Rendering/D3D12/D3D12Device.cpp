@@ -124,6 +124,26 @@ D3D12Device::~D3D12Device()
   shutdown();
 }
 
+const char*
+D3D12Device::apiName() const
+{
+  return "Direct3D 12";
+}
+
+void
+D3D12Device::plotFrameStats(size_t commandQueueHighWater) const
+{
+  ILLUMO_PROFILE_PLOT("DX12.Submits", m_stats.submits);
+  ILLUMO_PROFILE_PLOT("DX12.Commands", m_stats.commands);
+  ILLUMO_PROFILE_PLOT("DX12.RecordedLists", m_stats.recordedLists);
+  ILLUMO_PROFILE_PLOT("DX12.RecordedCommands", m_stats.recordedCommands);
+  ILLUMO_PROFILE_PLOT("DX12.DrawCalls", m_stats.drawCalls);
+  ILLUMO_PROFILE_PLOT("DX12.UploadBytes", m_stats.uploadBytes);
+  ILLUMO_PROFILE_PLOT("DX12.Barriers", m_stats.barriers);
+  ILLUMO_PROFILE_PLOT("DX12.PipelinesCreated", m_stats.pipelinesCreated);
+  ILLUMO_PROFILE_PLOT("DX12.CommandQueueHighWater", commandQueueHighWater);
+}
+
 bool
 D3D12Device::initialize(IRenderWindow* window, bool present, std::string* error)
 {

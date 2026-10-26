@@ -4,6 +4,7 @@
 #include "D3D12Context.h"
 #include "D3D12ShaderCompiler.h"
 #include "Rendering/Gpu/GlslToSpirv.h"
+#include "Rendering/Gpu/GpuDevice.h"
 #include "Rendering/Gpu/GpuProgramState.h"
 #include "Rendering/Gpu/GpuShaderCache.h"
 #include <Illumo/Rendering/CommandQueue.h>
@@ -28,19 +29,6 @@
 
 class IRenderWindow;
 struct GLFWwindow;
-
-// Work one frame's submissions did, for profiling plots (as GLFrameStats).
-struct D3D12FrameStats
-{
-  size_t submits = 0;
-  size_t commands = 0;
-  size_t recordedLists = 0;
-  size_t recordedCommands = 0;
-  size_t drawCalls = 0;
-  size_t uploadBytes = 0;
-  size_t barriers = 0;
-  size_t pipelinesCreated = 0;
-};
 
 // A GPU resource and the state the recording leaves it in.
 struct D3D12Memory
@@ -200,100 +188,95 @@ private:
 // Executes the backend-neutral token stream with the OpenGL backend's
 // observable semantics (docs/d3d12-backend-plan.md, section 5.3), and owns
 // every GPU resource, the submissions and presentation.
-class D3D12Device
+class D3D12Device final : public GpuDevice
 {
 public:
   D3D12Device() = default;
-  ~D3D12Device();
+  ~D3D12Device() override;
   D3D12Device(const D3D12Device&) = delete;
   D3D12Device& operator=(const D3D12Device&) = delete;
   D3D12Device(D3D12Device&&) = delete;
   D3D12Device& operator=(D3D12Device&&) = delete;
 
-  // present: show frames in the window; otherwise render offscreen only.
-  // Compiled shaders (and pipeline data) persist here between runs
-  // (D-R38); call before initialize. Empty keeps none.
-  void setCacheDirectory(const std::filesystem::path& directory)
-  {
-    m_shaderCache.setDirectory(directory);
-  }
-  bool initialize(IRenderWindow* window, bool present, std::string* error);
-  void shutdown();
+  const char* apiName() const override;
+  bool initialize(IRenderWindow* window,
+                  bool present,
+                  std::string* error) override;
+  void shutdown() override;
 
-  void beginFrame();
-  void endFrame();
-  void executeQueue(CommandQueue& queue);
-  void resetFrameError() { m_frameError.clear(); }
-  const std::string& frameError() const { return m_frameError; }
-  void resetFrameStats() { m_stats = D3D12FrameStats{}; }
-  const D3D12FrameStats& frameStats() const { return m_stats; }
+  void beginFrame() override;
+  void endFrame() override;
+  void executeQueue(CommandQueue& queue) override;
+  void plotFrameStats(size_t commandQueueHighWater) const override;
 
   MeshHandle createMesh(const void* vertices,
                         size_t vertexSize,
                         const void* indices,
                         size_t indexSize,
                         MeshVertexLayout layout,
-                        bool dynamic);
+                        bool dynamic) override;
   bool replaceMesh(MeshHandle handle,
                    const void* vertices,
                    size_t vertexSize,
                    const void* indices,
                    size_t indexSize,
                    MeshVertexLayout layout,
-                   bool dynamic);
-  bool destroyMesh(MeshHandle handle);
-  bool isMeshValid(MeshHandle handle) const;
+                   bool dynamic) override;
+  bool destroyMesh(MeshHandle handle) override;
+  bool isMeshValid(MeshHandle handle) const override;
 
-  ShaderHandle createShader(const ShaderSources& sources, std::string* error);
+  ShaderHandle createShader(const ShaderSources& sources,
+                            std::string* error) override;
   bool replaceShader(ShaderHandle handle,
                      const ShaderSources& sources,
-                     std::string* error);
-  bool destroyShader(ShaderHandle handle);
-  bool isShaderValid(ShaderHandle handle) const;
+                     std::string* error) override;
+  bool destroyShader(ShaderHandle handle) override;
+  bool isShaderValid(ShaderHandle handle) const override;
 
   TextureHandle createTexture(const unsigned char* data,
                               int width,
                               int height,
                               int channels,
-                              const TextureOptions& options);
+                              const TextureOptions& options) override;
   TextureHandle createCubemap(const std::array<const unsigned char*, 6>& faces,
                               int width,
                               int height,
-                              int channels);
+                              int channels) override;
   bool replaceTexture(TextureHandle handle,
                       const unsigned char* data,
                       int width,
                       int height,
                       int channels,
-                      const TextureOptions& options);
+                      const TextureOptions& options) override;
   bool replaceCubemap(TextureHandle handle,
                       const std::array<const unsigned char*, 6>& faces,
                       int width,
                       int height,
-                      int channels);
-  bool destroyTexture(TextureHandle handle);
-  bool isTextureValid(TextureHandle handle) const;
-  TextureInfo textureInfo(TextureHandle handle) const;
+                      int channels) override;
+  bool destroyTexture(TextureHandle handle) override;
+  bool isTextureValid(TextureHandle handle) const override;
+  TextureInfo textureInfo(TextureHandle handle) const override;
 
-  FramebufferHandle createFramebuffer(const FramebufferDesc& desc,
-                                      FramebufferAttachments* outAttachments);
-  bool destroyFramebuffer(FramebufferHandle handle);
-  bool isFramebufferValid(FramebufferHandle handle) const;
+  FramebufferHandle createFramebuffer(
+    const FramebufferDesc& desc,
+    FramebufferAttachments* outAttachments) override;
+  bool destroyFramebuffer(FramebufferHandle handle) override;
+  bool isFramebufferValid(FramebufferHandle handle) const override;
 
-  BufferHandle createBuffer(BufferUsage usage, size_t capacityBytes);
-  bool destroyBuffer(BufferHandle handle);
-  bool isBufferValid(BufferHandle handle) const;
+  BufferHandle createBuffer(BufferUsage usage, size_t capacityBytes) override;
+  bool destroyBuffer(BufferHandle handle) override;
+  bool isBufferValid(BufferHandle handle) const override;
 
   // Synchronous: submits everything recorded and waits for it.
-  FrameReadback readBackbuffer(int width, int height);
+  FrameReadback readBackbuffer(int width, int height) override;
   bool requestFramebufferReadback(std::uint32_t stream,
                                   FramebufferHandle framebuffer,
                                   int width,
-                                  int height);
+                                  int height) override;
   bool takeFramebufferReadback(std::uint32_t stream,
                                bool wait,
-                               FrameReadback& out);
-  void releaseReadbackStream(std::uint32_t stream);
+                               FrameReadback& out) override;
+  void releaseReadbackStream(std::uint32_t stream) override;
 
 private:
   static constexpr uint32_t kSlotCount = 3;
@@ -554,7 +537,6 @@ private:
   bool createReadbackBuffer(ReadbackSlot& slot, size_t size);
 
   D3D12Context m_context;
-  GpuShaderCache m_shaderCache;
   IRenderWindow* m_window = nullptr;
   GLFWwindow* m_glfwWindow = nullptr;
   HWND m_hwnd = nullptr;
@@ -629,8 +611,6 @@ private:
   const D3D12Program* m_lastPipelineProgram = nullptr;
   D3D12PipelineKey m_lastPipelineKey{};
   ID3D12PipelineState* m_lastPipeline = nullptr;
-  std::string m_frameError;
-  D3D12FrameStats m_stats;
 
   std::vector<Entry<D3D12Mesh>> m_meshes;
   std::vector<Entry<D3D12Program>> m_programs;

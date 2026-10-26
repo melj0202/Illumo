@@ -160,11 +160,11 @@ add_library(Illumo STATIC
   Source/Rendering/OpenGL/GLDevice.cpp
   Source/Rendering/Gpu/GlslToSpirv.cpp
   Source/Rendering/Gpu/GlslProgramCache.cpp
+  Source/Rendering/Gpu/GpuBackend.cpp
   Source/Rendering/Gpu/GpuProgramState.cpp
   Source/Rendering/Gpu/GpuShaderCache.cpp
   Source/Rendering/Gpu/GpuTexels.cpp
   Source/Rendering/Vulkan/CreateVulkanBackend.cpp
-  Source/Rendering/Vulkan/VulkanBackend.cpp
   Source/Rendering/Vulkan/VulkanContext.cpp
   Source/Rendering/Vulkan/VulkanDevice.cpp
   Source/Rendering/Vulkan/VulkanDeviceCommands.cpp
@@ -199,7 +199,6 @@ add_library(Illumo::Illumo ALIAS Illumo)
 if(WIN32)
   target_sources(Illumo PRIVATE
     Source/Rendering/D3D12/CreateD3D12Backend.cpp
-    Source/Rendering/D3D12/D3D12Backend.cpp
     Source/Rendering/D3D12/D3D12Context.cpp
     Source/Rendering/D3D12/D3D12Device.cpp
     Source/Rendering/D3D12/D3D12DeviceCommands.cpp

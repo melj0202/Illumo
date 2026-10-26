@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Rendering/Gpu/GlslToSpirv.h"
+#include "Rendering/Gpu/GpuDevice.h"
 #include "Rendering/Gpu/GpuProgramState.h"
 #include "Rendering/Gpu/GpuShaderCache.h"
 #include "VulkanCommon.h"
@@ -29,19 +30,6 @@
 
 class IRenderWindow;
 struct GLFWwindow;
-
-// Work one frame's submissions did, for profiling plots (as GLFrameStats).
-struct VulkanFrameStats
-{
-  size_t submits = 0;
-  size_t commands = 0;
-  size_t recordedLists = 0;
-  size_t recordedCommands = 0;
-  size_t drawCalls = 0;
-  size_t uploadBytes = 0;
-  size_t renderPassBreaks = 0;
-  size_t pipelinesCreated = 0;
-};
 
 struct VulkanImage
 {
@@ -168,101 +156,96 @@ struct VulkanProgram
 // Executes the backend-neutral token stream with the OpenGL backend's
 // observable semantics (docs/vulkan-backend-plan.md, section 5.2), and owns
 // every GPU resource, the submissions and presentation.
-class VulkanDevice
+class VulkanDevice final : public GpuDevice
 {
 public:
   VulkanDevice() = default;
-  ~VulkanDevice();
+  ~VulkanDevice() override;
   VulkanDevice(const VulkanDevice&) = delete;
   VulkanDevice& operator=(const VulkanDevice&) = delete;
   VulkanDevice(VulkanDevice&&) = delete;
   VulkanDevice& operator=(VulkanDevice&&) = delete;
 
-  // present: show frames in the window; otherwise render offscreen only.
-  // Compiled shaders (and pipeline data) persist here between runs
-  // (D-R38); call before initialize. Empty keeps none.
-  void setCacheDirectory(const std::filesystem::path& directory)
-  {
-    m_shaderCache.setDirectory(directory);
-  }
-  bool initialize(IRenderWindow* window, bool present, std::string* error);
-  void shutdown();
+  const char* apiName() const override;
+  bool initialize(IRenderWindow* window,
+                  bool present,
+                  std::string* error) override;
+  void shutdown() override;
 
-  void beginFrame();
-  void endFrame();
-  void executeQueue(CommandQueue& queue);
-  void resetFrameError() { m_frameError.clear(); }
-  const std::string& frameError() const { return m_frameError; }
-  void resetFrameStats() { m_stats = VulkanFrameStats{}; }
-  const VulkanFrameStats& frameStats() const { return m_stats; }
+  void beginFrame() override;
+  void endFrame() override;
+  void executeQueue(CommandQueue& queue) override;
+  void plotFrameStats(size_t commandQueueHighWater) const override;
 
   MeshHandle createMesh(const void* vertices,
                         size_t vertexSize,
                         const void* indices,
                         size_t indexSize,
                         MeshVertexLayout layout,
-                        bool dynamic);
+                        bool dynamic) override;
   bool replaceMesh(MeshHandle handle,
                    const void* vertices,
                    size_t vertexSize,
                    const void* indices,
                    size_t indexSize,
                    MeshVertexLayout layout,
-                   bool dynamic);
-  bool destroyMesh(MeshHandle handle);
-  bool isMeshValid(MeshHandle handle) const;
+                   bool dynamic) override;
+  bool destroyMesh(MeshHandle handle) override;
+  bool isMeshValid(MeshHandle handle) const override;
 
-  ShaderHandle createShader(const ShaderSources& sources, std::string* error);
+  ShaderHandle createShader(const ShaderSources& sources,
+                            std::string* error) override;
   bool replaceShader(ShaderHandle handle,
                      const ShaderSources& sources,
-                     std::string* error);
-  bool destroyShader(ShaderHandle handle);
-  bool isShaderValid(ShaderHandle handle) const;
+                     std::string* error) override;
+  bool destroyShader(ShaderHandle handle) override;
+  bool isShaderValid(ShaderHandle handle) const override;
 
   TextureHandle createTexture(const unsigned char* data,
                               int width,
                               int height,
                               int channels,
-                              const TextureOptions& options);
+                              const TextureOptions& options) override;
   TextureHandle createCubemap(const std::array<const unsigned char*, 6>& faces,
                               int width,
                               int height,
-                              int channels);
+                              int channels) override;
   bool replaceTexture(TextureHandle handle,
                       const unsigned char* data,
                       int width,
                       int height,
                       int channels,
-                      const TextureOptions& options);
+                      const TextureOptions& options) override;
   bool replaceCubemap(TextureHandle handle,
                       const std::array<const unsigned char*, 6>& faces,
                       int width,
                       int height,
-                      int channels);
-  bool destroyTexture(TextureHandle handle);
-  bool isTextureValid(TextureHandle handle) const;
-  TextureInfo textureInfo(TextureHandle handle) const;
+                      int channels) override;
+  bool destroyTexture(TextureHandle handle) override;
+  bool isTextureValid(TextureHandle handle) const override;
+  TextureInfo textureInfo(TextureHandle handle) const override;
   int maxTextureSize() const;
 
-  FramebufferHandle createFramebuffer(const FramebufferDesc& desc,
-                                      FramebufferAttachments* outAttachments);
-  bool destroyFramebuffer(FramebufferHandle handle);
-  bool isFramebufferValid(FramebufferHandle handle) const;
+  FramebufferHandle createFramebuffer(
+    const FramebufferDesc& desc,
+    FramebufferAttachments* outAttachments) override;
+  bool destroyFramebuffer(FramebufferHandle handle) override;
+  bool isFramebufferValid(FramebufferHandle handle) const override;
 
-  BufferHandle createBuffer(BufferUsage usage, size_t capacityBytes);
-  bool destroyBuffer(BufferHandle handle);
-  bool isBufferValid(BufferHandle handle) const;
+  BufferHandle createBuffer(BufferUsage usage, size_t capacityBytes) override;
+  bool destroyBuffer(BufferHandle handle) override;
+  bool isBufferValid(BufferHandle handle) const override;
 
   // Synchronous: submits everything recorded and waits for it.
-  FrameReadback readBackbuffer(int width, int height);
+  FrameReadback readBackbuffer(int width, int height) override;
   bool requestFramebufferReadback(std::uint32_t stream,
                                   FramebufferHandle framebuffer,
                                   int width,
-                                  int height);
+                                  int height) override;
   bool takeFramebufferReadback(std::uint32_t stream,
                                bool wait,
-                               FrameReadback& out);
-  void releaseReadbackStream(std::uint32_t stream);
+                               FrameReadback& out) override;
+  void releaseReadbackStream(std::uint32_t stream) override;
 
 private:
   static constexpr uint32_t kSlotCount = 3;
@@ -574,7 +557,6 @@ private:
   bool m_compilerStarted = false;
   VkSampleCountFlagBits m_samples = VK_SAMPLE_COUNT_1_BIT;
   VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
-  GpuShaderCache m_shaderCache;
   // The persisted pipeline cache's key: this device and driver (D-R38).
   Sha256::Digest m_pipelineCacheKey{};
 
@@ -645,8 +627,6 @@ private:
   const VulkanProgram* m_lastPipelineProgram = nullptr;
   VulkanPipelineKey m_lastPipelineKey{};
   VkPipeline m_lastPipeline = VK_NULL_HANDLE;
-  std::string m_frameError;
-  VulkanFrameStats m_stats;
 
   std::vector<Entry<VulkanMesh>> m_meshes;
   std::vector<Entry<VulkanProgram>> m_programs;

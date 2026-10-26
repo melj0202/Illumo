@@ -35,6 +35,26 @@ VulkanDevice::~VulkanDevice()
   shutdown();
 }
 
+const char*
+VulkanDevice::apiName() const
+{
+  return "Vulkan";
+}
+
+void
+VulkanDevice::plotFrameStats(size_t commandQueueHighWater) const
+{
+  ILLUMO_PROFILE_PLOT("VK.Submits", m_stats.submits);
+  ILLUMO_PROFILE_PLOT("VK.Commands", m_stats.commands);
+  ILLUMO_PROFILE_PLOT("VK.RecordedLists", m_stats.recordedLists);
+  ILLUMO_PROFILE_PLOT("VK.RecordedCommands", m_stats.recordedCommands);
+  ILLUMO_PROFILE_PLOT("VK.DrawCalls", m_stats.drawCalls);
+  ILLUMO_PROFILE_PLOT("VK.UploadBytes", m_stats.uploadBytes);
+  ILLUMO_PROFILE_PLOT("VK.RenderPassBreaks", m_stats.renderPassBreaks);
+  ILLUMO_PROFILE_PLOT("VK.PipelinesCreated", m_stats.pipelinesCreated);
+  ILLUMO_PROFILE_PLOT("VK.CommandQueueHighWater", commandQueueHighWater);
+}
+
 bool
 VulkanDevice::initialize(IRenderWindow* window,
                          bool present,

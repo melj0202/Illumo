@@ -9,22 +9,25 @@
 #include <string>
 
 class IRenderWindow;
-class D3D12Device;
+class GpuDevice;
 
-// IBackend on Direct3D 12, with the OpenGL backend's observable behaviour
-// (docs/d3d12-backend-plan.md). The device does the GPU work; this class is
-// the token queue, statistics and shader preprocessing around it.
-class D3D12Backend : public IBackend
+// The one IBackend of the explicit graphics APIs (Vulkan, Direct3D 12), with
+// the OpenGL backend's observable behaviour
+// (docs/gpu-backend-unification-plan.md). The device does the GPU work; this
+// class is the token queue, statistics and shader preprocessing around it.
+class GpuBackend : public IBackend
 {
 public:
   // present: show frames in the window; otherwise render offscreen only
   // (capture windows and GPU tests).
-  D3D12Backend(IRenderWindow* window, bool present);
-  ~D3D12Backend() override;
-  D3D12Backend(const D3D12Backend&) = delete;
-  D3D12Backend& operator=(const D3D12Backend&) = delete;
-  D3D12Backend(D3D12Backend&&) = delete;
-  D3D12Backend& operator=(D3D12Backend&&) = delete;
+  GpuBackend(std::unique_ptr<GpuDevice> device,
+             IRenderWindow* window,
+             bool present);
+  ~GpuBackend() override;
+  GpuBackend(const GpuBackend&) = delete;
+  GpuBackend& operator=(const GpuBackend&) = delete;
+  GpuBackend(GpuBackend&&) = delete;
+  GpuBackend& operator=(GpuBackend&&) = delete;
 
   void setGpuCacheDirectory(const std::filesystem::path& directory) override;
   bool Initialize() override;
@@ -122,7 +125,7 @@ private:
   bool preprocess(const ShaderSources& sources, ShaderSources* output) const;
   bool preprocess(const ShaderPaths& paths, ShaderSources* output) const;
 
-  std::unique_ptr<D3D12Device> m_device;
+  std::unique_ptr<GpuDevice> m_device;
   std::unique_ptr<CommandQueue> m_commandQueue;
   IRenderWindow* m_window = nullptr;
   bool m_present = true;
