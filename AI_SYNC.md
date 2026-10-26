@@ -79,9 +79,9 @@ into a reusable library. The Game of Life sim is CSim.
   three GTK files the full Linux build SUCCEEDS and all 626 registered
   tests pass (Illumo 308, IllumoGame 216, IllEd 84, IllMeshViewer 18).
   The patch is +3/-3 across LinuxGtk.cpp, LinuxSaveLoad.cpp,
-  LinuxClipboard.cpp, byte-identical on `main` and `release/v26.10`,
-  prepared in a landing pack (2026-10-23) and still uncommitted. Nothing
-  about a fix has been pushed. The VM has no display, so Linux GUI/GLX
+  LinuxClipboard.cpp, prepared in a landing pack (2026-10-23) and
+  submitted 2026-10-25 as pull requests to `main` and `release/v26.10`.
+  The VM has no display, so Linux GUI/GLX
   smoke testing is impossible there; GUI/GLX smoke on Linux remains
   unproven.
   Independently confirmed 2026-10-23 by Claude Code (Ubuntu 24.04 container,
@@ -89,9 +89,10 @@ into a reusable library. The Game of Life sim is CSim.
   treeview.h:2543; the same file compiles with exceptions on; the narrow
   three-header set compiles with -fno-exceptions. The full workspace build
   (the 74/346 stop) was NOT re-run by Claude.
-  Stale docs: AGENTS.md ("Linux sources and CMake are repaired") and
-  docs/packages/platform-linux.md ("can configure and compile the engine
-  libraries") still claim Linux compiles. Not yet corrected.
+  Stale docs corrected in the same change: AGENTS.md and
+  docs/packages/platform-linux.md now state the verified scope — the
+  build succeeds and the 626 registered tests pass (2026-10-23);
+  GUI/GLX smoke is untested and Linux is not a supported platform.
 
 ## Working style / guardrails
 
@@ -111,14 +112,13 @@ into a reusable library. The Game of Life sim is CSim.
       Check before adopting: it uses exception propagation, but Illumo builds
       with no C++ exceptions (D-F3, AGENTS.md: no try/catch/throw). It needs
       an error-return path to fit, or it stays out.
-- [ ] Linux build fix: replace <gtkmm.h> with narrow gtkmm includes in the
+- [x] Linux build fix: replace <gtkmm.h> with narrow gtkmm includes in the
       three Linux GTK files. This keeps D-F3 (one exception mode for every
       target, cmake/IllumoBuild.cmake). A per-file -fexceptions workaround
-      would break that rule. Fix the two stale Linux docs (see Current
-      state) in the same change. Patch prepared by jed (+3/-3, 626/626
-      tests on jed's VM, 2026-10-23); not committed to any branch. As of
-      2026-10-25 both `main` and `release/v26.10` still include <gtkmm.h>
-      and carry the stale doc wording.
+      would break that rule. Patch prepared by jed (+3/-3, 626/626 tests on
+      jed's VM, 2026-10-23) and submitted 2026-10-25 as pull requests to
+      `main` and `release/v26.10`, with the two stale Linux docs corrected
+      in the same change.
 
 ## Decision log
 
@@ -194,3 +194,18 @@ into a reusable library. The Game of Life sim is CSim.
   cleanly to both. Linux narrow-include patch still unlanded. TaskGraph
   decision unchanged.
 - Files changed: AI_SYNC.md only.
+
+### 2026-10-25 — jed (Muse) — Linux narrow-include fix submitted as pull requests
+
+- Did: Opened pull requests landing the Linux narrow-include fix (+3/-3 in
+  LinuxGtk.cpp, LinuxSaveLoad.cpp, LinuxClipboard.cpp) to `main` and
+  `release/v26.10`, from branches `linux-narrow-includes` and
+  `linux-narrow-includes-release`. The stale Linux wording in AGENTS.md
+  and docs/packages/platform-linux.md is corrected in the same change,
+  and the Current state above is updated to match.
+- Verified: the code change is the patch verified 2026-10-23 on jed's
+  Ubuntu 24.04.5 VM (GCC 13.3, CMake 3.28) — full build succeeds,
+  626/626 registered tests pass. GUI/GLX smoke remains untested (the VM
+  has no display). This change was not re-built on Windows.
+- Files changed: the three Linux GTK sources, AGENTS.md,
+  docs/packages/platform-linux.md, AI_SYNC.md.
