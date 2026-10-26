@@ -3,7 +3,8 @@
 
 #include <cctype>
 #include <filesystem>
-#include <gtkmm.h>
+#include <gtkmm/filechooserdialog.h>
+#include <gtkmm/filefilter.h>
 #include <string>
 #include <system_error>
 

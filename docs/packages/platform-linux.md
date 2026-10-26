@@ -5,10 +5,13 @@ The dual-platform clone-and-build on-ramp (Windows and Ubuntu) is the root
 the Linux package list, configure/build failure table, and GUI smoke matrix.
 
 Windows remains the supported, fully verified production path. Linux sources
-and CMake on this branch are repaired so an Ubuntu 24.04 x86_64 host with X11
-or XWayland can configure and compile the engine libraries and run the native
-test suites. That is not a support claim until the named host has completed
-native launch, dialog, input, persistence, and shutdown smoke.
+and CMake on this branch let an Ubuntu 24.04 x86_64 host with X11 or XWayland
+configure and compile the engine libraries and run the native test suites —
+verified 2026-10-23 on Ubuntu 24.04.5 (GCC 13.3): the full build succeeds
+and all 626 registered tests pass. That is not a support claim until the
+named host has completed native launch, dialog, input, persistence, and
+shutdown smoke; GUI/GLX smoke remains untested (the verifying VM has no
+display).
 
 Every interactive application (IllumoGame, IllEd, IllMeshViewer) and the
 command-line frame capture now run only as WASM packages inside
