@@ -1,7 +1,7 @@
 #include "LinuxGtk.h"
 #include <Illumo/Platform/Clipboard.h>
 
-#include <gtkmm.h>
+#include <gtkmm/clipboard.h>
 
 std::string
 Clipboard::GetText()

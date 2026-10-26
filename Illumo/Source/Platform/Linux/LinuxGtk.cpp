@@ -1,7 +1,6 @@
 #include "LinuxGtk.h"
 
 #include <gtk/gtk.h>
-#include <gtkmm.h>
 
 bool
 EnsureLinuxGtkInitialized()
