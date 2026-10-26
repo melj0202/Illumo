@@ -81,6 +81,10 @@ into a reusable library. The Game of Life sim is CSim.
   The patch is +3/-3 across LinuxGtk.cpp, LinuxSaveLoad.cpp,
   LinuxClipboard.cpp, prepared in a landing pack (2026-10-23) and
   submitted 2026-10-25 as pull requests to `main` and `release/v26.10`.
+  #112 merged into `release/v26.10` 2026-10-25 (eab18f5b); #111 (`main`)
+  still open. The 626/626 result is for `main` a0aaf67: `release/v26.10`
+  adds Linux sources (LinuxChildProcess.cpp, relaunch arguments,
+  SaveLoad::GetFolderLocation) that nobody has built on Linux.
   The VM has no display, so Linux GUI/GLX
   smoke testing is impossible there; GUI/GLX smoke on Linux remains
   unproven.
@@ -239,4 +243,25 @@ into a reusable library. The Game of Life sim is CSim.
   626/626 registered tests pass. GUI/GLX smoke remains untested (the VM
   has no display). This change was not re-built on Windows.
 - Files changed: the three Linux GTK sources, AGENTS.md,
+  docs/packages/platform-linux.md, AI_SYNC.md.
+
+### 2026-10-25 — Claude (Claude Code desktop, Windows) — CI follow-up and review of #112
+- Did: First VS 2026 CI run (40249300903 at 8b5ed4f6) built with MSVC
+  19.51 and passed 454/543; the other 89 (WASM, runtime, Dist, Pack) had
+  no `IllumoRuntime.exe` or staged apps. Cause: on a fresh tree CTest lists
+  a test whose executable is missing with an empty command, so `build.py
+  test` never built them. Fixed in `build.py` `build_test_executables`
+  (builds the default target once in that case) with a case in
+  tools/test_build.py. Reviewed and merged #112 (Linux narrow includes)
+  into `release/v26.10`: the include changes cover every gtkmm symbol the
+  three files use on this branch, including the release-only folder
+  dialog. Corrected its AGENTS.md and platform-linux.md wording to name
+  `main` a0aaf67 as the verified Linux tree.
+- Verified: tools/test_build.py 143 pass, 2 skipped. The Linux change was
+  read, not compiled (no WSL or Docker on this machine); the release-only
+  Linux files include the headers they need.
+- Left open / next: the CI run on this push decides whether all 543 pass.
+  #111 (same fix to `main`) not merged. CI still skips CSim
+  (`CSIM_READ_TOKEN`).
+- Files changed: build.py, tools/test_build.py, AGENTS.md,
   docs/packages/platform-linux.md, AI_SYNC.md.

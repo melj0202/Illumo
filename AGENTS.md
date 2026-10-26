@@ -459,7 +459,9 @@ suite passes.
 - Windows is the only supported and currently verified platform. Linux
   sources and CMake build on Ubuntu 24.04 x86_64 (X11/XWayland, gtkmm-3
   dialogs): native configure, compile, and the 626 registered tests were
-  verified on that host on 2026-10-23. Linux must not be described as
+  verified on that host on 2026-10-23 at `main` a0aaf67. Linux sources
+  added on `release/v26.10` since then (child process, relaunch arguments,
+  folder dialog) have not been built on Linux. Linux must not be described as
   supported until native launch, dialog, render, and shutdown smoke exist
   on that host.
   The WASM runtime is Windows x64 only, so Linux currently builds only the
