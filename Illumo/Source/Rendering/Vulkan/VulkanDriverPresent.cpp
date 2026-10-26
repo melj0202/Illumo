@@ -1,5 +1,5 @@
 #include "Rendering/Gpu/GpuTexels.h"
-#include "VulkanDevice.h"
+#include "VulkanDriver.h"
 
 #include "Platform/SessionState.h"
 
@@ -20,7 +20,7 @@ static const VkComponentMapping kIdentityMapping{
 };
 
 void
-VulkanDevice::framebufferSize(int* width, int* height) const
+VulkanDriver::framebufferSize(int* width, int* height) const
 {
   *width = 0;
   *height = 0;
@@ -34,7 +34,7 @@ VulkanDevice::framebufferSize(int* width, int* height) const
 }
 
 bool
-VulkanDevice::ensureBackbuffer()
+VulkanDriver::ensureBackbuffer()
 {
   int width = 0;
   int height = 0;
@@ -135,7 +135,7 @@ VulkanDevice::ensureBackbuffer()
 }
 
 void
-VulkanDevice::beginFrame()
+VulkanDriver::beginFrame()
 {
   int width = 0;
   int height = 0;
@@ -149,15 +149,15 @@ VulkanDevice::beginFrame()
 }
 
 void
-VulkanDevice::endFrame()
+VulkanDriver::endFrame()
 {
   flush(m_present);
 }
 
 bool
-VulkanDevice::createSwapchain()
+VulkanDriver::createSwapchain()
 {
-  ILLUMO_PROFILE_ZONE("VulkanDevice.createSwapchain");
+  ILLUMO_PROFILE_ZONE("VulkanDriver.createSwapchain");
   const VkPhysicalDevice physical = m_context.physicalDevice();
   const VkSurfaceKHR surface = m_context.surface();
   VkSurfaceCapabilitiesKHR capabilities{};
@@ -288,7 +288,7 @@ VulkanDevice::createSwapchain()
 }
 
 void
-VulkanDevice::destroySwapchain()
+VulkanDriver::destroySwapchain()
 {
   const VkDevice device = m_context.device();
   if (device == VK_NULL_HANDLE) {
@@ -320,7 +320,7 @@ VulkanDevice::destroySwapchain()
 }
 
 VulkanImage&
-VulkanDevice::resolvedBackbuffer(VkCommandBuffer commands)
+VulkanDriver::resolvedBackbuffer(VkCommandBuffer commands)
 {
   if (m_samples == VK_SAMPLE_COUNT_1_BIT) {
     transition(
@@ -358,7 +358,7 @@ VulkanDevice::resolvedBackbuffer(VkCommandBuffer commands)
 }
 
 int
-VulkanDevice::freeAcquisition()
+VulkanDriver::freeAcquisition()
 {
   for (size_t index = 0; index < m_swapchain.acquisitions.size(); ++index) {
     const Acquisition& acquisition = m_swapchain.acquisitions[index];
@@ -373,7 +373,7 @@ VulkanDevice::freeAcquisition()
 }
 
 bool
-VulkanDevice::recordPresentation(uint32_t* imageIndex, VkSemaphore* acquired)
+VulkanDriver::recordPresentation(uint32_t* imageIndex, VkSemaphore* acquired)
 {
   if (!m_present || m_context.surface() == VK_NULL_HANDLE) {
     return false;
@@ -384,7 +384,7 @@ VulkanDevice::recordPresentation(uint32_t* imageIndex, VkSemaphore* acquired)
   if (width <= 0 || height <= 0) {
     return false;
   }
-  ILLUMO_PROFILE_ZONE("VulkanDevice.recordPresentation");
+  ILLUMO_PROFILE_ZONE("VulkanDriver.recordPresentation");
   const bool vsync = m_window == nullptr || m_window->isFramePaced();
   const int reportedRate = m_window != nullptr ? m_window->getRefreshRate() : 0;
   const uint64_t refreshNanoseconds =
@@ -395,7 +395,7 @@ VulkanDevice::recordPresentation(uint32_t* imageIndex, VkSemaphore* acquired)
   const std::chrono::steady_clock::time_point now =
     std::chrono::steady_clock::now();
   if (now >= m_nextSessionCheck) {
-    ILLUMO_PROFILE_ZONE("VulkanDevice.sessionCheck");
+    ILLUMO_PROFILE_ZONE("VulkanDriver.sessionCheck");
     m_sessionLocked = PlatformSessionLocked();
     m_nextSessionCheck = now + std::chrono::milliseconds(250);
   }
@@ -437,7 +437,7 @@ VulkanDevice::recordPresentation(uint32_t* imageIndex, VkSemaphore* acquired)
     }
     Acquisition& acquisition =
       m_swapchain.acquisitions[static_cast<size_t>(available)];
-    ILLUMO_PROFILE_ZONE("VulkanDevice.acquire");
+    ILLUMO_PROFILE_ZONE("VulkanDriver.acquire");
     vkResetFences(device, 1, &acquisition.fence);
     const VkResult result = vkAcquireNextImageKHR(device,
                                                   m_swapchain.swapchain,
@@ -463,7 +463,7 @@ VulkanDevice::recordPresentation(uint32_t* imageIndex, VkSemaphore* acquired)
     }
   }
   if (!blocked) {
-    ILLUMO_PROFILE_ZONE("VulkanDevice.acquireWait");
+    ILLUMO_PROFILE_ZONE("VulkanDriver.acquireWait");
     Acquisition& acquisition =
       m_swapchain
         .acquisitions[static_cast<size_t>(m_swapchain.pendingAcquisition)];
@@ -520,7 +520,7 @@ VulkanDevice::recordPresentation(uint32_t* imageIndex, VkSemaphore* acquired)
 }
 
 bool
-VulkanDevice::createReadbackBuffer(ReadbackSlot& slot, VkDeviceSize size)
+VulkanDriver::createReadbackBuffer(ReadbackSlot& slot, VkDeviceSize size)
 {
   if (slot.buffer != VK_NULL_HANDLE && slot.size >= size) {
     return true;
@@ -570,9 +570,9 @@ hostReadBarrier(VkCommandBuffer commands)
 }
 
 FrameReadback
-VulkanDevice::readBackbuffer(int width, int height)
+VulkanDriver::readBackbuffer(int width, int height)
 {
-  ILLUMO_PROFILE_ZONE("VulkanDevice.readBackbuffer");
+  ILLUMO_PROFILE_ZONE("VulkanDriver.readBackbuffer");
   FrameReadback result;
   if (width > m_backbuffer.width || height > m_backbuffer.height) {
     result.error = "Readback dimensions exceed the backbuffer";
@@ -630,12 +630,12 @@ VulkanDevice::readBackbuffer(int width, int height)
 }
 
 bool
-VulkanDevice::requestFramebufferReadback(std::uint32_t stream,
+VulkanDriver::requestFramebufferReadback(std::uint32_t stream,
                                          FramebufferHandle framebuffer,
                                          int width,
                                          int height)
 {
-  ILLUMO_PROFILE_ZONE("VulkanDevice.requestFramebufferReadback");
+  ILLUMO_PROFILE_ZONE("VulkanDriver.requestFramebufferReadback");
   const GpuFramebuffer* target = resolveFramebuffer(framebuffer);
   if (!isFramebufferValid(framebuffer) || target == nullptr ||
       target->colorTextures.empty() || width < 1 || height < 1 ||
@@ -698,11 +698,11 @@ VulkanDevice::requestFramebufferReadback(std::uint32_t stream,
 }
 
 bool
-VulkanDevice::takeFramebufferReadback(std::uint32_t stream,
+VulkanDriver::takeFramebufferReadback(std::uint32_t stream,
                                       bool wait,
                                       FrameReadback& out)
 {
-  ILLUMO_PROFILE_ZONE("VulkanDevice.takeFramebufferReadback");
+  ILLUMO_PROFILE_ZONE("VulkanDriver.takeFramebufferReadback");
   out = FrameReadback{};
   std::unordered_map<std::uint32_t, ReadbackStream>::iterator found =
     m_readbacks.find(stream);
@@ -749,7 +749,7 @@ VulkanDevice::takeFramebufferReadback(std::uint32_t stream,
 }
 
 void
-VulkanDevice::releaseReadbackStream(std::uint32_t stream)
+VulkanDriver::releaseReadbackStream(std::uint32_t stream)
 {
   std::unordered_map<std::uint32_t, ReadbackStream>::iterator found =
     m_readbacks.find(stream);

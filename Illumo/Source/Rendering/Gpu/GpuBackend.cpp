@@ -1,5 +1,5 @@
 #include "GpuBackend.h"
-#include "GpuDevice.h"
+#include "GpuDriver.h"
 
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/IRenderWindow.h>
@@ -7,10 +7,10 @@
 #include <Illumo/Services/Logger.h>
 #include <utility>
 
-GpuBackend::GpuBackend(std::unique_ptr<GpuDevice> device,
+GpuBackend::GpuBackend(std::unique_ptr<GpuDriver> driver,
                        IRenderWindow* window,
                        bool present)
-  : m_device(std::move(device))
+  : m_driver(std::move(driver))
   , m_commandQueue(std::make_unique<CommandQueue>())
   , m_window(window)
   , m_present(present)
@@ -26,8 +26,8 @@ GpuBackend::~GpuBackend()
 void
 GpuBackend::setGpuCacheDirectory(const std::filesystem::path& directory)
 {
-  if (m_device) {
-    m_device->setCacheDirectory(directory);
+  if (m_driver) {
+    m_driver->setCacheDirectory(directory);
   }
 }
 
@@ -35,14 +35,14 @@ bool
 GpuBackend::Initialize()
 {
   ILLUMO_PROFILE_ZONE("GpuBackend.Initialize");
-  if (!m_device) {
+  if (!m_driver) {
     return false;
   }
   std::string error;
-  if (!m_device->initialize(m_window, m_present, &error)) {
-    Logger::LogError(std::string(m_device->apiName()) +
+  if (!m_driver->initialize(m_window, m_present, &error)) {
+    Logger::LogError(std::string(m_driver->apiName()) +
                      " backend could not start: " + error);
-    m_device->shutdown();
+    m_driver->shutdown();
     return false;
   }
   m_initialized = true;
@@ -52,8 +52,8 @@ GpuBackend::Initialize()
 void
 GpuBackend::Shutdown()
 {
-  if (m_device) {
-    m_device->shutdown();
+  if (m_driver) {
+    m_driver->shutdown();
   }
   m_initialized = false;
 }
@@ -61,24 +61,24 @@ GpuBackend::Shutdown()
 void
 GpuBackend::BeginFrame()
 {
-  m_device->resetFrameStats();
+  m_driver->resetFrameStats();
   m_rejectionsAtFrameStart = m_commandQueue->GetTotalRejected();
-  m_device->resetFrameError();
-  m_device->beginFrame();
+  m_driver->resetFrameError();
+  m_driver->beginFrame();
 }
 
 void
 GpuBackend::EndFrame()
 {
   ILLUMO_PROFILE_ZONE("GpuBackend.EndFrame");
-  m_device->plotFrameStats(m_commandQueue->GetHighWaterMark());
+  m_driver->plotFrameStats(m_commandQueue->GetHighWaterMark());
   {
     ILLUMO_PROFILE_ZONE("GpuBackend.present");
     // The window keeps the vsync preference the swapchain follows.
     if (m_window != nullptr) {
       m_window->swapBuffers();
     }
-    m_device->endFrame();
+    m_driver->endFrame();
   }
   m_frameCount += 1;
   const std::chrono::steady_clock::time_point now =
@@ -96,7 +96,7 @@ void
 GpuBackend::SubmitCommandQueue()
 {
   ILLUMO_PROFILE_ZONE("GpuBackend.SubmitCommandQueue");
-  m_device->executeQueue(*m_commandQueue);
+  m_driver->executeQueue(*m_commandQueue);
 }
 
 void
@@ -126,7 +126,7 @@ GpuBackend::commandHighWaterMark() const
 std::string
 GpuBackend::submissionError() const
 {
-  return m_device->frameError();
+  return m_driver->frameError();
 }
 
 FrameReadback
@@ -142,11 +142,11 @@ GpuBackend::readBackbuffer(int width, int height)
     result.error = "Frame rejected commands at the queue safety ceiling";
     return result;
   }
-  if (!m_device->frameError().empty()) {
-    result.error = m_device->frameError();
+  if (!m_driver->frameError().empty()) {
+    result.error = m_driver->frameError();
     return result;
   }
-  return m_device->readBackbuffer(width, height);
+  return m_driver->readBackbuffer(width, height);
 }
 
 bool
@@ -155,7 +155,7 @@ GpuBackend::requestFramebufferReadback(std::uint32_t stream,
                                        int width,
                                        int height)
 {
-  return m_device->requestFramebufferReadback(
+  return m_driver->requestFramebufferReadback(
     stream, framebuffer, width, height);
 }
 
@@ -164,13 +164,13 @@ GpuBackend::takeFramebufferReadback(std::uint32_t stream,
                                     bool wait,
                                     FrameReadback& out)
 {
-  return m_device->takeFramebufferReadback(stream, wait, out);
+  return m_driver->takeFramebufferReadback(stream, wait, out);
 }
 
 void
 GpuBackend::releaseReadbackStream(std::uint32_t stream)
 {
-  m_device->releaseReadbackStream(stream);
+  m_driver->releaseReadbackStream(stream);
 }
 
 MeshHandle
@@ -195,7 +195,7 @@ GpuBackend::CreateMesh(const void* vertices,
                        MeshVertexLayout layout,
                        bool dynamic)
 {
-  return m_device->createMesh(
+  return m_driver->createMesh(
     vertices, vertexSize, indices, indexSize, layout, dynamic);
 }
 
@@ -208,20 +208,20 @@ GpuBackend::ReplaceMesh(MeshHandle handle,
                         MeshVertexLayout layout,
                         bool dynamic)
 {
-  return m_device->replaceMesh(
+  return m_driver->replaceMesh(
     handle, vertices, vertexSize, indices, indexSize, layout, dynamic);
 }
 
 bool
 GpuBackend::DestroyMesh(MeshHandle handle)
 {
-  return m_device->destroyMesh(handle);
+  return m_driver->destroyMesh(handle);
 }
 
 bool
 GpuBackend::IsMeshValid(MeshHandle handle) const
 {
-  return m_device->isMeshValid(handle);
+  return m_driver->isMeshValid(handle);
 }
 
 bool
@@ -234,7 +234,7 @@ GpuBackend::preprocess(const ShaderSources& sources,
     ShaderPreprocessor::Process(sources.vertexSource, vertexOptions);
   if (!vertex.success) {
     Logger::LogError(
-      std::string(m_device->apiName()) +
+      std::string(m_driver->apiName()) +
       " backend: Vertex preprocessor failed: " + vertex.errorMessage);
     return false;
   }
@@ -244,7 +244,7 @@ GpuBackend::preprocess(const ShaderSources& sources,
     ShaderPreprocessor::Process(sources.fragmentSource, fragmentOptions);
   if (!fragment.success) {
     Logger::LogError(
-      std::string(m_device->apiName()) +
+      std::string(m_driver->apiName()) +
       " backend: Fragment preprocessor failed: " + fragment.errorMessage);
     return false;
   }
@@ -263,7 +263,7 @@ GpuBackend::preprocess(const ShaderPaths& paths, ShaderSources* output) const
   const PreprocessResult vertex =
     ShaderPreprocessor::ProcessFile(paths.vertexPath, vertexOptions);
   if (!vertex.success) {
-    Logger::LogError(std::string(m_device->apiName()) +
+    Logger::LogError(std::string(m_driver->apiName()) +
                      " backend: Vertex preprocessor failed for " +
                      paths.vertexPath + ": " + vertex.errorMessage);
     return false;
@@ -274,7 +274,7 @@ GpuBackend::preprocess(const ShaderPaths& paths, ShaderSources* output) const
   const PreprocessResult fragment =
     ShaderPreprocessor::ProcessFile(paths.fragmentPath, fragmentOptions);
   if (!fragment.success) {
-    Logger::LogError(std::string(m_device->apiName()) +
+    Logger::LogError(std::string(m_driver->apiName()) +
                      " backend: Fragment preprocessor failed for " +
                      paths.fragmentPath + ": " + fragment.errorMessage);
     return false;
@@ -293,7 +293,7 @@ GpuBackend::CreateShaderProgram(const ShaderPaths& paths)
   std::string error;
   ShaderHandle handle{};
   if (preprocess(paths, &sources)) {
-    handle = m_device->createShader(sources, &error);
+    handle = m_driver->createShader(sources, &error);
   }
   if (!handle.isValid()) {
     if (!error.empty()) {
@@ -317,7 +317,7 @@ GpuBackend::CreateShaderProgram(const ShaderSources& sources)
     return {};
   }
   std::string error;
-  const ShaderHandle handle = m_device->createShader(prepared, &error);
+  const ShaderHandle handle = m_driver->createShader(prepared, &error);
   if (!handle.isValid() && !error.empty()) {
     Logger::LogError(error);
   }
@@ -329,14 +329,14 @@ GpuBackend::ReplaceShaderProgram(ShaderHandle handle,
                                  const ShaderSources& sources)
 {
   ILLUMO_PROFILE_ZONE("GpuBackend.ReplaceShaderProgram");
-  if (!m_device->isShaderValid(handle)) {
+  if (!m_driver->isShaderValid(handle)) {
     Logger::LogWarning("ReplaceShaderProgram: stale shader handle ignored");
     return false;
   }
   ShaderSources prepared;
   std::string error;
   if (!preprocess(sources, &prepared) ||
-      !m_device->replaceShader(handle, prepared, &error)) {
+      !m_driver->replaceShader(handle, prepared, &error)) {
     if (!error.empty()) {
       Logger::LogError(error);
     }
@@ -350,13 +350,13 @@ GpuBackend::ReplaceShaderProgram(ShaderHandle handle,
 bool
 GpuBackend::DestroyShaderProgram(ShaderHandle handle)
 {
-  return m_device->destroyShader(handle);
+  return m_driver->destroyShader(handle);
 }
 
 bool
 GpuBackend::IsShaderValid(ShaderHandle handle) const
 {
-  return m_device->isShaderValid(handle);
+  return m_driver->isShaderValid(handle);
 }
 
 TextureHandle
@@ -374,7 +374,7 @@ GpuBackend::CreateTexture(const unsigned char* data,
                           int channels,
                           const TextureOptions& options)
 {
-  return m_device->createTexture(data, width, height, channels, options);
+  return m_driver->createTexture(data, width, height, channels, options);
 }
 
 TextureHandle
@@ -383,7 +383,7 @@ GpuBackend::CreateCubemap(const std::array<const unsigned char*, 6>& facesData,
                           int height,
                           int channels)
 {
-  return m_device->createCubemap(facesData, width, height, channels);
+  return m_driver->createCubemap(facesData, width, height, channels);
 }
 
 bool
@@ -394,7 +394,7 @@ GpuBackend::ReplaceTexture(TextureHandle handle,
                            int channels,
                            const TextureOptions& options)
 {
-  return m_device->replaceTexture(
+  return m_driver->replaceTexture(
     handle, data, width, height, channels, options);
 }
 
@@ -405,32 +405,32 @@ GpuBackend::ReplaceCubemap(TextureHandle handle,
                            int height,
                            int channels)
 {
-  return m_device->replaceCubemap(handle, faces, width, height, channels);
+  return m_driver->replaceCubemap(handle, faces, width, height, channels);
 }
 
 bool
 GpuBackend::DestroyTexture(TextureHandle handle)
 {
-  return m_device->destroyTexture(handle);
+  return m_driver->destroyTexture(handle);
 }
 
 bool
 GpuBackend::IsTextureValid(TextureHandle handle) const
 {
-  return m_device->isTextureValid(handle);
+  return m_driver->isTextureValid(handle);
 }
 
 TextureInfo
 GpuBackend::GetTextureInfo(TextureHandle handle) const
 {
-  return m_device->textureInfo(handle);
+  return m_driver->textureInfo(handle);
 }
 
 FramebufferHandle
 GpuBackend::CreateFramebuffer(const FramebufferDesc& desc,
                               FramebufferAttachments* outAttachments)
 {
-  return m_device->createFramebuffer(desc, outAttachments);
+  return m_driver->createFramebuffer(desc, outAttachments);
 }
 
 FramebufferHandle
@@ -454,29 +454,29 @@ GpuBackend::CreateDepthFramebuffer(int width,
 bool
 GpuBackend::DestroyFramebuffer(FramebufferHandle handle)
 {
-  return m_device->destroyFramebuffer(handle);
+  return m_driver->destroyFramebuffer(handle);
 }
 
 bool
 GpuBackend::IsFramebufferValid(FramebufferHandle handle) const
 {
-  return m_device->isFramebufferValid(handle);
+  return m_driver->isFramebufferValid(handle);
 }
 
 BufferHandle
 GpuBackend::CreateBuffer(BufferUsage usage, size_t capacityBytes)
 {
-  return m_device->createBuffer(usage, capacityBytes);
+  return m_driver->createBuffer(usage, capacityBytes);
 }
 
 bool
 GpuBackend::DestroyBuffer(BufferHandle handle)
 {
-  return m_device->destroyBuffer(handle);
+  return m_driver->destroyBuffer(handle);
 }
 
 bool
 GpuBackend::IsBufferValid(BufferHandle handle) const
 {
-  return m_device->isBufferValid(handle);
+  return m_driver->isBufferValid(handle);
 }

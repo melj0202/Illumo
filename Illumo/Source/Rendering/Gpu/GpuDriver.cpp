@@ -1,11 +1,11 @@
-#include "GpuDevice.h"
+#include "GpuDriver.h"
 
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
 #include <utility>
 
 void
-GpuDevice::releaseResources()
+GpuDriver::releaseResources()
 {
   for (Entry<GpuMesh>& entry : m_meshes) {
     if (entry.resource) {
@@ -40,7 +40,7 @@ GpuDevice::releaseResources()
 }
 
 std::unique_ptr<GpuMesh>
-GpuDevice::makeMesh(const void* vertices,
+GpuDriver::makeMesh(const void* vertices,
                     size_t vertexSize,
                     const void* indices,
                     size_t indexSize,
@@ -81,14 +81,14 @@ GpuDevice::makeMesh(const void* vertices,
 }
 
 MeshHandle
-GpuDevice::createMesh(const void* vertices,
+GpuDriver::createMesh(const void* vertices,
                       size_t vertexSize,
                       const void* indices,
                       size_t indexSize,
                       MeshVertexLayout layout,
                       bool dynamic)
 {
-  ILLUMO_PROFILE_ZONE("GpuDevice.createMesh");
+  ILLUMO_PROFILE_ZONE("GpuDriver.createMesh");
   std::unique_ptr<GpuMesh> mesh =
     makeMesh(vertices, vertexSize, indices, indexSize, layout, dynamic);
   if (!mesh) {
@@ -105,7 +105,7 @@ GpuDevice::createMesh(const void* vertices,
 }
 
 bool
-GpuDevice::replaceMesh(MeshHandle handle,
+GpuDriver::replaceMesh(MeshHandle handle,
                        const void* vertices,
                        size_t vertexSize,
                        const void* indices,
@@ -113,7 +113,7 @@ GpuDevice::replaceMesh(MeshHandle handle,
                        MeshVertexLayout layout,
                        bool dynamic)
 {
-  ILLUMO_PROFILE_ZONE("GpuDevice.replaceMesh");
+  ILLUMO_PROFILE_ZONE("GpuDriver.replaceMesh");
   GpuMesh* current = findMesh(handle);
   if (current == nullptr) {
     Logger::LogWarning("ReplaceMesh: stale mesh handle ignored");
@@ -132,7 +132,7 @@ GpuDevice::replaceMesh(MeshHandle handle,
 }
 
 bool
-GpuDevice::destroyMesh(MeshHandle handle)
+GpuDriver::destroyMesh(MeshHandle handle)
 {
   GpuMesh* mesh = findMesh(handle);
   if (mesh == nullptr) {
@@ -145,15 +145,15 @@ GpuDevice::destroyMesh(MeshHandle handle)
 }
 
 bool
-GpuDevice::isMeshValid(MeshHandle handle) const
+GpuDriver::isMeshValid(MeshHandle handle) const
 {
   return m_meshHandles.isCurrent(handle) && findMesh(handle) != nullptr;
 }
 
 ShaderHandle
-GpuDevice::createShader(const ShaderSources& sources, std::string* error)
+GpuDriver::createShader(const ShaderSources& sources, std::string* error)
 {
-  ILLUMO_PROFILE_ZONE("GpuDevice.createShader");
+  ILLUMO_PROFILE_ZONE("GpuDriver.createShader");
   std::unique_ptr<GpuProgram> program = buildProgram(sources, error);
   if (!program) {
     return {};
@@ -166,7 +166,7 @@ GpuDevice::createShader(const ShaderSources& sources, std::string* error)
 }
 
 bool
-GpuDevice::replaceShader(ShaderHandle handle,
+GpuDriver::replaceShader(ShaderHandle handle,
                          const ShaderSources& sources,
                          std::string* error)
 {
@@ -185,7 +185,7 @@ GpuDevice::replaceShader(ShaderHandle handle,
 }
 
 bool
-GpuDevice::destroyShader(ShaderHandle handle)
+GpuDriver::destroyShader(ShaderHandle handle)
 {
   GpuProgram* program = findProgram(handle);
   if (program == nullptr) {
@@ -198,13 +198,13 @@ GpuDevice::destroyShader(ShaderHandle handle)
 }
 
 bool
-GpuDevice::isShaderValid(ShaderHandle handle) const
+GpuDriver::isShaderValid(ShaderHandle handle) const
 {
   return m_shaderHandles.isCurrent(handle) && findProgram(handle) != nullptr;
 }
 
 TextureHandle
-GpuDevice::registerTexture(std::unique_ptr<GpuTexture> texture,
+GpuDriver::registerTexture(std::unique_ptr<GpuTexture> texture,
                            int width,
                            int height)
 {
@@ -218,13 +218,13 @@ GpuDevice::registerTexture(std::unique_ptr<GpuTexture> texture,
 }
 
 TextureHandle
-GpuDevice::createTexture(const unsigned char* data,
+GpuDriver::createTexture(const unsigned char* data,
                          int width,
                          int height,
                          int channels,
                          const TextureOptions& options)
 {
-  ILLUMO_PROFILE_ZONE("GpuDevice.createTexture");
+  ILLUMO_PROFILE_ZONE("GpuDriver.createTexture");
   if (data == nullptr || width <= 0 || height <= 0) {
     Logger::LogWarning("CreateTexture: missing pixels or invalid size " +
                        std::to_string(width) + "x" + std::to_string(height));
@@ -246,12 +246,12 @@ GpuDevice::createTexture(const unsigned char* data,
 }
 
 TextureHandle
-GpuDevice::createCubemap(const std::array<const unsigned char*, 6>& faces,
+GpuDriver::createCubemap(const std::array<const unsigned char*, 6>& faces,
                          int width,
                          int height,
                          int channels)
 {
-  ILLUMO_PROFILE_ZONE("GpuDevice.createCubemap");
+  ILLUMO_PROFILE_ZONE("GpuDriver.createCubemap");
   for (size_t index = 0; index < faces.size(); ++index) {
     if (faces[index] == nullptr) {
       Logger::LogWarning("CreateCubemap: face " + std::to_string(index) +
@@ -277,14 +277,14 @@ GpuDevice::createCubemap(const std::array<const unsigned char*, 6>& faces,
 }
 
 bool
-GpuDevice::replaceTexture(TextureHandle handle,
+GpuDriver::replaceTexture(TextureHandle handle,
                           const unsigned char* data,
                           int width,
                           int height,
                           int channels,
                           const TextureOptions& options)
 {
-  ILLUMO_PROFILE_ZONE("GpuDevice.replaceTexture");
+  ILLUMO_PROFILE_ZONE("GpuDriver.replaceTexture");
   GpuTexture* current = findTexture(handle);
   if (current == nullptr) {
     Logger::LogWarning("ReplaceTexture: stale texture handle ignored");
@@ -308,13 +308,13 @@ GpuDevice::replaceTexture(TextureHandle handle,
 }
 
 bool
-GpuDevice::replaceCubemap(TextureHandle handle,
+GpuDriver::replaceCubemap(TextureHandle handle,
                           const std::array<const unsigned char*, 6>& faces,
                           int width,
                           int height,
                           int channels)
 {
-  ILLUMO_PROFILE_ZONE("GpuDevice.replaceCubemap");
+  ILLUMO_PROFILE_ZONE("GpuDriver.replaceCubemap");
   GpuTexture* current = findTexture(handle);
   if (current == nullptr || !current->cubemap || width <= 0 ||
       width != height || (channels != 1 && channels != 3 && channels != 4)) {
@@ -333,7 +333,7 @@ GpuDevice::replaceCubemap(TextureHandle handle,
 }
 
 bool
-GpuDevice::destroyTexture(TextureHandle handle)
+GpuDriver::destroyTexture(TextureHandle handle)
 {
   GpuTexture* texture = findTexture(handle);
   if (texture == nullptr) {
@@ -346,13 +346,13 @@ GpuDevice::destroyTexture(TextureHandle handle)
 }
 
 bool
-GpuDevice::isTextureValid(TextureHandle handle) const
+GpuDriver::isTextureValid(TextureHandle handle) const
 {
   return m_textureHandles.isCurrent(handle) && findTexture(handle) != nullptr;
 }
 
 TextureInfo
-GpuDevice::textureInfo(TextureHandle handle) const
+GpuDriver::textureInfo(TextureHandle handle) const
 {
   TextureInfo info;
   const GpuTexture* texture = findTexture(handle);
@@ -366,10 +366,10 @@ GpuDevice::textureInfo(TextureHandle handle) const
 }
 
 FramebufferHandle
-GpuDevice::createFramebuffer(const FramebufferDesc& desc,
+GpuDriver::createFramebuffer(const FramebufferDesc& desc,
                              FramebufferAttachments* outAttachments)
 {
-  ILLUMO_PROFILE_ZONE("GpuDevice.createFramebuffer");
+  ILLUMO_PROFILE_ZONE("GpuDriver.createFramebuffer");
   if (desc.width <= 0 || desc.height <= 0) {
     Logger::LogError("CreateFramebuffer: invalid dimensions");
     return {};
@@ -453,7 +453,7 @@ GpuDevice::createFramebuffer(const FramebufferDesc& desc,
 }
 
 bool
-GpuDevice::destroyFramebuffer(FramebufferHandle handle)
+GpuDriver::destroyFramebuffer(FramebufferHandle handle)
 {
   GpuFramebuffer* framebuffer = resolveFramebuffer(handle);
   if (framebuffer == nullptr) {
@@ -479,14 +479,14 @@ GpuDevice::destroyFramebuffer(FramebufferHandle handle)
 }
 
 bool
-GpuDevice::isFramebufferValid(FramebufferHandle handle) const
+GpuDriver::isFramebufferValid(FramebufferHandle handle) const
 {
   return m_framebufferHandles.isCurrent(handle) &&
          resolveFramebuffer(handle) != nullptr;
 }
 
 BufferHandle
-GpuDevice::createBuffer(BufferUsage usage, size_t capacityBytes)
+GpuDriver::createBuffer(BufferUsage usage, size_t capacityBytes)
 {
   if (capacityBytes == 0) {
     return {};
@@ -505,7 +505,7 @@ GpuDevice::createBuffer(BufferUsage usage, size_t capacityBytes)
 }
 
 bool
-GpuDevice::destroyBuffer(BufferHandle handle)
+GpuDriver::destroyBuffer(BufferHandle handle)
 {
   GpuBuffer* buffer = findBuffer(handle);
   if (buffer == nullptr) {
@@ -518,37 +518,37 @@ GpuDevice::destroyBuffer(BufferHandle handle)
 }
 
 bool
-GpuDevice::isBufferValid(BufferHandle handle) const
+GpuDriver::isBufferValid(BufferHandle handle) const
 {
   return m_bufferHandles.isCurrent(handle) && findBuffer(handle) != nullptr;
 }
 
 GpuMesh*
-GpuDevice::findMesh(MeshHandle handle) const
+GpuDriver::findMesh(MeshHandle handle) const
 {
   return slotResource(m_meshes, handle.slot, handle.generation);
 }
 
 GpuProgram*
-GpuDevice::findProgram(ShaderHandle handle) const
+GpuDriver::findProgram(ShaderHandle handle) const
 {
   return slotResource(m_programs, handle.slot, handle.generation);
 }
 
 GpuTexture*
-GpuDevice::findTexture(TextureHandle handle) const
+GpuDriver::findTexture(TextureHandle handle) const
 {
   return slotResource(m_textures, handle.slot, handle.generation);
 }
 
 GpuFramebuffer*
-GpuDevice::resolveFramebuffer(FramebufferHandle handle) const
+GpuDriver::resolveFramebuffer(FramebufferHandle handle) const
 {
   return slotResource(m_framebuffers, handle.slot, handle.generation);
 }
 
 GpuBuffer*
-GpuDevice::findBuffer(BufferHandle handle) const
+GpuDriver::findBuffer(BufferHandle handle) const
 {
   return slotResource(m_buffers, handle.slot, handle.generation);
 }

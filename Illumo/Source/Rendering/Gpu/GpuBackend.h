@@ -9,18 +9,18 @@
 #include <string>
 
 class IRenderWindow;
-class GpuDevice;
+class GpuDriver;
 
 // The one IBackend of the explicit graphics APIs (Vulkan, Direct3D 12), with
 // the OpenGL backend's observable behaviour
-// (docs/gpu-backend-unification-plan.md). The device does the GPU work; this
+// (docs/gpu-backend-unification-plan.md). The driver does the GPU work; this
 // class is the token queue, statistics and shader preprocessing around it.
 class GpuBackend : public IBackend
 {
 public:
   // present: show frames in the window; otherwise render offscreen only
   // (capture windows and GPU tests).
-  GpuBackend(std::unique_ptr<GpuDevice> device,
+  GpuBackend(std::unique_ptr<GpuDriver> driver,
              IRenderWindow* window,
              bool present);
   ~GpuBackend() override;
@@ -125,7 +125,7 @@ private:
   bool preprocess(const ShaderSources& sources, ShaderSources* output) const;
   bool preprocess(const ShaderPaths& paths, ShaderSources* output) const;
 
-  std::unique_ptr<GpuDevice> m_device;
+  std::unique_ptr<GpuDriver> m_driver;
   std::unique_ptr<CommandQueue> m_commandQueue;
   IRenderWindow* m_window = nullptr;
   bool m_present = true;

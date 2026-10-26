@@ -96,7 +96,7 @@ registerVulkanShaderTests(IllumoTestRegistry& registry);
 void
 registerD3D12ShaderTests(IllumoTestRegistry& registry);
 void
-registerGpuDeviceTests(IllumoTestRegistry& registry);
+registerGpuDriverTests(IllumoTestRegistry& registry);
 
 static IllumoTestRegistry
 createRegistry()
@@ -146,7 +146,7 @@ createRegistry()
   registerVisualStoreTests(registry);
   registerVulkanShaderTests(registry);
   registerD3D12ShaderTests(registry);
-  registerGpuDeviceTests(registry);
+  registerGpuDriverTests(registry);
   return registry;
 }
 

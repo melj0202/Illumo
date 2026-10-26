@@ -4,7 +4,7 @@
 #include "D3D12Context.h"
 #include "D3D12ShaderCompiler.h"
 #include "Rendering/Gpu/GlslToSpirv.h"
-#include "Rendering/Gpu/GpuDevice.h"
+#include "Rendering/Gpu/GpuDriver.h"
 #include "Rendering/Gpu/GpuProgramState.h"
 #include "Rendering/Gpu/GpuShaderCache.h"
 #include <Illumo/Rendering/CommandQueue.h>
@@ -156,18 +156,18 @@ private:
   std::vector<int> m_free;
 };
 
-// GpuDevice on Direct3D 12: the resources, recording, submissions and
+// GpuDriver on Direct3D 12: the resources, recording, submissions and
 // presentation behind the shared token interpreter, with the OpenGL backend's
 // observable semantics (docs/d3d12-backend-plan.md, section 5.3).
-class D3D12Device final : public GpuDevice
+class D3D12Driver final : public GpuDriver
 {
 public:
-  D3D12Device() = default;
-  ~D3D12Device() override;
-  D3D12Device(const D3D12Device&) = delete;
-  D3D12Device& operator=(const D3D12Device&) = delete;
-  D3D12Device(D3D12Device&&) = delete;
-  D3D12Device& operator=(D3D12Device&&) = delete;
+  D3D12Driver() = default;
+  ~D3D12Driver() override;
+  D3D12Driver(const D3D12Driver&) = delete;
+  D3D12Driver& operator=(const D3D12Driver&) = delete;
+  D3D12Driver(D3D12Driver&&) = delete;
+  D3D12Driver& operator=(D3D12Driver&&) = delete;
 
   const char* apiName() const override;
   bool initialize(IRenderWindow* window,
@@ -277,7 +277,7 @@ private:
     std::array<ReadbackSlot, 2> slots;
   };
 
-  // Frames, submissions, memory and deferred destruction (D3D12Device.cpp).
+  // Frames, submissions, memory and deferred destruction (D3D12Driver.cpp).
   bool createSlots(std::string* error);
   void ensureRecording();
   void flush(bool present);
@@ -322,7 +322,7 @@ private:
   bool createSamplers(std::string* error);
   bool createDefaults(std::string* error);
 
-  // Resources (D3D12DeviceResources.cpp).
+  // Resources (D3D12DriverResources.cpp).
   std::unique_ptr<GpuMesh> buildMesh(size_t vertexSize,
                                      size_t indexSize) override;
   void releaseMesh(GpuMesh& mesh) override;
@@ -350,7 +350,7 @@ private:
   void releaseBuffer(GpuBuffer& buffer) override;
   unsigned maxColorAttachments() const override;
   void releaseFramebufferTarget(FramebufferHandle handle) override;
-  // This device's resource behind a handle, or nullptr.
+  // This driver's resource behind a handle, or nullptr.
   D3D12Mesh* resolveMesh(MeshHandle handle) const
   {
     return static_cast<D3D12Mesh*>(findMesh(handle));
@@ -368,7 +368,7 @@ private:
     return static_cast<D3D12Buffer*>(findBuffer(handle));
   }
 
-  // Tokens (D3D12DeviceCommands.cpp).
+  // Tokens (D3D12DriverCommands.cpp).
   void clear(bool color,
              bool depth,
              bool stencil,
@@ -404,7 +404,7 @@ private:
   // The recorded command list no longer knows what it has bound.
   void forgetRecordedState();
 
-  // Presentation and readback (D3D12DevicePresent.cpp).
+  // Presentation and readback (D3D12DriverPresent.cpp).
   void framebufferSize(int* width, int* height) const;
   bool ensureBackbuffer();
   bool createSwapchain(int width, int height);

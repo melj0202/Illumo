@@ -1,10 +1,10 @@
-// Headless checks of GpuDevice, the token interpreter and resource front ends
+// Headless checks of GpuDriver, the token interpreter and resource front ends
 // Vulkan and Direct3D 12 share (docs/gpu-backend-unification-plan.md). A
-// recording device stands in for the API: the checks see which hooks the
+// recording driver stands in for the API: the checks see which hooks the
 // base calls, with what, and which tokens it refuses. Pixels are covered by
 // IllumoGpuTests.
 
-#include "Rendering/Gpu/GpuDevice.h"
+#include "Rendering/Gpu/GpuDriver.h"
 #include <Illumo/Rendering/CommandQueue.h>
 #include <Illumo/Rendering/RenderCommand.h>
 #include <Illumo/Testing/TestHelpers.h>
@@ -42,16 +42,16 @@ struct RecordedDraw
   const GpuMesh* mesh = nullptr;
 };
 
-// A GpuDevice whose hooks record what they were asked to do.
-class RecordingDevice final : public GpuDevice
+// A GpuDriver whose hooks record what they were asked to do.
+class RecordingDriver final : public GpuDriver
 {
 public:
-  RecordingDevice() = default;
-  ~RecordingDevice() override { shutdown(); }
-  RecordingDevice(const RecordingDevice&) = delete;
-  RecordingDevice& operator=(const RecordingDevice&) = delete;
-  RecordingDevice(RecordingDevice&&) = delete;
-  RecordingDevice& operator=(RecordingDevice&&) = delete;
+  RecordingDriver() = default;
+  ~RecordingDriver() override { shutdown(); }
+  RecordingDriver(const RecordingDriver&) = delete;
+  RecordingDriver& operator=(const RecordingDriver&) = delete;
+  RecordingDriver(RecordingDriver&&) = delete;
+  RecordingDriver& operator=(RecordingDriver&&) = delete;
 
   const char* apiName() const override { return "Recording"; }
   bool initialize(IRenderWindow* /*window*/,
@@ -241,13 +241,13 @@ token(CommandType type)
 }
 
 static void
-submit(RecordingDevice& device, const std::vector<RenderCommand>& commands)
+submit(RecordingDriver& driver, const std::vector<RenderCommand>& commands)
 {
   CommandQueue queue;
   for (const RenderCommand& command : commands) {
     queue.Submit(command);
   }
-  device.executeQueue(queue);
+  driver.executeQueue(queue);
 }
 
 static RenderCommand
@@ -296,31 +296,31 @@ static int
 testResources()
 {
   TestCounters counters;
-  testSection("GpuDevice: meshes are enrolled as GLMesh enrolls them");
-  RecordingDevice device;
+  testSection("GpuDriver: meshes are enrolled as GLMesh enrolls them");
+  RecordingDriver driver;
   // Pos3Color3Uv2: 32 bytes a vertex.
   const std::vector<float> vertices(24, 1.0f);
   const unsigned char byteIndices[6] = { 0, 1, 2, 2, 1, 0 };
   testTrue(counters,
-           !device
+           !driver
               .createMesh(
                 nullptr, 0, nullptr, 0, MeshVertexLayout::Pos3Color3Uv2, false)
               .isValid(),
            "a mesh without vertex bytes is refused");
   testTrue(counters,
-           !device
+           !driver
               .createMesh(
                 nullptr, 96, nullptr, 0, MeshVertexLayout::Pos3Color3Uv2, false)
               .isValid(),
            "a static mesh without vertices is refused");
-  const MeshHandle mesh = device.createMesh(vertices.data(),
+  const MeshHandle mesh = driver.createMesh(vertices.data(),
                                             96,
                                             byteIndices,
                                             sizeof(byteIndices),
                                             MeshVertexLayout::Pos3Color3Uv2,
                                             false);
-  testTrue(counters, device.isMeshValid(mesh), "a mesh is created");
-  const FakeMesh* record = device.mesh(mesh);
+  testTrue(counters, driver.isMeshValid(mesh), "a mesh is created");
+  const FakeMesh* record = driver.mesh(mesh);
   testTrue(counters,
            record != nullptr && record->vertexCapacity == 96 &&
              record->indexCapacity == 6 && record->indexCount == 1,
@@ -333,7 +333,7 @@ testResources()
            firstIndex == 0u,
            "byte indices are widened before the enrolled bytes upload");
   testTrue(counters,
-           !device.replaceMesh(MeshHandle{},
+           !driver.replaceMesh(MeshHandle{},
                                vertices.data(),
                                96,
                                nullptr,
@@ -342,65 +342,65 @@ testResources()
                                false),
            "replacing a stale mesh fails");
   testTrue(counters,
-           device.replaceMesh(mesh,
+           driver.replaceMesh(mesh,
                               vertices.data(),
                               96,
                               nullptr,
                               0,
                               MeshVertexLayout::Pos3Color3Uv2,
                               false) &&
-             device.meshReleases == 1 && device.isMeshValid(mesh),
+             driver.meshReleases == 1 && driver.isMeshValid(mesh),
            "a replacement releases the old mesh and keeps the handle");
   testTrue(counters,
-           device.destroyMesh(mesh) && !device.isMeshValid(mesh) &&
-             !device.destroyMesh(mesh) && device.meshReleases == 2,
+           driver.destroyMesh(mesh) && !driver.isMeshValid(mesh) &&
+             !driver.destroyMesh(mesh) && driver.meshReleases == 2,
            "a destroyed mesh is released once and its handle goes stale");
 
-  testSection("GpuDevice: programs, textures and buffers");
+  testSection("GpuDriver: programs, textures and buffers");
   std::string error;
   ShaderSources sources;
   testTrue(counters,
-           !device.createShader(sources, &error).isValid() &&
+           !driver.createShader(sources, &error).isValid() &&
              error == "no vertex source",
            "a program the API cannot build is refused with its error");
   sources.vertexSource = "void main() {}";
-  const ShaderHandle shader = device.createShader(sources, &error);
-  testTrue(counters, device.isShaderValid(shader), "a program is created");
+  const ShaderHandle shader = driver.createShader(sources, &error);
+  testTrue(counters, driver.isShaderValid(shader), "a program is created");
   testTrue(counters,
-           device.destroyShader(shader) && device.programReleases == 1 &&
-             !device.isShaderValid(shader),
+           driver.destroyShader(shader) && driver.programReleases == 1 &&
+             !driver.isShaderValid(shader),
            "a destroyed program is released");
   const std::vector<unsigned char> pixels(64, 255);
   testTrue(counters,
-           !device.createTexture(nullptr, 4, 4, 4, TextureOptions{}).isValid(),
+           !driver.createTexture(nullptr, 4, 4, 4, TextureOptions{}).isValid(),
            "a texture without pixels is refused");
   const TextureHandle texture =
-    device.createTexture(pixels.data(), 4, 2, 1, TextureOptions{});
-  const TextureInfo info = device.textureInfo(texture);
+    driver.createTexture(pixels.data(), 4, 2, 1, TextureOptions{});
+  const TextureInfo info = driver.textureInfo(texture);
   testTrue(counters,
            info.width == 4 && info.height == 2 && info.channels == 1,
            "texture info reports the created size and channels");
   testTrue(counters,
-           !device.replaceCubemap(texture, {}, 4, 4, 4),
+           !driver.replaceCubemap(texture, {}, 4, 4, 4),
            "a 2D texture cannot be replaced by a cubemap");
   const std::array<const unsigned char*, 6> faces = {
     pixels.data(), pixels.data(), pixels.data(),
     pixels.data(), pixels.data(), nullptr
   };
   testTrue(counters,
-           !device.createCubemap(faces, 2, 2, 4).isValid(),
+           !driver.createCubemap(faces, 2, 2, 4).isValid(),
            "a cubemap with a missing face is refused");
   testTrue(counters,
-           !device.createBuffer(BufferUsage::Instance, 0).isValid(),
+           !driver.createBuffer(BufferUsage::Instance, 0).isValid(),
            "an empty buffer is refused");
-  const BufferHandle buffer = device.createBuffer(BufferUsage::Uniform, 64);
+  const BufferHandle buffer = driver.createBuffer(BufferUsage::Uniform, 64);
   testTrue(counters,
-           device.buffer(buffer) != nullptr &&
-             device.buffer(buffer)->usage == BufferUsage::Uniform &&
-             device.buffer(buffer)->capacity == 64,
+           driver.buffer(buffer) != nullptr &&
+             driver.buffer(buffer)->usage == BufferUsage::Uniform &&
+             driver.buffer(buffer)->capacity == 64,
            "a buffer keeps its usage and capacity");
 
-  testSection("GpuDevice: framebuffers own their attachment textures");
+  testSection("GpuDriver: framebuffers own their attachment textures");
   FramebufferDesc desc;
   desc.width = 32;
   desc.height = 16;
@@ -408,36 +408,36 @@ testResources()
   desc.depthStencilFormat = TextureFormat::Depth24;
   FramebufferAttachments attachments;
   const FramebufferHandle framebuffer =
-    device.createFramebuffer(desc, &attachments);
+    driver.createFramebuffer(desc, &attachments);
   testTrue(counters,
-           device.isFramebufferValid(framebuffer) &&
+           driver.isFramebufferValid(framebuffer) &&
              attachments.colorTextures.size() == 2 &&
              attachments.depthStencilTexture.isValid(),
            "a framebuffer registers two colour and one depth texture");
-  const TextureInfo target = device.textureInfo(attachments.colorTextures[1]);
+  const TextureInfo target = driver.textureInfo(attachments.colorTextures[1]);
   testTrue(counters,
            target.width == 32 && target.height == 16,
            "attachment textures have the framebuffer's size");
   FramebufferDesc tooMany = desc;
   tooMany.colorAttachments.resize(9);
   testTrue(counters,
-           !device.createFramebuffer(tooMany, nullptr).isValid(),
+           !driver.createFramebuffer(tooMany, nullptr).isValid(),
            "more colour attachments than the API allows are refused");
-  const int texturesBefore = device.textureReleases;
+  const int texturesBefore = driver.textureReleases;
   testTrue(counters,
-           device.destroyFramebuffer(framebuffer) &&
-             device.releasedTargets.size() == 1 &&
-             device.releasedTargets[0] == framebuffer &&
-             device.textureReleases == texturesBefore + 3 &&
-             !device.isTextureValid(attachments.depthStencilTexture),
+           driver.destroyFramebuffer(framebuffer) &&
+             driver.releasedTargets.size() == 1 &&
+             driver.releasedTargets[0] == framebuffer &&
+             driver.textureReleases == texturesBefore + 3 &&
+             !driver.isTextureValid(attachments.depthStencilTexture),
            "destroying a framebuffer stops drawing to it and frees its "
            "textures");
 
-  testSection("GpuDevice: shutdown releases everything");
-  device.shutdown();
+  testSection("GpuDriver: shutdown releases everything");
+  driver.shutdown();
   testTrue(counters,
-           !device.isTextureValid(texture) && !device.isBufferValid(buffer) &&
-             device.bufferReleases == 1,
+           !driver.isTextureValid(texture) && !driver.isBufferValid(buffer) &&
+             driver.bufferReleases == 1,
            "every resource is released and every handle goes stale");
   return counters.failures;
 }
@@ -446,41 +446,41 @@ static int
 testTokenValidation()
 {
   TestCounters counters;
-  testSection("GpuDevice: draws reach the API only when valid");
-  RecordingDevice device;
+  testSection("GpuDriver: draws reach the API only when valid");
+  RecordingDriver driver;
   const std::vector<float> vertices(24, 1.0f);
   const unsigned int indices[3] = { 0, 1, 2 };
-  const MeshHandle mesh = device.createMesh(vertices.data(),
+  const MeshHandle mesh = driver.createMesh(vertices.data(),
                                             96,
                                             indices,
                                             sizeof(indices),
                                             MeshVertexLayout::Pos3Color3Uv2,
                                             false);
-  const MeshHandle plain = device.createMesh(
+  const MeshHandle plain = driver.createMesh(
     vertices.data(), 96, nullptr, 0, MeshVertexLayout::Pos3Color3Uv2, false);
   ShaderSources sources;
   sources.vertexSource = "void main() {}";
   std::string error;
-  const ShaderHandle shader = device.createShader(sources, &error);
+  const ShaderHandle shader = driver.createShader(sources, &error);
 
-  device.resetFrameError();
-  submit(device, { drawArrays(3, 0) });
+  driver.resetFrameError();
+  submit(driver, { drawArrays(3, 0) });
   testTrue(counters,
-           device.draws.empty() && device.frameError() ==
+           driver.draws.empty() && driver.frameError() ==
                                      "Draw: missing valid shader or mesh; "
                                      "ignored",
            "a draw without a program or mesh is a frame error");
-  testEqSize(counters, device.frameStats().submits, 1, "submits are counted");
+  testEqSize(counters, driver.frameStats().submits, 1, "submits are counted");
 
-  device.resetFrameError();
+  driver.resetFrameError();
   submit(
-    device,
+    driver,
     { viewport(0, 0), bindShader(shader), bindMesh(mesh), drawArrays(3, 0) });
   testTrue(counters,
-           device.draws.empty() && device.frameError().empty(),
+           driver.draws.empty() && driver.frameError().empty(),
            "an empty viewport skips the draw silently");
 
-  submit(device,
+  submit(driver,
          { viewport(64, 64),
            bindShader(shader),
            bindMesh(mesh),
@@ -488,64 +488,64 @@ testTokenValidation()
            drawArrays(4, 0),
            drawIndexed(3, 0),
            drawIndexed(2, 2) });
-  testEqSize(counters, device.draws.size(), 2, "two draws are in range");
-  if (device.draws.size() == 2) {
+  testEqSize(counters, driver.draws.size(), 2, "two draws are in range");
+  if (driver.draws.size() == 2) {
     testTrue(counters,
-             device.draws[0].count == 3 && device.draws[0].instances == 1 &&
-               device.draws[1].count == 3 && device.draws[1].kind == 1,
+             driver.draws[0].count == 3 && driver.draws[0].instances == 1 &&
+               driver.draws[1].count == 3 && driver.draws[1].kind == 1,
              "the API receives the counts and the draw kind");
   }
 
-  device.draws.clear();
-  submit(device, { bindShader(shader), bindMesh(plain), drawIndexed(1, 0) });
+  driver.draws.clear();
+  submit(driver, { bindShader(shader), bindMesh(plain), drawIndexed(1, 0) });
   testTrue(counters,
-           device.draws.empty(),
+           driver.draws.empty(),
            "an indexed draw of a mesh without indices is skipped");
 
-  device.resetFrameError();
-  submit(device, { drawArrays(3, 0) });
+  driver.resetFrameError();
+  submit(driver, { drawArrays(3, 0) });
   testTrue(counters,
-           device.draws.empty() && !device.frameError().empty(),
+           driver.draws.empty() && !driver.frameError().empty(),
            "each submission forgets the bound program and mesh");
 
-  testSection("GpuDevice: updates are range-checked");
+  testSection("GpuDriver: updates are range-checked");
   const unsigned char bytes[16] = {};
   RenderCommand update = token(CommandType::UpdateBuffer);
   update.updateBuffer = CmdUpdateBuffer{ mesh, 90, 16, bytes };
-  device.resetFrameError();
-  submit(device, { update });
+  driver.resetFrameError();
+  submit(driver, { update });
   testEqStr(counters,
-            device.frameError(),
+            driver.frameError(),
             "UpdateBuffer: range exceeds enrolled vertex capacity",
             "a vertex update past the capacity is refused");
   RenderCommand indexUpdate = token(CommandType::UpdateIndexBuffer);
   indexUpdate.updateIndexBuffer = CmdUpdateBuffer{ plain, 0, 4, bytes };
-  device.resetFrameError();
-  submit(device, { indexUpdate });
+  driver.resetFrameError();
+  submit(driver, { indexUpdate });
   testEqStr(counters,
-            device.frameError(),
+            driver.frameError(),
             "UpdateIndexBuffer: range exceeds index capacity",
             "an index update of a mesh without indices is refused");
   update.updateBuffer = CmdUpdateBuffer{ mesh, 80, 16, bytes };
-  device.resetFrameError();
-  submit(device, { update });
+  driver.resetFrameError();
+  submit(driver, { update });
   testTrue(counters,
-           device.frameError().empty(),
+           driver.frameError().empty(),
            "a vertex update inside the capacity is accepted");
 
   const BufferHandle instances =
-    device.createBuffer(BufferUsage::Instance, 144 * 2);
+    driver.createBuffer(BufferUsage::Instance, 144 * 2);
   RenderCommand write = token(CommandType::WriteBuffer);
   write.writeBuffer = CmdWriteBuffer{ instances, 280, 16, bytes };
-  device.resetFrameError();
-  submit(device, { write });
+  driver.resetFrameError();
+  submit(driver, { write });
   testTrue(counters,
-           !device.frameError().empty(),
+           !driver.frameError().empty(),
            "a buffer write past the capacity is refused");
 
   const std::vector<unsigned char> pixels(64, 255);
   const TextureHandle texture =
-    device.createTexture(pixels.data(), 4, 4, 4, TextureOptions{});
+    driver.createTexture(pixels.data(), 4, 4, 4, TextureOptions{});
   RenderCommand textureUpdate = token(CommandType::UpdateTexture);
   textureUpdate.updateTexture.handle = texture;
   textureUpdate.updateTexture.x = 2;
@@ -555,71 +555,71 @@ testTokenValidation()
   textureUpdate.updateTexture.channels = 0;
   textureUpdate.updateTexture.srcRowStride = 0;
   textureUpdate.updateTexture.data = pixels.data();
-  device.resetFrameStats();
-  device.resetFrameError();
-  submit(device, { textureUpdate });
+  driver.resetFrameStats();
+  driver.resetFrameError();
+  submit(driver, { textureUpdate });
   testTrue(counters,
-           device.textureUploads == 1 && device.frameStats().uploadBytes == 16,
+           driver.textureUploads == 1 && driver.frameStats().uploadBytes == 16,
            "a texture update in bounds uploads and counts its bytes");
   textureUpdate.updateTexture.x = 3;
-  submit(device, { textureUpdate });
+  submit(driver, { textureUpdate });
   testTrue(counters,
-           device.textureUploads == 1 &&
-             device.frameError() ==
+           driver.textureUploads == 1 &&
+             driver.frameError() ==
                "UpdateTexture: invalid rectangle, channels, or stride",
            "a texture update out of bounds is refused");
 
-  testSection("GpuDevice: instanced draws need an instance stream");
+  testSection("GpuDriver: instanced draws need an instance stream");
   RenderCommand instanced = token(CommandType::DrawIndexedInstanced);
   instanced.drawIndexedInstanced = CmdDrawIndexedInstanced{ 3, 0, 2 };
-  device.draws.clear();
-  device.resetFrameError();
-  submit(device,
+  driver.draws.clear();
+  driver.resetFrameError();
+  submit(driver,
          { viewport(64, 64), bindShader(shader), bindMesh(mesh), instanced });
   testTrue(counters,
-           device.draws.empty() && !device.frameError().empty(),
+           driver.draws.empty() && !driver.frameError().empty(),
            "an instanced draw without a stream is refused");
   RenderCommand stream = token(CommandType::SetInstanceStream);
   stream.instanceStream =
     CmdInstanceStream{ instances, 0, InstanceLayout::LitModelTint };
-  device.resetFrameError();
-  submit(device,
+  driver.resetFrameError();
+  submit(driver,
          { viewport(64, 64),
            bindShader(shader),
            bindMesh(mesh),
            stream,
            instanced });
   testTrue(counters,
-           device.draws.size() == 1 && device.draws[0].instances == 2 &&
-             device.frameError().empty(),
+           driver.draws.size() == 1 && driver.draws[0].instances == 2 &&
+             driver.frameError().empty(),
            "an instanced draw within the stream's capacity reaches the API");
   instanced.drawIndexedInstanced = CmdDrawIndexedInstanced{ 3, 0, 3 };
-  submit(device,
+  submit(driver,
          { viewport(64, 64),
            bindShader(shader),
            bindMesh(mesh),
            stream,
            instanced });
   testTrue(counters,
-           device.draws.size() == 1 && !device.frameError().empty(),
+           driver.draws.size() == 1 && !driver.frameError().empty(),
            "more instances than the stream holds are refused");
 
   RenderCommand list = token(CommandType::ExecuteList);
   list.executeList.list = nullptr;
-  device.resetFrameError();
-  submit(device, { list, token(CommandType::ClearScreen) });
+  driver.resetFrameError();
+  submit(driver, { list, token(CommandType::ClearScreen) });
   testTrue(counters,
-           device.frameError() ==
+           driver.frameError() ==
                "ExecuteList: missing or failed recorded list" &&
-             device.clears == 1,
+             driver.clears == 1,
            "a missing recorded list is a frame error; later tokens run");
   return counters.failures;
 }
 
 void
-registerGpuDeviceTests(IllumoTestRegistry& registry)
+registerGpuDriverTests(IllumoTestRegistry& registry)
 {
-  registry.add("Illumo.GpuDevice.Resources", []() { return testResources(); });
-  registry.add("Illumo.GpuDevice.TokenValidation",
+  registry.add("Illumo.GpuDriver.Resources", []() { return testResources(); });
+  registry.add("Illumo.GpuDriver.TokenValidation",
                []() { return testTokenValidation(); });
 }

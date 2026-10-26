@@ -1,4 +1,4 @@
-#include "D3D12Device.h"
+#include "D3D12Driver.h"
 #include "Rendering/Gpu/GpuTexels.h"
 
 #include "Platform/SessionState.h"
@@ -41,7 +41,7 @@ float4 main(float4 position : SV_Position) : SV_Target
 )";
 
 void
-D3D12Device::framebufferSize(int* width, int* height) const
+D3D12Driver::framebufferSize(int* width, int* height) const
 {
   *width = 0;
   *height = 0;
@@ -55,7 +55,7 @@ D3D12Device::framebufferSize(int* width, int* height) const
 }
 
 bool
-D3D12Device::ensureBackbuffer()
+D3D12Driver::ensureBackbuffer()
 {
   int width = 0;
   int height = 0;
@@ -132,7 +132,7 @@ D3D12Device::ensureBackbuffer()
 }
 
 void
-D3D12Device::beginFrame()
+D3D12Driver::beginFrame()
 {
   int width = 0;
   int height = 0;
@@ -146,13 +146,13 @@ D3D12Device::beginFrame()
 }
 
 void
-D3D12Device::endFrame()
+D3D12Driver::endFrame()
 {
   flush(m_present);
 }
 
 bool
-D3D12Device::createPresentPipeline(std::string* error)
+D3D12Driver::createPresentPipeline(std::string* error)
 {
   std::vector<unsigned char> vertex;
   std::vector<unsigned char> pixel;
@@ -214,7 +214,7 @@ D3D12Device::createPresentPipeline(std::string* error)
 }
 
 void
-D3D12Device::releaseSwapchainBuffers()
+D3D12Driver::releaseSwapchainBuffers()
 {
   for (D3D12Image& buffer : m_swapchain.buffers) {
     m_targetViews.release(buffer.rtv);
@@ -223,9 +223,9 @@ D3D12Device::releaseSwapchainBuffers()
 }
 
 bool
-D3D12Device::createSwapchain(int width, int height)
+D3D12Driver::createSwapchain(int width, int height)
 {
-  ILLUMO_PROFILE_ZONE("D3D12Device.createSwapchain");
+  ILLUMO_PROFILE_ZONE("D3D12Driver.createSwapchain");
   DXGI_SWAP_CHAIN_DESC1 description{};
   description.Width = static_cast<UINT>(width);
   description.Height = static_cast<UINT>(height);
@@ -254,7 +254,7 @@ D3D12Device::createSwapchain(int width, int height)
 }
 
 bool
-D3D12Device::resizeSwapchain(int width, int height)
+D3D12Driver::resizeSwapchain(int width, int height)
 {
   if (!m_swapchain.swapchain) {
     return false;
@@ -305,7 +305,7 @@ D3D12Device::resizeSwapchain(int width, int height)
 }
 
 D3D12Image&
-D3D12Device::resolvedBackbuffer()
+D3D12Driver::resolvedBackbuffer()
 {
   if (m_samples <= 1) {
     return m_backbuffer.color;
@@ -324,7 +324,7 @@ D3D12Device::resolvedBackbuffer()
 }
 
 bool
-D3D12Device::recordPresentation()
+D3D12Driver::recordPresentation()
 {
   if (!m_present || m_hwnd == nullptr) {
     return false;
@@ -335,14 +335,14 @@ D3D12Device::recordPresentation()
   if (width <= 0 || height <= 0) {
     return false;
   }
-  ILLUMO_PROFILE_ZONE("D3D12Device.recordPresentation");
+  ILLUMO_PROFILE_ZONE("D3D12Driver.recordPresentation");
   const bool vsync = m_window == nullptr || m_window->isFramePaced();
   // As on Vulkan: presents pause while the session is locked, and a vsynced
   // loop keeps pacing by a refresh per frame.
   const std::chrono::steady_clock::time_point now =
     std::chrono::steady_clock::now();
   if (now >= m_nextSessionCheck) {
-    ILLUMO_PROFILE_ZONE("D3D12Device.sessionCheck");
+    ILLUMO_PROFILE_ZONE("D3D12Driver.sessionCheck");
     m_sessionLocked = PlatformSessionLocked();
     m_nextSessionCheck = now + std::chrono::milliseconds(250);
   }
@@ -413,7 +413,7 @@ D3D12Device::recordPresentation()
 }
 
 bool
-D3D12Device::createReadbackBuffer(ReadbackSlot& slot, size_t size)
+D3D12Driver::createReadbackBuffer(ReadbackSlot& slot, size_t size)
 {
   if (slot.buffer && slot.size >= size) {
     return true;
@@ -485,9 +485,9 @@ copyToReadback(ID3D12GraphicsCommandList* commands,
 }
 
 FrameReadback
-D3D12Device::readBackbuffer(int width, int height)
+D3D12Driver::readBackbuffer(int width, int height)
 {
-  ILLUMO_PROFILE_ZONE("D3D12Device.readBackbuffer");
+  ILLUMO_PROFILE_ZONE("D3D12Driver.readBackbuffer");
   FrameReadback result;
   if (width > m_backbuffer.width || height > m_backbuffer.height) {
     result.error = "Readback dimensions exceed the backbuffer";
@@ -534,12 +534,12 @@ D3D12Device::readBackbuffer(int width, int height)
 }
 
 bool
-D3D12Device::requestFramebufferReadback(std::uint32_t stream,
+D3D12Driver::requestFramebufferReadback(std::uint32_t stream,
                                         FramebufferHandle framebuffer,
                                         int width,
                                         int height)
 {
-  ILLUMO_PROFILE_ZONE("D3D12Device.requestFramebufferReadback");
+  ILLUMO_PROFILE_ZONE("D3D12Driver.requestFramebufferReadback");
   const GpuFramebuffer* target = resolveFramebuffer(framebuffer);
   if (!isFramebufferValid(framebuffer) || target == nullptr ||
       target->colorTextures.empty() || width < 1 || height < 1 ||
@@ -590,11 +590,11 @@ D3D12Device::requestFramebufferReadback(std::uint32_t stream,
 }
 
 bool
-D3D12Device::takeFramebufferReadback(std::uint32_t stream,
+D3D12Driver::takeFramebufferReadback(std::uint32_t stream,
                                      bool wait,
                                      FrameReadback& out)
 {
-  ILLUMO_PROFILE_ZONE("D3D12Device.takeFramebufferReadback");
+  ILLUMO_PROFILE_ZONE("D3D12Driver.takeFramebufferReadback");
   out = FrameReadback{};
   std::unordered_map<std::uint32_t, ReadbackStream>::iterator found =
     m_readbacks.find(stream);
@@ -648,7 +648,7 @@ D3D12Device::takeFramebufferReadback(std::uint32_t stream,
 }
 
 void
-D3D12Device::releaseReadbackStream(std::uint32_t stream)
+D3D12Driver::releaseReadbackStream(std::uint32_t stream)
 {
   std::unordered_map<std::uint32_t, ReadbackStream>::iterator found =
     m_readbacks.find(stream);

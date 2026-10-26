@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Rendering/Gpu/GlslToSpirv.h"
-#include "Rendering/Gpu/GpuDevice.h"
+#include "Rendering/Gpu/GpuDriver.h"
 #include "Rendering/Gpu/GpuProgramState.h"
 #include "Rendering/Gpu/GpuShaderCache.h"
 #include "VulkanCommon.h"
@@ -124,18 +124,18 @@ struct VulkanProgram : GpuProgram
     pipelines;
 };
 
-// GpuDevice on Vulkan 1.3: the resources, recording, submissions and
+// GpuDriver on Vulkan 1.3: the resources, recording, submissions and
 // presentation behind the shared token interpreter, with the OpenGL backend's
 // observable semantics (docs/vulkan-backend-plan.md, section 5.2).
-class VulkanDevice final : public GpuDevice
+class VulkanDriver final : public GpuDriver
 {
 public:
-  VulkanDevice() = default;
-  ~VulkanDevice() override;
-  VulkanDevice(const VulkanDevice&) = delete;
-  VulkanDevice& operator=(const VulkanDevice&) = delete;
-  VulkanDevice(VulkanDevice&&) = delete;
-  VulkanDevice& operator=(VulkanDevice&&) = delete;
+  VulkanDriver() = default;
+  ~VulkanDriver() override;
+  VulkanDriver(const VulkanDriver&) = delete;
+  VulkanDriver& operator=(const VulkanDriver&) = delete;
+  VulkanDriver(VulkanDriver&&) = delete;
+  VulkanDriver& operator=(VulkanDriver&&) = delete;
 
   const char* apiName() const override;
   bool initialize(IRenderWindow* window,
@@ -277,7 +277,7 @@ private:
     std::array<ReadbackSlot, 2> slots;
   };
 
-  // Frames, submissions and deferred destruction (VulkanDevice.cpp).
+  // Frames, submissions and deferred destruction (VulkanDriver.cpp).
   bool createSlots(std::string* error);
   void ensureRecording();
   void flush(bool present);
@@ -335,7 +335,7 @@ private:
                        bool depthBorder);
   bool createDefaults(std::string* error);
 
-  // Resources (VulkanDeviceResources.cpp).
+  // Resources (VulkanDriverResources.cpp).
   std::unique_ptr<GpuMesh> buildMesh(size_t vertexSize,
                                      size_t indexSize) override;
   void releaseMesh(GpuMesh& mesh) override;
@@ -364,7 +364,7 @@ private:
   unsigned maxColorAttachments() const override;
   void releaseFramebufferTarget(FramebufferHandle handle) override;
   int maxTextureSize() const;
-  // This device's resource behind a handle, or nullptr.
+  // This driver's resource behind a handle, or nullptr.
   VulkanMesh* resolveMesh(MeshHandle handle) const
   {
     return static_cast<VulkanMesh*>(findMesh(handle));
@@ -382,7 +382,7 @@ private:
     return static_cast<VulkanBuffer*>(findBuffer(handle));
   }
 
-  // Tokens (VulkanDeviceCommands.cpp).
+  // Tokens (VulkanDriverCommands.cpp).
   void clear(bool color,
              bool depth,
              bool stencil,
@@ -418,7 +418,7 @@ private:
                          InstanceLayout instanceLayout);
   VkRect2D scissorRect(const RenderTarget& target) const;
 
-  // Presentation and readback (VulkanDevicePresent.cpp).
+  // Presentation and readback (VulkanDriverPresent.cpp).
   void framebufferSize(int* width, int* height) const;
   bool ensureBackbuffer();
   bool createSwapchain();
@@ -441,7 +441,8 @@ private:
   bool m_compilerStarted = false;
   VkSampleCountFlagBits m_samples = VK_SAMPLE_COUNT_1_BIT;
   VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
-  // The persisted pipeline cache's key: this device and driver (D-R38).
+  // The persisted pipeline cache's key: this GPU and its vendor driver
+  // (D-R38).
   Sha256::Digest m_pipelineCacheKey{};
 
   std::array<Slot, kSlotCount> m_slots{};

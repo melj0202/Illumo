@@ -1,4 +1,4 @@
-#include "VulkanDevice.h"
+#include "VulkanDriver.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -30,19 +30,19 @@ VulkanPipelineKeyEqual::operator()(const VulkanPipelineKey& left,
   return std::memcmp(&left, &right, sizeof(VulkanPipelineKey)) == 0;
 }
 
-VulkanDevice::~VulkanDevice()
+VulkanDriver::~VulkanDriver()
 {
   shutdown();
 }
 
 const char*
-VulkanDevice::apiName() const
+VulkanDriver::apiName() const
 {
   return "Vulkan";
 }
 
 void
-VulkanDevice::plotFrameStats(size_t commandQueueHighWater) const
+VulkanDriver::plotFrameStats(size_t commandQueueHighWater) const
 {
   ILLUMO_PROFILE_PLOT("VK.Submits", m_stats.submits);
   ILLUMO_PROFILE_PLOT("VK.Commands", m_stats.commands);
@@ -56,11 +56,11 @@ VulkanDevice::plotFrameStats(size_t commandQueueHighWater) const
 }
 
 bool
-VulkanDevice::initialize(IRenderWindow* window,
+VulkanDriver::initialize(IRenderWindow* window,
                          bool present,
                          std::string* error)
 {
-  ILLUMO_PROFILE_ZONE("VulkanDevice.initialize");
+  ILLUMO_PROFILE_ZONE("VulkanDriver.initialize");
   m_window = window;
   m_present = present;
   m_glfwWindow = window != nullptr ? window->getWindowInstance() : nullptr;
@@ -79,7 +79,7 @@ VulkanDevice::initialize(IRenderWindow* window,
   const int requested = window != nullptr ? window->getMsaaSamples() : 0;
   m_samples = m_context.sampleCountFor(requested > 0 ? requested : 0);
 
-  // The pipeline cache a previous run saved for this device and driver
+  // The pipeline cache a previous run saved for this GPU and vendor driver
   // (D-R38); Vulkan also validates the data's own header.
   const VkPhysicalDeviceProperties& properties = m_context.properties();
   const std::uint32_t identity[3] = { properties.vendorID,
@@ -127,7 +127,7 @@ VulkanDevice::initialize(IRenderWindow* window,
 }
 
 bool
-VulkanDevice::createSlots(std::string* error)
+VulkanDriver::createSlots(std::string* error)
 {
   const VkDevice device = m_context.device();
   for (Slot& slot : m_slots) {
@@ -163,17 +163,17 @@ VulkanDevice::createSlots(std::string* error)
 }
 
 void
-VulkanDevice::ensureRecording()
+VulkanDriver::ensureRecording()
 {
   if (m_recording) {
     return;
   }
-  ILLUMO_PROFILE_ZONE("VulkanDevice.beginRecording");
+  ILLUMO_PROFILE_ZONE("VulkanDriver.beginRecording");
   m_slotIndex = (m_slotIndex + 1) % kSlotCount;
   Slot& slot = m_slots[m_slotIndex];
   const VkDevice device = m_context.device();
   if (slot.serial != 0) {
-    ILLUMO_PROFILE_ZONE("VulkanDevice.waitSlot");
+    ILLUMO_PROFILE_ZONE("VulkanDriver.waitSlot");
     vkWaitForFences(device, 1, &slot.fence, VK_TRUE, UINT64_MAX);
     m_completedSerial = std::max(m_completedSerial, slot.serial);
   }
@@ -218,7 +218,7 @@ globalBarrier(VkCommandBuffer commands,
 }
 
 void
-VulkanDevice::flush(bool presentFrame)
+VulkanDriver::flush(bool presentFrame)
 {
   if (!m_recording) {
     if (!presentFrame) {
@@ -226,7 +226,7 @@ VulkanDevice::flush(bool presentFrame)
     }
     ensureRecording();
   }
-  ILLUMO_PROFILE_ZONE("VulkanDevice.flush");
+  ILLUMO_PROFILE_ZONE("VulkanDriver.flush");
   endRendering();
   endMainTransfers();
   Slot& slot = m_slots[m_slotIndex];
@@ -278,7 +278,7 @@ VulkanDevice::flush(bool presentFrame)
   submit.pSignalSemaphoreInfos = &signal;
   VkResult submitted = VK_SUCCESS;
   {
-    ILLUMO_PROFILE_ZONE("VulkanDevice.queueSubmit");
+    ILLUMO_PROFILE_ZONE("VulkanDriver.queueSubmit");
     submitted = vkQueueSubmit2(m_context.queue(), 1, &submit, slot.fence);
   }
   m_recording = false;
@@ -303,7 +303,7 @@ VulkanDevice::flush(bool presentFrame)
     info.pImageIndices = &imageIndex;
     VkResult shown = VK_SUCCESS;
     {
-      ILLUMO_PROFILE_ZONE("VulkanDevice.queuePresent");
+      ILLUMO_PROFILE_ZONE("VulkanDriver.queuePresent");
       shown = vkQueuePresentKHR(m_context.queue(), &info);
     }
     if (shown == VK_ERROR_OUT_OF_DATE_KHR || shown == VK_SUBOPTIMAL_KHR) {
@@ -316,7 +316,7 @@ VulkanDevice::flush(bool presentFrame)
 }
 
 bool
-VulkanDevice::waitForSerial(uint64_t serial, uint64_t timeoutNanoseconds)
+VulkanDriver::waitForSerial(uint64_t serial, uint64_t timeoutNanoseconds)
 {
   if (serial <= m_completedSerial) {
     return true;
@@ -342,26 +342,26 @@ VulkanDevice::waitForSerial(uint64_t serial, uint64_t timeoutNanoseconds)
 }
 
 bool
-VulkanDevice::isSerialComplete(uint64_t serial)
+VulkanDriver::isSerialComplete(uint64_t serial)
 {
   return waitForSerial(serial, 0);
 }
 
 uint64_t
-VulkanDevice::retireSerial() const
+VulkanDriver::retireSerial() const
 {
   return m_recording ? m_recordingSerial : m_lastSubmittedSerial;
 }
 
 void
-VulkanDevice::retire(Retired retired)
+VulkanDriver::retire(Retired retired)
 {
   retired.serial = retireSerial();
   m_retired.push_back(std::move(retired));
 }
 
 void
-VulkanDevice::retireImage(VulkanImage& image)
+VulkanDriver::retireImage(VulkanImage& image)
 {
   if (image.image == VK_NULL_HANDLE) {
     return;
@@ -379,7 +379,7 @@ VulkanDevice::retireImage(VulkanImage& image)
 }
 
 void
-VulkanDevice::retireBuffer(VulkanBufferMemory& buffer)
+VulkanDriver::retireBuffer(VulkanBufferMemory& buffer)
 {
   if (buffer.buffer == VK_NULL_HANDLE) {
     return;
@@ -392,7 +392,7 @@ VulkanDevice::retireBuffer(VulkanBufferMemory& buffer)
 }
 
 void
-VulkanDevice::collectRetired()
+VulkanDriver::collectRetired()
 {
   const VkDevice device = m_context.device();
   size_t kept = 0;
@@ -436,7 +436,7 @@ VulkanDevice::collectRetired()
 }
 
 bool
-VulkanDevice::allocateStaging(VkDeviceSize size,
+VulkanDriver::allocateStaging(VkDeviceSize size,
                               VkDeviceSize alignment,
                               StagingSpan* span)
 {
@@ -485,7 +485,7 @@ VulkanDevice::allocateStaging(VkDeviceSize size,
 }
 
 VkCommandBuffer
-VulkanDevice::transferCommands(uint64_t useSerial)
+VulkanDriver::transferCommands(uint64_t useSerial)
 {
   ensureRecording();
   if (useSerial == m_recordingSerial) {
@@ -512,7 +512,7 @@ VulkanDevice::transferCommands(uint64_t useSerial)
 }
 
 void
-VulkanDevice::beginMainTransfers()
+VulkanDriver::beginMainTransfers()
 {
   if (m_mainTransfers) {
     return;
@@ -530,7 +530,7 @@ VulkanDevice::beginMainTransfers()
 }
 
 void
-VulkanDevice::endMainTransfers()
+VulkanDriver::endMainTransfers()
 {
   if (!m_mainTransfers) {
     return;
@@ -585,7 +585,7 @@ layoutScope(VkImageLayout layout,
 }
 
 void
-VulkanDevice::transition(VkCommandBuffer commands,
+VulkanDriver::transition(VkCommandBuffer commands,
                          VulkanImage& image,
                          VkImageLayout layout)
 {
@@ -631,7 +631,7 @@ isDepthFormat(VkFormat format)
 }
 
 bool
-VulkanDevice::createImage(VulkanImage& image,
+VulkanDriver::createImage(VulkanImage& image,
                           VkFormat format,
                           uint32_t width,
                           uint32_t height,
@@ -685,7 +685,7 @@ VulkanDevice::createImage(VulkanImage& image,
 }
 
 bool
-VulkanDevice::createImageView(VulkanImage& image,
+VulkanDriver::createImageView(VulkanImage& image,
                               VkImageViewType type,
                               VkComponentMapping components,
                               VkImageAspectFlags aspect,
@@ -706,7 +706,7 @@ VulkanDevice::createImageView(VulkanImage& image,
 }
 
 bool
-VulkanDevice::createBufferMemory(VulkanBufferMemory& memory,
+VulkanDriver::createBufferMemory(VulkanBufferMemory& memory,
                                  VkDeviceSize size,
                                  VkBufferUsageFlags usage)
 {
@@ -732,7 +732,7 @@ VulkanDevice::createBufferMemory(VulkanBufferMemory& memory,
 }
 
 void
-VulkanDevice::uploadToBuffer(VulkanBufferMemory& memory,
+VulkanDriver::uploadToBuffer(VulkanBufferMemory& memory,
                              VkDeviceSize offset,
                              const void* data,
                              VkDeviceSize size)
@@ -756,7 +756,7 @@ VulkanDevice::uploadToBuffer(VulkanBufferMemory& memory,
 }
 
 void
-VulkanDevice::uploadToImage(VulkanImage& image,
+VulkanDriver::uploadToImage(VulkanImage& image,
                             uint32_t layer,
                             int x,
                             int y,
@@ -795,7 +795,7 @@ VulkanDevice::uploadToImage(VulkanImage& image,
 }
 
 void
-VulkanDevice::generateMipmaps(VulkanImage& image)
+VulkanDriver::generateMipmaps(VulkanImage& image)
 {
   if (image.mipLevels <= 1) {
     return;
@@ -880,7 +880,7 @@ VulkanDevice::generateMipmaps(VulkanImage& image)
 }
 
 VkSampler
-VulkanDevice::samplerFor(TextureFilter filter,
+VulkanDriver::samplerFor(TextureFilter filter,
                          TextureWrap wrapX,
                          TextureWrap wrapY,
                          bool mipmaps,
@@ -928,7 +928,7 @@ VulkanDevice::samplerFor(TextureFilter filter,
 }
 
 bool
-VulkanDevice::createDefaults(std::string* error)
+VulkanDriver::createDefaults(std::string* error)
 {
   // OpenGL samples an incomplete or missing texture as (0, 0, 0, 1).
   const unsigned char black[4] = { 0, 0, 0, 255 };
@@ -959,7 +959,7 @@ VulkanDevice::createDefaults(std::string* error)
 }
 
 void
-VulkanDevice::shutdown()
+VulkanDriver::shutdown()
 {
   if (m_context.device() == VK_NULL_HANDLE) {
     if (m_compilerStarted) {
@@ -969,7 +969,7 @@ VulkanDevice::shutdown()
     m_initialized = false;
     return;
   }
-  ILLUMO_PROFILE_ZONE("VulkanDevice.shutdown");
+  ILLUMO_PROFILE_ZONE("VulkanDriver.shutdown");
   if (m_recording) {
     flush(false);
   }

@@ -1,4 +1,4 @@
-#include "D3D12Device.h"
+#include "D3D12Driver.h"
 #include "Rendering/Gpu/GpuTexels.h"
 
 #include <Illumo/Foundation/Profile.h>
@@ -8,7 +8,7 @@
 #include <cstring>
 
 bool
-D3D12Device::uploadTexture(GpuTexture& record,
+D3D12Driver::uploadTexture(GpuTexture& record,
                            const CmdUpdateTexture& update,
                            int channels)
 {
@@ -37,7 +37,7 @@ D3D12Device::uploadTexture(GpuTexture& record,
 }
 
 void
-D3D12Device::uploadMeshData(GpuMesh& record,
+D3D12Driver::uploadMeshData(GpuMesh& record,
                             bool indices,
                             size_t offset,
                             const void* data,
@@ -48,7 +48,7 @@ D3D12Device::uploadMeshData(GpuMesh& record,
 }
 
 void
-D3D12Device::uploadBufferData(GpuBuffer& buffer,
+D3D12Driver::uploadBufferData(GpuBuffer& buffer,
                               size_t offset,
                               const void* data,
                               size_t size)
@@ -57,7 +57,7 @@ D3D12Device::uploadBufferData(GpuBuffer& buffer,
 }
 
 bool
-D3D12Device::resolveTarget(RenderTarget* target)
+D3D12Driver::resolveTarget(RenderTarget* target)
 {
   *target = RenderTarget{};
   if (m_framebuffer.isValid()) {
@@ -153,7 +153,7 @@ mirroredSamplePositions(uint32_t samples, D3D12_SAMPLE_POSITION* positions)
 }
 
 void
-D3D12Device::bindTarget(const RenderTarget& target)
+D3D12Driver::bindTarget(const RenderTarget& target)
 {
   ensureRecording();
   for (unsigned index = 0; index < target.colorCount; ++index) {
@@ -200,7 +200,7 @@ D3D12Device::bindTarget(const RenderTarget& target)
 }
 
 D3D12_RECT
-D3D12Device::scissorRect(const RenderTarget& target) const
+D3D12Driver::scissorRect(const RenderTarget& target) const
 {
   D3D12_RECT rect{ 0, 0, 0, 0 };
   if (!m_scissor.enabled) {
@@ -228,7 +228,7 @@ D3D12Device::scissorRect(const RenderTarget& target) const
 }
 
 void
-D3D12Device::clear(bool color,
+D3D12Driver::clear(bool color,
                    bool depth,
                    bool stencil,
                    bool mrtAware,
@@ -374,7 +374,7 @@ private:
 };
 
 ID3D12PipelineState*
-D3D12Device::pipelineFor(D3D12Program& program,
+D3D12Driver::pipelineFor(D3D12Program& program,
                          const RenderTarget& target,
                          const D3D12Mesh& mesh,
                          InstanceLayout instanceLayout)
@@ -424,7 +424,7 @@ D3D12Device::pipelineFor(D3D12Program& program,
     m_lastPipeline = found->second.get();
     return m_lastPipeline;
   }
-  ILLUMO_PROFILE_ZONE("D3D12Device.createPipeline");
+  ILLUMO_PROFILE_ZONE("D3D12Driver.createPipeline");
 
   std::array<GpuMeshAttribute, 4> meshLayout{};
   uint32_t meshStride = 0;
@@ -567,7 +567,7 @@ D3D12Device::pipelineFor(D3D12Program& program,
 }
 
 void
-D3D12Device::recordDraw(DrawKind kind,
+D3D12Driver::recordDraw(DrawKind kind,
                         unsigned count,
                         unsigned first,
                         unsigned instances,
@@ -594,7 +594,7 @@ D3D12Device::recordDraw(DrawKind kind,
   if (scissor.right <= scissor.left || scissor.bottom <= scissor.top) {
     return;
   }
-  ILLUMO_PROFILE_ZONE("D3D12Device.draw");
+  ILLUMO_PROFILE_ZONE("D3D12Driver.draw");
   ensureRecording();
   InstanceLayout instanceLayout = InstanceLayout::None;
   D3D12Buffer* instanceBuffer = nullptr;

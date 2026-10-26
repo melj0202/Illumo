@@ -1,6 +1,6 @@
 #include "Rendering/Gpu/GlslProgramCache.h"
 #include "Rendering/Gpu/GpuTexels.h"
-#include "VulkanDevice.h"
+#include "VulkanDriver.h"
 
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
@@ -56,7 +56,7 @@ static const VkComponentMapping kIdentity{ VK_COMPONENT_SWIZZLE_IDENTITY,
                                            VK_COMPONENT_SWIZZLE_IDENTITY };
 
 std::unique_ptr<GpuMesh>
-VulkanDevice::buildMesh(size_t vertexSize, size_t indexSize)
+VulkanDriver::buildMesh(size_t vertexSize, size_t indexSize)
 {
   std::unique_ptr<VulkanMesh> mesh = std::make_unique<VulkanMesh>();
   if (!createBufferMemory(
@@ -73,7 +73,7 @@ VulkanDevice::buildMesh(size_t vertexSize, size_t indexSize)
 }
 
 void
-VulkanDevice::releaseMesh(GpuMesh& record)
+VulkanDriver::releaseMesh(GpuMesh& record)
 {
   VulkanMesh& mesh = static_cast<VulkanMesh&>(record);
   retireBuffer(mesh.vertices);
@@ -81,7 +81,7 @@ VulkanDevice::releaseMesh(GpuMesh& record)
 }
 
 std::unique_ptr<GpuProgram>
-VulkanDevice::buildProgram(const ShaderSources& sources, std::string* error)
+VulkanDriver::buildProgram(const ShaderSources& sources, std::string* error)
 {
   std::unique_ptr<VulkanProgram> program = std::make_unique<VulkanProgram>();
   if (!compileGlslProgramCached(m_shaderCache,
@@ -155,7 +155,7 @@ VulkanDevice::buildProgram(const ShaderSources& sources, std::string* error)
 }
 
 void
-VulkanDevice::releaseProgram(GpuProgram& record)
+VulkanDriver::releaseProgram(GpuProgram& record)
 {
   VulkanProgram& program = static_cast<VulkanProgram&>(record);
   Retired retired;
@@ -185,7 +185,7 @@ VulkanDevice::releaseProgram(GpuProgram& record)
 }
 
 std::unique_ptr<GpuTexture>
-VulkanDevice::buildTexture(const unsigned char* data,
+VulkanDriver::buildTexture(const unsigned char* data,
                            int width,
                            int height,
                            int channels,
@@ -246,7 +246,7 @@ VulkanDevice::buildTexture(const unsigned char* data,
 }
 
 std::unique_ptr<GpuTexture>
-VulkanDevice::buildCubemap(const std::array<const unsigned char*, 6>& faces,
+VulkanDriver::buildCubemap(const std::array<const unsigned char*, 6>& faces,
                            int width,
                            int height,
                            int channels)
@@ -310,7 +310,7 @@ VulkanDevice::buildCubemap(const std::array<const unsigned char*, 6>& faces,
 }
 
 std::unique_ptr<GpuTexture>
-VulkanDevice::buildRenderTarget(int width,
+VulkanDriver::buildRenderTarget(int width,
                                 int height,
                                 TextureFormat format,
                                 TextureFilter filter,
@@ -396,7 +396,7 @@ VulkanDevice::buildRenderTarget(int width,
 }
 
 void
-VulkanDevice::releaseTexture(GpuTexture& record)
+VulkanDriver::releaseTexture(GpuTexture& record)
 {
   VulkanTexture& texture = static_cast<VulkanTexture&>(record);
   if (m_renderingActive) {
@@ -413,20 +413,20 @@ VulkanDevice::releaseTexture(GpuTexture& record)
 }
 
 int
-VulkanDevice::maxTextureSize() const
+VulkanDriver::maxTextureSize() const
 {
   return static_cast<int>(m_context.limits().maxImageDimension2D);
 }
 
 unsigned
-VulkanDevice::maxColorAttachments() const
+VulkanDriver::maxColorAttachments() const
 {
   return std::min(kVulkanMaxColorAttachments,
                   m_context.limits().maxColorAttachments);
 }
 
 void
-VulkanDevice::releaseFramebufferTarget(FramebufferHandle handle)
+VulkanDriver::releaseFramebufferTarget(FramebufferHandle handle)
 {
   if (m_renderingActive && !m_target.backbuffer && m_target.handle == handle) {
     endRendering();
@@ -434,7 +434,7 @@ VulkanDevice::releaseFramebufferTarget(FramebufferHandle handle)
 }
 
 std::unique_ptr<GpuBuffer>
-VulkanDevice::buildBuffer(size_t capacityBytes)
+VulkanDriver::buildBuffer(size_t capacityBytes)
 {
   std::unique_ptr<VulkanBuffer> buffer = std::make_unique<VulkanBuffer>();
   if (!createBufferMemory(buffer->memory,
@@ -447,7 +447,7 @@ VulkanDevice::buildBuffer(size_t capacityBytes)
 }
 
 void
-VulkanDevice::releaseBuffer(GpuBuffer& buffer)
+VulkanDriver::releaseBuffer(GpuBuffer& buffer)
 {
   retireBuffer(static_cast<VulkanBuffer&>(buffer).memory);
 }

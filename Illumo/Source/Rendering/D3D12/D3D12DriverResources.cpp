@@ -1,4 +1,4 @@
-#include "D3D12Device.h"
+#include "D3D12Driver.h"
 #include "Rendering/Gpu/GlslProgramCache.h"
 #include "Rendering/Gpu/GpuTexels.h"
 
@@ -98,7 +98,7 @@ halveTexels(const std::vector<unsigned char>& source,
 }
 
 std::unique_ptr<GpuMesh>
-D3D12Device::buildMesh(size_t vertexSize, size_t indexSize)
+D3D12Driver::buildMesh(size_t vertexSize, size_t indexSize)
 {
   std::unique_ptr<D3D12Mesh> mesh = std::make_unique<D3D12Mesh>();
   if (!createBufferMemory(mesh->vertices, vertexSize)) {
@@ -112,7 +112,7 @@ D3D12Device::buildMesh(size_t vertexSize, size_t indexSize)
 }
 
 void
-D3D12Device::releaseMesh(GpuMesh& record)
+D3D12Driver::releaseMesh(GpuMesh& record)
 {
   D3D12Mesh& mesh = static_cast<D3D12Mesh&>(record);
   retireMemory(mesh.vertices);
@@ -183,7 +183,7 @@ compileProgramCode(GpuShaderCache& cache,
 }
 
 std::unique_ptr<GpuProgram>
-D3D12Device::buildProgram(const ShaderSources& sources, std::string* error)
+D3D12Driver::buildProgram(const ShaderSources& sources, std::string* error)
 {
   std::unique_ptr<D3D12Program> program = std::make_unique<D3D12Program>();
   if (!compileGlslProgramCached(m_shaderCache,
@@ -225,7 +225,7 @@ D3D12Device::buildProgram(const ShaderSources& sources, std::string* error)
 }
 
 void
-D3D12Device::releaseProgram(GpuProgram& record)
+D3D12Driver::releaseProgram(GpuProgram& record)
 {
   D3D12Program& program = static_cast<D3D12Program&>(record);
   Retired retired;
@@ -245,7 +245,7 @@ D3D12Device::releaseProgram(GpuProgram& record)
 }
 
 std::unique_ptr<GpuTexture>
-D3D12Device::buildTexture(const unsigned char* data,
+D3D12Driver::buildTexture(const unsigned char* data,
                           int width,
                           int height,
                           int channels,
@@ -311,7 +311,7 @@ D3D12Device::buildTexture(const unsigned char* data,
 }
 
 std::unique_ptr<GpuTexture>
-D3D12Device::buildCubemap(const std::array<const unsigned char*, 6>& faces,
+D3D12Driver::buildCubemap(const std::array<const unsigned char*, 6>& faces,
                           int width,
                           int height,
                           int channels)
@@ -396,7 +396,7 @@ targetFormat(TextureFormat format)
 }
 
 std::unique_ptr<GpuTexture>
-D3D12Device::buildRenderTarget(int width,
+D3D12Driver::buildRenderTarget(int width,
                                int height,
                                TextureFormat format,
                                TextureFilter filter,
@@ -469,7 +469,7 @@ D3D12Device::buildRenderTarget(int width,
 }
 
 void
-D3D12Device::releaseTexture(GpuTexture& record)
+D3D12Driver::releaseTexture(GpuTexture& record)
 {
   D3D12Texture& texture = static_cast<D3D12Texture&>(record);
   // A bound attachment's view stays valid until the GPU is done; later
@@ -479,20 +479,20 @@ D3D12Device::releaseTexture(GpuTexture& record)
 }
 
 unsigned
-D3D12Device::maxColorAttachments() const
+D3D12Driver::maxColorAttachments() const
 {
   return kD3D12MaxColorAttachments;
 }
 
 void
-D3D12Device::releaseFramebufferTarget(FramebufferHandle /*handle*/)
+D3D12Driver::releaseFramebufferTarget(FramebufferHandle /*handle*/)
 {
   // Whichever target is bound, the next draw binds its target again.
   m_recorded.targetKnown = false;
 }
 
 std::unique_ptr<GpuBuffer>
-D3D12Device::buildBuffer(size_t capacityBytes)
+D3D12Driver::buildBuffer(size_t capacityBytes)
 {
   std::unique_ptr<D3D12Buffer> buffer = std::make_unique<D3D12Buffer>();
   if (!createBufferMemory(buffer->memory, capacityBytes)) {
@@ -502,7 +502,7 @@ D3D12Device::buildBuffer(size_t capacityBytes)
 }
 
 void
-D3D12Device::releaseBuffer(GpuBuffer& buffer)
+D3D12Driver::releaseBuffer(GpuBuffer& buffer)
 {
   retireMemory(static_cast<D3D12Buffer&>(buffer).memory);
   m_recorded.vertexKnown = false;

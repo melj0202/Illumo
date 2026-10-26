@@ -37,8 +37,8 @@ struct GpuFrameStats
   size_t barriers = 0;
 };
 
-// The records GpuDevice keeps for each resource. Each API's resource derives
-// from its record and adds the API objects; a device registers only its own
+// The records GpuDriver keeps for each resource. Each API's resource derives
+// from its record and adds the API objects; a driver registers only its own
 // types. Copies are protected so a record is never sliced through its base.
 struct GpuMesh
 {
@@ -83,7 +83,7 @@ struct GpuTexture
 {
   virtual ~GpuTexture() = default;
 
-  // Set by GpuDevice when it registers the texture.
+  // Set by GpuDriver when it registers the texture.
   int width = 0;
   int height = 0;
   int channels = 4;
@@ -125,22 +125,24 @@ struct GpuFramebuffer
   int height = 0;
 };
 
-// The device of an explicit graphics API (Vulkan, Direct3D 12) behind
-// GpuBackend (docs/gpu-backend-unification-plan.md). This class executes the
-// backend-neutral token stream with the OpenGL backend's observable semantics:
-// it keeps OpenGL's context state, the handle registries, and every check a
-// token or resource call makes, in the same order for every API. A derived
-// device implements the protected hooks, which the base calls only with
-// validated arguments, and owns the submissions and presentation.
-class GpuDevice
+// The driver of an explicit graphics API (Vulkan, Direct3D 12) behind
+// GpuBackend: the engine's code that talks to that API
+// (docs/gpu-backend-unification-plan.md). "Driver" here means this class, not
+// the GPU vendor's driver. This base executes the backend-neutral token stream
+// with the OpenGL backend's observable semantics: it keeps OpenGL's context
+// state, the handle registries, and every check a token or resource call
+// makes, in the same order for every API. A derived driver implements the
+// protected hooks, which the base calls only with validated arguments, and
+// owns the submissions and presentation.
+class GpuDriver
 {
 public:
-  GpuDevice() = default;
-  virtual ~GpuDevice() = default;
-  GpuDevice(const GpuDevice&) = delete;
-  GpuDevice& operator=(const GpuDevice&) = delete;
-  GpuDevice(GpuDevice&&) = delete;
-  GpuDevice& operator=(GpuDevice&&) = delete;
+  GpuDriver() = default;
+  virtual ~GpuDriver() = default;
+  GpuDriver(const GpuDriver&) = delete;
+  GpuDriver& operator=(const GpuDriver&) = delete;
+  GpuDriver(GpuDriver&&) = delete;
+  GpuDriver& operator=(GpuDriver&&) = delete;
 
   // The API's name in messages, such as "Vulkan" or "Direct3D 12".
   virtual const char* apiName() const = 0;
@@ -155,7 +157,7 @@ public:
   virtual bool initialize(IRenderWindow* window,
                           bool present,
                           std::string* error) = 0;
-  // Releases everything; the device may be initialized again. A derived
+  // Releases everything; the driver may be initialized again. A derived
   // destructor calls it, and it calls releaseResources.
   virtual void shutdown() = 0;
 
@@ -254,14 +256,14 @@ protected:
     IndexedInstanced,
   };
 
-  // Resource hooks (GpuDevice.cpp calls them). A build hook returns nullptr
+  // Resource hooks (GpuDriver.cpp calls them). A build hook returns nullptr
   // when the API cannot create the resource; the front end has checked
   // handles and the arguments its OpenGL counterpart checks. A release hook
   // retires the API objects once the GPU is done with them.
   //
   // buildMesh creates the API's mesh with a vertex buffer of vertexSize bytes
   // and, when indexSize is not zero, an index buffer of indexSize bytes;
-  // GpuDevice fills the record and uploads through uploadMeshData.
+  // GpuDriver fills the record and uploads through uploadMeshData.
   virtual std::unique_ptr<GpuMesh> buildMesh(size_t vertexSize,
                                              size_t indexSize) = 0;
   virtual void releaseMesh(GpuMesh& mesh) = 0;
@@ -398,7 +400,7 @@ private:
                                 int width,
                                 int height);
 
-  // The token interpreter (GpuDeviceCommands.cpp).
+  // The token interpreter (GpuDriverCommands.cpp).
   void executeCommand(const RenderCommand& command);
   void executeList(const RecordedCommandList* list);
   void setUniform(const char* name,

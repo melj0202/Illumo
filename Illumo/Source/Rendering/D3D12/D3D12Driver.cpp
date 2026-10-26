@@ -1,4 +1,4 @@
-#include "D3D12Device.h"
+#include "D3D12Driver.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -119,19 +119,19 @@ D3D12DescriptorHeap::gpu(int index) const
   return handle;
 }
 
-D3D12Device::~D3D12Device()
+D3D12Driver::~D3D12Driver()
 {
   shutdown();
 }
 
 const char*
-D3D12Device::apiName() const
+D3D12Driver::apiName() const
 {
   return "Direct3D 12";
 }
 
 void
-D3D12Device::plotFrameStats(size_t commandQueueHighWater) const
+D3D12Driver::plotFrameStats(size_t commandQueueHighWater) const
 {
   ILLUMO_PROFILE_PLOT("DX12.Submits", m_stats.submits);
   ILLUMO_PROFILE_PLOT("DX12.Commands", m_stats.commands);
@@ -145,9 +145,9 @@ D3D12Device::plotFrameStats(size_t commandQueueHighWater) const
 }
 
 bool
-D3D12Device::initialize(IRenderWindow* window, bool present, std::string* error)
+D3D12Driver::initialize(IRenderWindow* window, bool present, std::string* error)
 {
-  ILLUMO_PROFILE_ZONE("D3D12Device.initialize");
+  ILLUMO_PROFILE_ZONE("D3D12Driver.initialize");
   m_window = window;
   m_present = present;
   m_glfwWindow = window != nullptr ? window->getWindowInstance() : nullptr;
@@ -216,7 +216,7 @@ D3D12Device::initialize(IRenderWindow* window, bool present, std::string* error)
 }
 
 bool
-D3D12Device::createSlots(std::string* error)
+D3D12Driver::createSlots(std::string* error)
 {
   ID3D12Device* device = m_context.device();
   for (Slot& slot : m_slots) {
@@ -251,7 +251,7 @@ D3D12Device::createSlots(std::string* error)
 }
 
 void
-D3D12Device::forgetRecordedState()
+D3D12Driver::forgetRecordedState()
 {
   m_recorded = RecordedState{};
   m_lastPipelineProgram = nullptr;
@@ -259,16 +259,16 @@ D3D12Device::forgetRecordedState()
 }
 
 void
-D3D12Device::ensureRecording()
+D3D12Driver::ensureRecording()
 {
   if (m_recording) {
     return;
   }
-  ILLUMO_PROFILE_ZONE("D3D12Device.beginRecording");
+  ILLUMO_PROFILE_ZONE("D3D12Driver.beginRecording");
   m_slotIndex = (m_slotIndex + 1) % kSlotCount;
   Slot& slot = m_slots[m_slotIndex];
   if (slot.serial != 0) {
-    ILLUMO_PROFILE_ZONE("D3D12Device.waitSlot");
+    ILLUMO_PROFILE_ZONE("D3D12Driver.waitSlot");
     waitForSerial(slot.serial, INFINITE);
   }
   collectRetired();
@@ -287,7 +287,7 @@ D3D12Device::ensureRecording()
 }
 
 void
-D3D12Device::flush(bool presentFrame)
+D3D12Driver::flush(bool presentFrame)
 {
   if (!m_recording) {
     if (!presentFrame) {
@@ -295,14 +295,14 @@ D3D12Device::flush(bool presentFrame)
     }
     ensureRecording();
   }
-  ILLUMO_PROFILE_ZONE("D3D12Device.flush");
+  ILLUMO_PROFILE_ZONE("D3D12Driver.flush");
   const bool presenting = presentFrame && recordPresentation();
   const HRESULT closed = m_commands->Close();
   m_recording = false;
   m_lastSubmittedSerial = m_recordingSerial;
   if (SUCCEEDED(closed)) {
     ID3D12CommandList* lists[1] = { m_commands.get() };
-    ILLUMO_PROFILE_ZONE("D3D12Device.executeCommandLists");
+    ILLUMO_PROFILE_ZONE("D3D12Driver.executeCommandLists");
     m_context.queue()->ExecuteCommandLists(1, lists);
   } else {
     Logger::LogError("Direct3D 12 command recording failed: " +
@@ -313,7 +313,7 @@ D3D12Device::flush(bool presentFrame)
     const bool vsync = m_window == nullptr || m_window->isFramePaced();
     HRESULT shown = S_OK;
     {
-      ILLUMO_PROFILE_ZONE("D3D12Device.present");
+      ILLUMO_PROFILE_ZONE("D3D12Driver.present");
       shown = m_swapchain.swapchain->Present(vsync ? 1u : 0u, 0u);
     }
     if (shown == DXGI_STATUS_OCCLUDED && vsync) {
@@ -338,7 +338,7 @@ D3D12Device::flush(bool presentFrame)
 }
 
 bool
-D3D12Device::waitForSerial(uint64_t serial, DWORD timeoutMilliseconds)
+D3D12Driver::waitForSerial(uint64_t serial, DWORD timeoutMilliseconds)
 {
   if (serial <= m_completedSerial) {
     return true;
@@ -368,20 +368,20 @@ D3D12Device::waitForSerial(uint64_t serial, DWORD timeoutMilliseconds)
 }
 
 bool
-D3D12Device::isSerialComplete(uint64_t serial)
+D3D12Driver::isSerialComplete(uint64_t serial)
 {
   return waitForSerial(serial, 0);
 }
 
 void
-D3D12Device::retire(Retired retired)
+D3D12Driver::retire(Retired retired)
 {
   retired.serial = m_recording ? m_recordingSerial : m_lastSubmittedSerial;
   m_retired.push_back(std::move(retired));
 }
 
 void
-D3D12Device::retireImage(D3D12Image& image)
+D3D12Driver::retireImage(D3D12Image& image)
 {
   if (!image.memory.resource) {
     return;
@@ -396,7 +396,7 @@ D3D12Device::retireImage(D3D12Image& image)
 }
 
 void
-D3D12Device::retireMemory(D3D12Memory& memory)
+D3D12Driver::retireMemory(D3D12Memory& memory)
 {
   if (!memory.resource) {
     return;
@@ -408,7 +408,7 @@ D3D12Device::retireMemory(D3D12Memory& memory)
 }
 
 void
-D3D12Device::collectRetired()
+D3D12Driver::collectRetired()
 {
   if (m_fence) {
     const uint64_t completed = m_fence->GetCompletedValue();
@@ -434,7 +434,7 @@ D3D12Device::collectRetired()
 }
 
 bool
-D3D12Device::allocateStaging(size_t size, size_t alignment, StagingSpan* span)
+D3D12Driver::allocateStaging(size_t size, size_t alignment, StagingSpan* span)
 {
   ensureRecording();
   Slot& slot = m_slots[m_slotIndex];
@@ -488,7 +488,7 @@ D3D12Device::allocateStaging(size_t size, size_t alignment, StagingSpan* span)
 }
 
 void
-D3D12Device::transition(D3D12Memory& memory, D3D12_RESOURCE_STATES state)
+D3D12Driver::transition(D3D12Memory& memory, D3D12_RESOURCE_STATES state)
 {
   if (memory.state == state || !memory.resource) {
     return;
@@ -506,7 +506,7 @@ D3D12Device::transition(D3D12Memory& memory, D3D12_RESOURCE_STATES state)
 }
 
 bool
-D3D12Device::createBufferMemory(D3D12Memory& memory, size_t size)
+D3D12Driver::createBufferMemory(D3D12Memory& memory, size_t size)
 {
   D3D12_HEAP_PROPERTIES heap{};
   heap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -536,7 +536,7 @@ D3D12Device::createBufferMemory(D3D12Memory& memory, size_t size)
 }
 
 bool
-D3D12Device::createImage(D3D12Image& image,
+D3D12Driver::createImage(D3D12Image& image,
                          DXGI_FORMAT format,
                          DXGI_FORMAT viewFormat,
                          uint32_t width,
@@ -582,7 +582,7 @@ D3D12Device::createImage(D3D12Image& image,
 }
 
 bool
-D3D12Device::createShaderView(D3D12Image& image,
+D3D12Driver::createShaderView(D3D12Image& image,
                               DXGI_FORMAT format,
                               bool cube,
                               UINT componentMapping)
@@ -610,7 +610,7 @@ D3D12Device::createShaderView(D3D12Image& image,
 }
 
 bool
-D3D12Device::createTargetView(D3D12Image& image)
+D3D12Driver::createTargetView(D3D12Image& image)
 {
   ID3D12Device* device = m_context.device();
   if (image.depth) {
@@ -644,7 +644,7 @@ D3D12Device::createTargetView(D3D12Image& image)
 }
 
 void
-D3D12Device::uploadToBuffer(D3D12Memory& memory,
+D3D12Driver::uploadToBuffer(D3D12Memory& memory,
                             size_t offset,
                             const void* data,
                             size_t size)
@@ -665,7 +665,7 @@ D3D12Device::uploadToBuffer(D3D12Memory& memory,
 }
 
 void
-D3D12Device::uploadToImage(D3D12Image& image,
+D3D12Driver::uploadToImage(D3D12Image& image,
                            uint32_t subresource,
                            int x,
                            int y,
@@ -714,7 +714,7 @@ D3D12Device::uploadToImage(D3D12Image& image,
 }
 
 bool
-D3D12Device::createSamplers(std::string* error)
+D3D12Driver::createSamplers(std::string* error)
 {
   for (unsigned index = 0; index < kSamplerCount; ++index) {
     const int slot = m_samplerHeap.allocate();
@@ -756,7 +756,7 @@ D3D12Device::createSamplers(std::string* error)
 }
 
 bool
-D3D12Device::createDefaults(std::string* error)
+D3D12Driver::createDefaults(std::string* error)
 {
   // OpenGL samples an incomplete or missing texture as (0, 0, 0, 1).
   const unsigned char black[4] = { 0, 0, 0, 255 };
@@ -784,7 +784,7 @@ D3D12Device::createDefaults(std::string* error)
 }
 
 void
-D3D12Device::shutdown()
+D3D12Driver::shutdown()
 {
   if (m_context.device() == nullptr) {
     if (m_compilerStarted) {
@@ -798,7 +798,7 @@ D3D12Device::shutdown()
     m_initialized = false;
     return;
   }
-  ILLUMO_PROFILE_ZONE("D3D12Device.shutdown");
+  ILLUMO_PROFILE_ZONE("D3D12Driver.shutdown");
   if (m_recording) {
     flush(false);
   }

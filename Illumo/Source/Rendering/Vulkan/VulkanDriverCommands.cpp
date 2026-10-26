@@ -1,5 +1,5 @@
 #include "Rendering/Gpu/GpuTexels.h"
-#include "VulkanDevice.h"
+#include "VulkanDriver.h"
 
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/Logger.h>
@@ -8,7 +8,7 @@
 #include <cstring>
 
 bool
-VulkanDevice::uploadTexture(GpuTexture& record,
+VulkanDriver::uploadTexture(GpuTexture& record,
                             const CmdUpdateTexture& update,
                             int channels)
 {
@@ -50,7 +50,7 @@ VulkanDevice::uploadTexture(GpuTexture& record,
 }
 
 void
-VulkanDevice::uploadMeshData(GpuMesh& record,
+VulkanDriver::uploadMeshData(GpuMesh& record,
                              bool indices,
                              size_t offset,
                              const void* data,
@@ -61,7 +61,7 @@ VulkanDevice::uploadMeshData(GpuMesh& record,
 }
 
 void
-VulkanDevice::uploadBufferData(GpuBuffer& buffer,
+VulkanDriver::uploadBufferData(GpuBuffer& buffer,
                                size_t offset,
                                const void* data,
                                size_t size)
@@ -70,7 +70,7 @@ VulkanDevice::uploadBufferData(GpuBuffer& buffer,
 }
 
 bool
-VulkanDevice::resolveTarget(RenderTarget* target)
+VulkanDriver::resolveTarget(RenderTarget* target)
 {
   *target = RenderTarget{};
   if (m_framebuffer.isValid()) {
@@ -119,7 +119,7 @@ VulkanDevice::resolveTarget(RenderTarget* target)
 }
 
 void
-VulkanDevice::ensureRendering(const RenderTarget* resolved)
+VulkanDriver::ensureRendering(const RenderTarget* resolved)
 {
   ensureRecording();
   endMainTransfers();
@@ -183,7 +183,7 @@ VulkanDevice::ensureRendering(const RenderTarget* resolved)
 }
 
 void
-VulkanDevice::endRendering()
+VulkanDriver::endRendering()
 {
   if (!m_renderingActive) {
     return;
@@ -207,7 +207,7 @@ VulkanDevice::endRendering()
 }
 
 VkRect2D
-VulkanDevice::scissorRect(const RenderTarget& target) const
+VulkanDriver::scissorRect(const RenderTarget& target) const
 {
   VkRect2D rect{};
   if (!m_scissor.enabled) {
@@ -233,7 +233,7 @@ VulkanDevice::scissorRect(const RenderTarget& target) const
 }
 
 void
-VulkanDevice::clear(bool color,
+VulkanDriver::clear(bool color,
                     bool depth,
                     bool stencil,
                     bool mrtAware,
@@ -344,7 +344,7 @@ topologyOf(Primitives primitives)
 }
 
 VkPipeline
-VulkanDevice::pipelineFor(VulkanProgram& program,
+VulkanDriver::pipelineFor(VulkanProgram& program,
                           const RenderTarget& target,
                           const VulkanMesh& mesh,
                           InstanceLayout instanceLayout)
@@ -387,7 +387,7 @@ VulkanDevice::pipelineFor(VulkanProgram& program,
     m_lastPipeline = found->second;
     return found->second;
   }
-  ILLUMO_PROFILE_ZONE("VulkanDevice.createPipeline");
+  ILLUMO_PROFILE_ZONE("VulkanDriver.createPipeline");
 
   std::array<GpuMeshAttribute, 4> meshLayout{};
   uint32_t meshStride = 0;
@@ -587,7 +587,7 @@ VulkanDevice::pipelineFor(VulkanProgram& program,
 }
 
 void
-VulkanDevice::recordDraw(DrawKind kind,
+VulkanDriver::recordDraw(DrawKind kind,
                          unsigned count,
                          unsigned first,
                          unsigned instances,
@@ -606,7 +606,7 @@ VulkanDevice::recordDraw(DrawKind kind,
   if (scissor.extent.width == 0 || scissor.extent.height == 0) {
     return;
   }
-  ILLUMO_PROFILE_ZONE("VulkanDevice.draw");
+  ILLUMO_PROFILE_ZONE("VulkanDriver.draw");
   ensureRecording();
   InstanceLayout instanceLayout = InstanceLayout::None;
   VulkanBuffer* instanceBuffer = nullptr;

@@ -1,4 +1,4 @@
-#include "GpuDevice.h"
+#include "GpuDriver.h"
 #include "Rendering/Gpu/GpuTexels.h"
 
 #include <Illumo/Foundation/Profile.h>
@@ -6,7 +6,7 @@
 #include <string>
 
 void
-GpuDevice::reportFrameError(const char* message)
+GpuDriver::reportFrameError(const char* message)
 {
   if (m_frameError.empty()) {
     m_frameError = message;
@@ -15,9 +15,9 @@ GpuDevice::reportFrameError(const char* message)
 }
 
 void
-GpuDevice::executeQueue(CommandQueue& queue)
+GpuDriver::executeQueue(CommandQueue& queue)
 {
-  ILLUMO_PROFILE_ZONE("GpuDevice.ExecuteCommandQueue");
+  ILLUMO_PROFILE_ZONE("GpuDriver.ExecuteCommandQueue");
   m_stats.submits += 1;
   m_stats.commands += queue.GetCommandCount();
   // As GLDevice does, each submission starts without a program or mesh and
@@ -38,13 +38,13 @@ GpuDevice::executeQueue(CommandQueue& queue)
 }
 
 void
-GpuDevice::executeList(const RecordedCommandList* list)
+GpuDriver::executeList(const RecordedCommandList* list)
 {
   if (list == nullptr || list->failed()) {
     reportFrameError("ExecuteList: missing or failed recorded list");
     return;
   }
-  ILLUMO_PROFILE_ZONE("GpuDevice.ExecuteList");
+  ILLUMO_PROFILE_ZONE("GpuDriver.ExecuteList");
   m_stats.recordedLists += 1;
   m_stats.recordedCommands += list->size();
   for (size_t index = 0; index < list->size(); ++index) {
@@ -53,7 +53,7 @@ GpuDevice::executeList(const RecordedCommandList* list)
 }
 
 void
-GpuDevice::executeCommand(const RenderCommand& command)
+GpuDriver::executeCommand(const RenderCommand& command)
 {
   switch (command.commandType) {
     case CommandType::SetPipelineState: {
@@ -326,7 +326,7 @@ GpuDevice::executeCommand(const RenderCommand& command)
 }
 
 void
-GpuDevice::setUniform(const char* name,
+GpuDriver::setUniform(const char* name,
                       const UniformKey& key,
                       GlslValueType given,
                       const void* value,
@@ -341,7 +341,7 @@ GpuDevice::setUniform(const char* name,
 }
 
 void
-GpuDevice::updateTexture(const CmdUpdateTexture& update)
+GpuDriver::updateTexture(const CmdUpdateTexture& update)
 {
   GpuTexture* texture = findTexture(update.handle);
   if (texture == nullptr || update.data == nullptr) {
@@ -362,7 +362,7 @@ GpuDevice::updateTexture(const CmdUpdateTexture& update)
     reportFrameError("UpdateTexture: invalid rectangle, channels, or stride");
     return;
   }
-  ILLUMO_PROFILE_ZONE("GpuDevice.UpdateTexture");
+  ILLUMO_PROFILE_ZONE("GpuDriver.UpdateTexture");
   if (!uploadTexture(*texture, update, channels)) {
     return;
   }
@@ -374,7 +374,7 @@ GpuDevice::updateTexture(const CmdUpdateTexture& update)
 }
 
 void
-GpuDevice::updateMeshBuffer(const CmdUpdateBuffer& update, bool indices)
+GpuDriver::updateMeshBuffer(const CmdUpdateBuffer& update, bool indices)
 {
   GpuMesh* mesh = findMesh(update.handle);
   if (mesh == nullptr || update.data == nullptr) {
@@ -396,7 +396,7 @@ GpuDevice::updateMeshBuffer(const CmdUpdateBuffer& update, bool indices)
 }
 
 void
-GpuDevice::writeBuffer(const CmdWriteBuffer& write)
+GpuDriver::writeBuffer(const CmdWriteBuffer& write)
 {
   GpuBuffer* buffer = findBuffer(write.handle);
   if (buffer == nullptr || write.data == nullptr || write.sizeBytes == 0 ||
@@ -410,7 +410,7 @@ GpuDevice::writeBuffer(const CmdWriteBuffer& write)
 }
 
 void
-GpuDevice::draw(DrawKind kind,
+GpuDriver::draw(DrawKind kind,
                 unsigned count,
                 unsigned first,
                 unsigned instances,

@@ -161,17 +161,17 @@ add_library(Illumo STATIC
   Source/Rendering/Gpu/GlslToSpirv.cpp
   Source/Rendering/Gpu/GlslProgramCache.cpp
   Source/Rendering/Gpu/GpuBackend.cpp
-  Source/Rendering/Gpu/GpuDevice.cpp
-  Source/Rendering/Gpu/GpuDeviceCommands.cpp
+  Source/Rendering/Gpu/GpuDriver.cpp
+  Source/Rendering/Gpu/GpuDriverCommands.cpp
   Source/Rendering/Gpu/GpuProgramState.cpp
   Source/Rendering/Gpu/GpuShaderCache.cpp
   Source/Rendering/Gpu/GpuTexels.cpp
   Source/Rendering/Vulkan/CreateVulkanBackend.cpp
   Source/Rendering/Vulkan/VulkanContext.cpp
-  Source/Rendering/Vulkan/VulkanDevice.cpp
-  Source/Rendering/Vulkan/VulkanDeviceCommands.cpp
-  Source/Rendering/Vulkan/VulkanDevicePresent.cpp
-  Source/Rendering/Vulkan/VulkanDeviceResources.cpp
+  Source/Rendering/Vulkan/VulkanDriver.cpp
+  Source/Rendering/Vulkan/VulkanDriverCommands.cpp
+  Source/Rendering/Vulkan/VulkanDriverPresent.cpp
+  Source/Rendering/Vulkan/VulkanDriverResources.cpp
   Source/Engine/Illumo.cpp
   Source/Engine/Application.cpp
   Source/Gui/GridAtlas.cpp
@@ -202,10 +202,10 @@ if(WIN32)
   target_sources(Illumo PRIVATE
     Source/Rendering/D3D12/CreateD3D12Backend.cpp
     Source/Rendering/D3D12/D3D12Context.cpp
-    Source/Rendering/D3D12/D3D12Device.cpp
-    Source/Rendering/D3D12/D3D12DeviceCommands.cpp
-    Source/Rendering/D3D12/D3D12DevicePresent.cpp
-    Source/Rendering/D3D12/D3D12DeviceResources.cpp
+    Source/Rendering/D3D12/D3D12Driver.cpp
+    Source/Rendering/D3D12/D3D12DriverCommands.cpp
+    Source/Rendering/D3D12/D3D12DriverPresent.cpp
+    Source/Rendering/D3D12/D3D12DriverResources.cpp
     Source/Rendering/D3D12/D3D12ShaderCompiler.cpp)
   target_link_libraries(Illumo PRIVATE illumo_spirv_cross d3d12 dxgi d3dcompiler)
 endif()
@@ -357,7 +357,7 @@ if(BUILD_TESTING)
     Tests/TestShaderPreprocessor.cpp
     Tests/TestVulkanShaders.cpp
     Tests/TestD3D12Shaders.cpp
-    Tests/TestGpuDevice.cpp
+    Tests/TestGpuDriver.cpp
     Tests/TestGuiKit.cpp
     Tests/TestGuiDropdownList.cpp
     Tests/TestGuiFileTree.cpp
