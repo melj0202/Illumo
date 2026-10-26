@@ -28,7 +28,10 @@ permissions:
 jobs:
   illumo-workspace:
     name: Release IllumoWorkspace
-    runs-on: windows-2022
+    # windows-2025 carries Visual Studio 2026 (MSVC 19.5x), the verified
+    # development toolchain. windows-2022's MSVC 19.44 rejects the vendored
+    # tinyobjloader's constexpr fast_float path (C3615).
+    runs-on: windows-2025
     timeout-minutes: 240
     steps:
       - name: Note whether CSim can be cloned

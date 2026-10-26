@@ -126,10 +126,12 @@ directory on each host.
 - Windows 10 or 11, x64
 - Visual Studio with the **Desktop development with C++** workload: MSVC
   with C++23 (`cxx_std_23`) and a current Windows 10/11 SDK. OpenGL
-  (`opengl32`) comes with the SDK. A verified development machine uses
-  Visual Studio 18 / MSVC; any current VS toolchain that provides C++23 and
-  CMake 3.25 is the practical requirement
-- [CMake 3.25+](https://cmake.org/download/) on `PATH`
+  (`opengl32`) comes with the SDK. Development machines and CI use
+  Visual Studio 18 (2026) / MSVC 19.5x. Visual Studio 2022's MSVC 19.44
+  does not build the engine: it rejects a `constexpr` path in the vendored
+  tinyobjloader (C3615)
+- [CMake 3.25+](https://cmake.org/download/) on `PATH` (4.2+ for the
+  Visual Studio 2026 generator)
 - Python 3.10+ on `PATH` if you use `build.py` (standard library only)
 - Git
 - The pinned WASM toolchain (Wasmtime 48.0.2 C API and WASI SDK 34.0). Run

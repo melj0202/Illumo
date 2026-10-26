@@ -140,6 +140,11 @@ into a reusable library. The Game of Life sim is CSim.
   the release branch's sources were checked, but not its docs. Rule: for a
   release-branch feature, read that branch's docs and tests as well as its
   sources before saying what is or is not recorded.
+- 2026-10-25 — IllEd editing wave 4 (D-E42: autosave and recovery, project
+  backups, Revert to Saved, editor tabs, the `Project` guest service for
+  switching projects, `IllEd.Gpu.Smoke`, play programs that host Saturn's
+  scene) committed on `release/v26.10` as 3bf4c0ff. Local only, not pushed
+  as of this entry. Plan: docs/illed-editing-wave4-plan.md.
 
 ## Handoff note template (use for each session)
 
@@ -194,3 +199,29 @@ into a reusable library. The Game of Life sim is CSim.
   cleanly to both. Linux narrow-include patch still unlanded. TaskGraph
   decision unchanged.
 - Files changed: AI_SYNC.md only.
+
+### 2026-10-25 — Claude (Claude Code desktop, Windows) — Commit IllEd wave 4 and sync with origin
+- Did: Committed the finished, previously uncommitted IllEd wave 4 work
+  (D-E42) on local `release/v26.10`. Rebased the three unpushed local
+  commits (asset-table reload fix, World shadow pass position D-RP2,
+  wave 4) onto `origin/release/v26.10` (138723e6, the AI_SYNC PRs); no
+  overlapping files. Moved local `main` to `origin/main`; its 36 local-only
+  commits were a stale local fast-forward and all are on
+  `origin/release/v26.10`.
+- Verified (Windows, RTX machine, Release): full `IllumoWorkspace` CTest
+  785/785 with CSim cloned, and `IllEd.Gpu.Smoke` in a real window. Run on
+  the pre-rebase tree; the rebase changed only AI_SYNC.md and CLAUDE.md.
+- Left open / next: `release/v26.10` is 3 commits ahead of origin, not
+  pushed. IllEd File > Open Project switching not checked in a live window.
+  CSim `main` is 2 commits ahead of its origin, not pushed. Linux and
+  TaskGraph items unchanged.
+- Files changed: AI_SYNC.md (this note), committed with the CI change below.
+- Later the same session: the GitHub "Windows tests" job had failed on every
+  `release/v26.10` run since it was added (2026-10-20). It never reached the
+  tests: `windows-2022`'s MSVC 19.44 stops on error C3615 in the vendored
+  tiny_obj_loader.h (`tinyobj_ff::distance` is not constexpr), while local
+  VS 2026 (MSVC 19.51) accepts it. Switched the workflow to `windows-2025`
+  (VS 2026, CMake 4.4.4) and updated AGENTS.md and README.md; pushed
+  with the three commits above. Result of that first run: check GitHub. CI also skips the CSim checkout
+  (`CSIM_READ_TOKEN` missing or unable to read), so game tests do not run
+  there.
