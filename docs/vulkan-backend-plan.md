@@ -1,6 +1,10 @@
 # Vulkan backend execution plan
 
 Status: complete, M0-M8 (D-R33); see the validation log in section 10.
+Since 2026-10-26 (D-R40) `VulkanBackend` and the token executor, handle
+registries and resource front ends of `VulkanDevice` live in `Rendering/Gpu/`
+(`GpuBackend`, `GpuDevice`), shared with Direct3D 12; section 5.3 describes
+the structure as first built (`docs/gpu-backend-unification-plan.md`).
 Tier 2 plan (`.agent/PLANS.md`: a new backend).
 Owner request (2026-09-30): "create a Vulkan backend that I can switch to/from
 and that is compatible with the engine without the logic leaking into the

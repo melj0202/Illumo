@@ -206,7 +206,7 @@ cloned.
 | Scene behaviours and playing a scene | `Illumo/Include/Illumo/Content/{BehaviourSchema,SceneBehaviours}.h`, `IllumoGuest/Include/IllumoGuest/PlayProgram.h`, `Playground/*` |
 | Debug renderer atlas and shader | `Illumo/Assets/RendererDemo/*` |
 | Production backend factories and selection | `Illumo/Source/Rendering/OpenGL/CreateOpenGLBackend.*`, `Illumo/Source/Rendering/Vulkan/CreateVulkanBackend.*`, `Illumo/Source/Rendering/D3D12/CreateD3D12Backend.*`, `Illumo/Source/Rendering/BackendConfig.h` (composed in `Engine/Illumo.cpp`) |
-| Real graphics execution | `Illumo/Source/Rendering/OpenGL/*`, `Illumo/Source/Rendering/Vulkan/*`, `Illumo/Source/Rendering/D3D12/*`, shared explicit-API pieces in `Illumo/Source/Rendering/Gpu/*` (dependencies in `Illumo/cmake/IllumoVulkanDeps.cmake` and `IllumoD3D12Deps.cmake`) |
+| Real graphics execution | `Illumo/Source/Rendering/OpenGL/*`, `Illumo/Source/Rendering/Vulkan/*`, `Illumo/Source/Rendering/D3D12/*`, the shared Vulkan/Direct3D 12 `GpuBackend` and `GpuDevice` token interpreter (D-R40) and other explicit-API pieces in `Illumo/Source/Rendering/Gpu/*` (dependencies in `Illumo/cmake/IllumoVulkanDeps.cmake` and `IllumoD3D12Deps.cmake`) |
 | Headless backend | `Illumo/TestSupport/Include/Illumo/Testing/MockBackend.h` |
 | Input, console, env, logging, system CLI | `Illumo/Source/Services/*` |
 | OS entry and native save/load | `Illumo/Source/Platform/*` |

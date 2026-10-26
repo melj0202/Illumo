@@ -11,13 +11,18 @@ execution belongs only in `OpenGL/`, Vulkan execution only in `Vulkan/`
 (D-R33) and Direct3D 12 execution only in `D3D12/` (D-R36, Windows), each
 selected by `GraphicsAPI`; headless semantic execution belongs in `Mock/`.
 `Gpu/` holds what the explicit-API backends share and is free of their types:
-the GLSL to SPIR-V front end with OpenGL program reflection, OpenGL program
-uniform state and attribute layouts, and CPU texel conversions. Game and
-Services consume this boundary without importing GL, Vulkan or Direct3D
-types.
+`GpuBackend`, the one `IBackend` of Vulkan and Direct3D 12; the `GpuDevice`
+base with OpenGL's context state, the token interpreter, handle registries and
+resource front ends (D-R40); the GLSL to SPIR-V front end with OpenGL program
+reflection, OpenGL program uniform state and attribute layouts, and CPU texel
+conversions. Game and Services consume this boundary without importing GL,
+Vulkan or Direct3D types.
 
 ## Required invariants
 
+- Token and resource semantics the explicit APIs share change in `GpuDevice`,
+  not in one device. Its hooks receive only validated arguments; a device
+  never re-validates a token or keeps its own handle table (D-R40).
 - Production drawables implement `AppendCommands(Renderer*)`. Immediate
   `Draw()` is a compatibility fallback for tests or incomplete stubs, not a
   second production path.

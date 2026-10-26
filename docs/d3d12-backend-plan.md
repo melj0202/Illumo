@@ -1,6 +1,10 @@
 # Direct3D 12 backend execution plan
 
 Status: complete, M0-M8 (D-R36); see the validation log in section 10.
+Since 2026-10-26 (D-R40) `D3D12Backend` and the token executor, handle
+registries and resource front ends of `D3D12Device` live in `Rendering/Gpu/`
+(`GpuBackend`, `GpuDevice`), shared with Vulkan; section 5.4 describes the
+structure as first built (`docs/gpu-backend-unification-plan.md`).
 Tier 2 plan (`.agent/PLANS.md`: a new backend).
 Owner request (2026-10-01): "let's see if we can get DirectX 12 support on in
 just like we did with Vulkan" — the Vulkan contract of D-R33 applies: a backend

@@ -1,7 +1,8 @@
 # Shared GPU backend plan
 
-Status: M1-M2 implemented on branch `ccr-9a9151a6-vex779` (2026-10-26);
-Windows verification pending. M3 (OpenGL) is a proposal, not authorized.
+Status: M1-M2 implemented (D-R40) on branch `ccr-9a9151a6-vex779`
+(2026-10-26), verified on Linux; the Windows run (section 9) is pending.
+M3 (OpenGL) is a proposal, not authorized.
 
 ## 1. Objective
 
@@ -137,9 +138,10 @@ preprocessor failed`); no test or tool matches it.
 - M3 (proposal): OpenGL as a third `GpuDevice`. `GLBackend`'s registries and
   front ends and `GLDevice::executeCommand` would go; the GL device would set
   OpenGL state at draw time from the shared context state, keeping its bind
-  cache. Before starting: headless interpreter tests through a recording
-  fake device, so the shared semantics have a reference that is not one of
-  the backends under test.
+  cache. Before starting: extend `Illumo.GpuDevice.*` (added in M2) until
+  the shared semantics have a reference that is not one of the backends
+  under test, since the parity tests would then compare three users of one
+  interpreter.
 
 ## 9. Verification
 
@@ -175,4 +177,51 @@ per-device interpreter, reverting both restores the facades.
 
 ## 12. Validation log
 
-Filled in as milestones complete.
+Environment: Ubuntu 24.04 container, GCC 13.3, CMake 3.28, Ninja, Release,
+`-DILLUMO_BUILD_WASM_RUNTIME=OFF`, CSim not cloned; Xvfb with Mesa 25.2.8
+llvmpipe (OpenGL 4.5) and lavapipe (Vulkan 1.4); MinGW-w64 g++ 13.2 with
+Microsoft DirectX-Headers (main, fetched for the check only, not vendored).
+Baseline: the unchanged tree a76bb68 built the same way.
+
+- Baseline: `IllumoGpuTests backendparity` (0 of 7 differ), `instancing`
+  and `renderworld` on OpenGL and Vulkan pass; two `--dump` runs are
+  byte-identical, so the software rasterizers are deterministic.
+- M1 (e2829f0): the same GPU tests pass and all 14 dumped images (7 scenes,
+  OpenGL and Vulkan) are byte-identical to the baseline's. The Direct3D 12
+  syntax check reports exactly the baseline's diagnostics (MinGW header
+  differences: `GetCPU/GPUDescriptorHandleForHeapStart` in
+  `D3D12Device.cpp`, a duplicate `d3d12shader.h` in
+  `D3D12ShaderCompiler.cpp`); every other D3D12 file is clean with `-Wall
+  -Wextra`.
+- M2 (49d0de0): the same GPU results, all 14 images byte-identical to the
+  baseline's. Full build and `ctest -L IllumoWorkspace`: 452/452 pass
+  (before the two new cases). `Illumo.GpuDevice.Resources` (22 checks) and
+  `Illumo.GpuDevice.TokenValidation` (17 checks) pass; removing the
+  per-submission program reset or the index-range check makes three checks
+  fail. The Direct3D 12 syntax check first caught a helper
+  (`compileProgramCode`) the move had dropped; after restoring it the
+  diagnostics equal the baseline's. clang-tidy 18 with the repository
+  configuration is clean on every changed file that builds on Linux, apart
+  from one finding the baseline has too
+  (`bugprone-suspicious-memory-comparison` on `VkViewport` in the Vulkan
+  draw code, unchanged by this work).
+- Size: Vulkan sources 6,000 to 4,350 lines, Direct3D 12 5,774 to 4,128,
+  shared layer (`GpuBackend`, `GpuDevice`) 2,049; production code net
+  -1,247 lines. Verbatim overlap between the two device implementations
+  fell from about 2,400 to about 700 lines, nearly all in presentation,
+  readback and submission (out of scope, section 3).
+
+Deviations from the design:
+
+- Mesh enrollment moved into the base too (validation, record fields,
+  uploads, GLMesh's byte-index widening); `buildMesh` only creates the
+  buffers. Both devices had the same code apart from the buffer calls.
+- The headless `Illumo.GpuDevice.*` tests were added in M2 instead of
+  waiting for M3.
+- Two checks in the moved code became capacity checks: "the mesh has no
+  index buffer" became "its index capacity (or count) is zero". A mesh has
+  an index buffer exactly when its index capacity is not zero, so both
+  refuse the same updates and draws.
+
+Not verified here: anything on Windows, Direct3D 12 at run time, NVIDIA or
+other hardware drivers, CSim's tests, the WASM packages and captures.

@@ -41,6 +41,16 @@ into a reusable library. The Game of Life sim is CSim.
   clone is main-only. A grep of main or of the local clone does NOT
   settle questions about release-branch features. State the branch
   with every backend claim.
+- Shared Vulkan/D3D12 backend (D-R40, 2026-10-26, branch
+  `ccr-9a9151a6-vex779` off `release/v26.10` a76bb68, pushed, NOT merged):
+  `Rendering/Gpu/GpuBackend` is now the one IBackend of Vulkan and D3D12,
+  and the `GpuDevice` base holds the token interpreter, OpenGL context
+  state, handle registries and resource front ends once. `VulkanDevice` and
+  `D3D12Device` keep only API hooks. OpenGL is unchanged (it stays the
+  parity reference). Plan: docs/gpu-backend-unification-plan.md. Verified
+  only on Linux (Mesa software GPU, see that plan's section 12). D3D12 was
+  compiled with MinGW, never run. Before merging, someone must run the
+  Windows checks in section 9 of the plan, D3D12 parity above all.
 - Vulkan backend is complete (plan milestones M0-M8) and implements the
   full IBackend interface with the same observable results as OpenGL.
 - Switching: `GraphicsAPI` setting, `--graphics-api`, or
@@ -124,6 +134,15 @@ into a reusable library. The Game of Life sim is CSim.
       `main` and `release/v26.10`, with the two stale Linux docs corrected
       in the same change.
 
+- [ ] OpenGL on the shared `GpuDevice` (D-R40 plan, M3): move OpenGL onto
+      the shared interpreter too, or keep it as the independent parity
+      reference. Claude recommends waiting until D-R40 is verified on
+      Windows, then deciding. Owner decision.
+- [ ] D-R40 Windows verification: Release build, full IllumoWorkspace with
+      CSim, Illumo.Gpu.BackendParity, Illumo.Gpu.D3D12*Parity,
+      `IllumoCaptureGpuTests --api d3d12`, ILLUMO_D3D12_DEBUG=1 runs of each
+      package (resize, minimize, maximize). Not done by anyone yet.
+
 ## Decision log
 
 - 2026-10-22 — Vulkan backend declared complete (M0-M8), GL/Vulkan parity validated as above.
@@ -149,6 +168,11 @@ into a reusable library. The Game of Life sim is CSim.
   switching projects, `IllEd.Gpu.Smoke`, play programs that host Saturn's
   scene) committed on `release/v26.10` as 3bf4c0ff. Local only, not pushed
   as of this entry. Plan: docs/illed-editing-wave4-plan.md.
+
+- 2026-10-26 — D-R40: Vulkan and D3D12 share one IBackend (`GpuBackend`)
+  and one token interpreter and resource front end (`GpuDevice`), at Ryan's
+  request to unify the backends and keep per API only what differs. OpenGL
+  stays separate for now (open decision above). Not yet verified on Windows.
 
 ## Handoff note template (use for each session)
 
@@ -265,3 +289,35 @@ into a reusable library. The Game of Life sim is CSim.
   (`CSIM_READ_TOKEN`).
 - Files changed: build.py, tools/test_build.py, AGENTS.md,
   docs/packages/platform-linux.md, AI_SYNC.md.
+
+### 2026-10-26 — Claude (Claude Code on the web) — Shared Vulkan/D3D12 backend (D-R40)
+- Did: Ryan asked to unify the renderer backends into one class with the
+  API-specific parts behind it. Measured first: about 2,400 of each explicit
+  backend's 6,000 lines were verbatim Vulkan/D3D12 copies; OpenGL is built
+  differently. Wrote docs/gpu-backend-unification-plan.md, then M1
+  (e2829f0: one `GpuBackend` replaces `VulkanBackend`/`D3D12Backend`) and
+  M2 (49d0de0: `GpuDevice` base with the interpreter, GL state, registries
+  and front ends; devices keep hooks). Added headless
+  `Illumo.GpuDevice.Resources` and `Illumo.GpuDevice.TokenValidation`.
+  Recorded D-R40 (consensus doc, LaTeX chapter 05, decision log, open
+  question for OpenGL) and updated the Rendering, Vulkan and D3D12
+  AGENTS.md files.
+- Verified (Linux container, Mesa llvmpipe/lavapipe under Xvfb): GPU
+  parity, instancing and RenderWorld tests pass on OpenGL and Vulkan, and
+  all 14 parity images are byte-identical to the unchanged tree's;
+  IllumoWorkspace 452/452 plus the 2 new cases; clang-tidy clean apart from
+  one pre-existing finding. D3D12: MinGW-w64 + DirectX-Headers syntax
+  check, no diagnostics beyond the unchanged tree's (it caught one dropped
+  helper during M2, fixed).
+- Not verified: Windows, D3D12 at run time, real GPUs, CSim tests, WASM
+  packages. The design book (illumo.tex, architecture-map.tex) builds with
+  latexmk here with no LaTeX errors and the same box warnings as before;
+  docs/output/*.pdf is gitignored, so no PDF is committed.
+- Left open / next: the Windows checks (open item above) before merging;
+  owner decision on moving OpenGL onto GpuDevice (M3). No PR opened.
+- Files changed: Illumo/Source/Rendering/{Gpu,Vulkan,D3D12}/*,
+  Illumo/CMakeLists.txt, Illumo/Tests/{TestGpuDevice,TestMain}.cpp,
+  docs/gpu-backend-unification-plan.md, docs/architecture-consensus.md,
+  docs/{vulkan,d3d12}-backend-plan.md (status notes),
+  docs/latex/sections/{05,09,10}-*.tex, AGENTS.md (source map),
+  Illumo/Source/Rendering/{,Vulkan/,D3D12/}AGENTS.md, AI_SYNC.md.
