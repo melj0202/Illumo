@@ -55,131 +55,32 @@ static const VkComponentMapping kIdentity{ VK_COMPONENT_SWIZZLE_IDENTITY,
                                            VK_COMPONENT_SWIZZLE_IDENTITY,
                                            VK_COMPONENT_SWIZZLE_IDENTITY };
 
-std::unique_ptr<VulkanMesh>
-VulkanDevice::buildMesh(const void* vertices,
-                        size_t vertexSize,
-                        const void* indices,
-                        size_t indexSize,
-                        MeshVertexLayout layout,
-                        bool dynamic)
+std::unique_ptr<GpuMesh>
+VulkanDevice::buildMesh(size_t vertexSize, size_t indexSize)
 {
-  if (vertexSize == 0 || (vertices == nullptr && !dynamic)) {
-    return nullptr;
-  }
   std::unique_ptr<VulkanMesh> mesh = std::make_unique<VulkanMesh>();
-  mesh->layout = layout;
-  mesh->dynamic = dynamic;
-  mesh->vertexCapacity = vertexSize;
-  mesh->indexCapacity = indexSize;
   if (!createBufferMemory(
         mesh->vertices, vertexSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) {
     return nullptr;
   }
-  if (indexSize > 0) {
-    if (!createBufferMemory(
-          mesh->indices, indexSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT)) {
-      retireBuffer(mesh->vertices);
-      return nullptr;
-    }
-    mesh->indexCount = static_cast<unsigned>(indexSize / sizeof(unsigned int));
-  }
-  if (vertices != nullptr) {
-    uploadToBuffer(mesh->vertices, 0, vertices, vertexSize);
-  }
-  if (indices != nullptr && indexSize > 0) {
-    if (indexSize % sizeof(unsigned int) == 0) {
-      uploadToBuffer(mesh->indices, 0, indices, indexSize);
-    } else {
-      // GLMesh widens byte indices, then uploads the enrolled byte count.
-      std::vector<unsigned int> widened(indexSize);
-      const unsigned char* bytes = static_cast<const unsigned char*>(indices);
-      for (size_t index = 0; index < indexSize; ++index) {
-        widened[index] = bytes[index];
-      }
-      uploadToBuffer(mesh->indices, 0, widened.data(), indexSize);
-    }
+  if (indexSize > 0 && !createBufferMemory(mesh->indices,
+                                           indexSize,
+                                           VK_BUFFER_USAGE_INDEX_BUFFER_BIT)) {
+    retireBuffer(mesh->vertices);
+    return nullptr;
   }
   return mesh;
 }
 
 void
-VulkanDevice::releaseMesh(VulkanMesh& mesh)
+VulkanDevice::releaseMesh(GpuMesh& record)
 {
+  VulkanMesh& mesh = static_cast<VulkanMesh&>(record);
   retireBuffer(mesh.vertices);
   retireBuffer(mesh.indices);
 }
 
-MeshHandle
-VulkanDevice::createMesh(const void* vertices,
-                         size_t vertexSize,
-                         const void* indices,
-                         size_t indexSize,
-                         MeshVertexLayout layout,
-                         bool dynamic)
-{
-  ILLUMO_PROFILE_ZONE("VulkanDevice.createMesh");
-  std::unique_ptr<VulkanMesh> mesh =
-    buildMesh(vertices, vertexSize, indices, indexSize, layout, dynamic);
-  if (!mesh) {
-    Logger::LogWarning("CreateMesh: the GPU mesh could not be created (" +
-                       std::to_string(vertexSize) + " vertex bytes, " +
-                       std::to_string(indexSize) + " index bytes)");
-    return {};
-  }
-  const MeshHandle handle = m_meshHandles.allocate();
-  Entry<VulkanMesh>& entry = slotEntry(m_meshes, handle.slot);
-  entry.generation = handle.generation;
-  entry.resource = std::move(mesh);
-  return handle;
-}
-
-bool
-VulkanDevice::replaceMesh(MeshHandle handle,
-                          const void* vertices,
-                          size_t vertexSize,
-                          const void* indices,
-                          size_t indexSize,
-                          MeshVertexLayout layout,
-                          bool dynamic)
-{
-  ILLUMO_PROFILE_ZONE("VulkanDevice.replaceMesh");
-  VulkanMesh* current = resolveMesh(handle);
-  if (current == nullptr) {
-    Logger::LogWarning("ReplaceMesh: stale mesh handle ignored");
-    return false;
-  }
-  std::unique_ptr<VulkanMesh> replacement =
-    buildMesh(vertices, vertexSize, indices, indexSize, layout, dynamic);
-  if (!replacement) {
-    Logger::LogWarning(
-      "ReplaceMesh: the replacement mesh is invalid; keeping the old one");
-    return false;
-  }
-  releaseMesh(*current);
-  m_meshes[handle.slot].resource = std::move(replacement);
-  return true;
-}
-
-bool
-VulkanDevice::destroyMesh(MeshHandle handle)
-{
-  VulkanMesh* mesh = resolveMesh(handle);
-  if (mesh == nullptr) {
-    Logger::LogWarning("DestroyMesh: stale mesh handle ignored");
-    return false;
-  }
-  releaseMesh(*mesh);
-  m_meshes[handle.slot] = Entry<VulkanMesh>{};
-  return m_meshHandles.release(handle);
-}
-
-bool
-VulkanDevice::isMeshValid(MeshHandle handle) const
-{
-  return m_meshHandles.isCurrent(handle) && resolveMesh(handle) != nullptr;
-}
-
-std::unique_ptr<VulkanProgram>
+std::unique_ptr<GpuProgram>
 VulkanDevice::buildProgram(const ShaderSources& sources, std::string* error)
 {
   std::unique_ptr<VulkanProgram> program = std::make_unique<VulkanProgram>();
@@ -254,8 +155,9 @@ VulkanDevice::buildProgram(const ShaderSources& sources, std::string* error)
 }
 
 void
-VulkanDevice::releaseProgram(VulkanProgram& program)
+VulkanDevice::releaseProgram(GpuProgram& record)
 {
+  VulkanProgram& program = static_cast<VulkanProgram&>(record);
   Retired retired;
   retired.modules[0] = program.vertexModule;
   retired.modules[1] = program.fragmentModule;
@@ -282,60 +184,7 @@ VulkanDevice::releaseProgram(VulkanProgram& program)
   retire(std::move(retired));
 }
 
-ShaderHandle
-VulkanDevice::createShader(const ShaderSources& sources, std::string* error)
-{
-  ILLUMO_PROFILE_ZONE("VulkanDevice.createShader");
-  std::unique_ptr<VulkanProgram> program = buildProgram(sources, error);
-  if (!program) {
-    return {};
-  }
-  const ShaderHandle handle = m_shaderHandles.allocate();
-  Entry<VulkanProgram>& entry = slotEntry(m_programs, handle.slot);
-  entry.generation = handle.generation;
-  entry.resource = std::move(program);
-  return handle;
-}
-
-bool
-VulkanDevice::replaceShader(ShaderHandle handle,
-                            const ShaderSources& sources,
-                            std::string* error)
-{
-  VulkanProgram* current = resolveProgram(handle);
-  if (current == nullptr) {
-    Logger::LogWarning("ReplaceShaderProgram: stale shader handle ignored");
-    return false;
-  }
-  std::unique_ptr<VulkanProgram> replacement = buildProgram(sources, error);
-  if (!replacement) {
-    return false;
-  }
-  releaseProgram(*current);
-  m_programs[handle.slot].resource = std::move(replacement);
-  return true;
-}
-
-bool
-VulkanDevice::destroyShader(ShaderHandle handle)
-{
-  VulkanProgram* program = resolveProgram(handle);
-  if (program == nullptr) {
-    Logger::LogWarning("DestroyShaderProgram: stale shader handle ignored");
-    return false;
-  }
-  releaseProgram(*program);
-  m_programs[handle.slot] = Entry<VulkanProgram>{};
-  return m_shaderHandles.release(handle);
-}
-
-bool
-VulkanDevice::isShaderValid(ShaderHandle handle) const
-{
-  return m_shaderHandles.isCurrent(handle) && resolveProgram(handle) != nullptr;
-}
-
-std::unique_ptr<VulkanTexture>
+std::unique_ptr<GpuTexture>
 VulkanDevice::buildTexture(const unsigned char* data,
                            int width,
                            int height,
@@ -396,7 +245,7 @@ VulkanDevice::buildTexture(const unsigned char* data,
   return texture;
 }
 
-std::unique_ptr<VulkanTexture>
+std::unique_ptr<GpuTexture>
 VulkanDevice::buildCubemap(const std::array<const unsigned char*, 6>& faces,
                            int width,
                            int height,
@@ -460,7 +309,7 @@ VulkanDevice::buildCubemap(const std::array<const unsigned char*, 6>& faces,
   return texture;
 }
 
-std::unique_ptr<VulkanTexture>
+std::unique_ptr<GpuTexture>
 VulkanDevice::buildRenderTarget(int width,
                                 int height,
                                 TextureFormat format,
@@ -547,8 +396,9 @@ VulkanDevice::buildRenderTarget(int width,
 }
 
 void
-VulkanDevice::releaseTexture(VulkanTexture& texture)
+VulkanDevice::releaseTexture(GpuTexture& record)
 {
+  VulkanTexture& texture = static_cast<VulkanTexture&>(record);
   if (m_renderingActive) {
     for (unsigned index = 0; index < m_target.colorCount; ++index) {
       if (m_target.colors[index].image == &texture.image) {
@@ -562,355 +412,42 @@ VulkanDevice::releaseTexture(VulkanTexture& texture)
   retireImage(texture.image);
 }
 
-TextureHandle
-VulkanDevice::registerTexture(std::unique_ptr<VulkanTexture> texture)
-{
-  const TextureHandle handle = m_textureHandles.allocate();
-  Entry<VulkanTexture>& entry = slotEntry(m_textures, handle.slot);
-  entry.generation = handle.generation;
-  entry.resource = std::move(texture);
-  return handle;
-}
-
 int
 VulkanDevice::maxTextureSize() const
 {
   return static_cast<int>(m_context.limits().maxImageDimension2D);
 }
 
-TextureHandle
-VulkanDevice::createTexture(const unsigned char* data,
-                            int width,
-                            int height,
-                            int channels,
-                            const TextureOptions& options)
+unsigned
+VulkanDevice::maxColorAttachments() const
 {
-  ILLUMO_PROFILE_ZONE("VulkanDevice.createTexture");
-  if (data == nullptr || width <= 0 || height <= 0) {
-    Logger::LogWarning("CreateTexture: missing pixels or invalid size " +
-                       std::to_string(width) + "x" + std::to_string(height));
-    return {};
-  }
-  std::unique_ptr<VulkanTexture> texture =
-    buildTexture(data, width, height, channels, options);
-  if (!texture) {
-    Logger::LogWarning("CreateTexture: the GPU texture could not be created (" +
-                       std::to_string(width) + "x" + std::to_string(height) +
-                       ", " + std::to_string(channels) + " channels)");
-    return {};
-  }
-  const TextureHandle handle = registerTexture(std::move(texture));
-  // OpenGL leaves a new 2D texture bound to unit 0.
-  m_units[0].texture2D = handle;
-  return handle;
+  return std::min(kVulkanMaxColorAttachments,
+                  m_context.limits().maxColorAttachments);
 }
 
-TextureHandle
-VulkanDevice::createCubemap(const std::array<const unsigned char*, 6>& faces,
-                            int width,
-                            int height,
-                            int channels)
+void
+VulkanDevice::releaseFramebufferTarget(FramebufferHandle handle)
 {
-  ILLUMO_PROFILE_ZONE("VulkanDevice.createCubemap");
-  for (size_t index = 0; index < faces.size(); ++index) {
-    if (faces[index] == nullptr) {
-      Logger::LogWarning("CreateCubemap: face " + std::to_string(index) +
-                         " has no pixels");
-      return {};
-    }
-  }
-  if (width <= 0 || height <= 0 || width != height ||
-      (channels != 1 && channels != 3 && channels != 4)) {
-    Logger::LogWarning("CreateCubemap: faces must be square with 1, 3 or 4 "
-                       "channels (got " +
-                       std::to_string(width) + "x" + std::to_string(height) +
-                       ", " + std::to_string(channels) + " channels)");
-    return {};
-  }
-  std::unique_ptr<VulkanTexture> texture =
-    buildCubemap(faces, width, height, channels);
-  if (!texture) {
-    Logger::LogWarning("CreateCubemap: the GPU cubemap could not be created");
-    return {};
-  }
-  return registerTexture(std::move(texture));
-}
-
-bool
-VulkanDevice::replaceTexture(TextureHandle handle,
-                             const unsigned char* data,
-                             int width,
-                             int height,
-                             int channels,
-                             const TextureOptions& options)
-{
-  ILLUMO_PROFILE_ZONE("VulkanDevice.replaceTexture");
-  VulkanTexture* current = resolveTexture(handle);
-  if (current == nullptr) {
-    Logger::LogWarning("ReplaceTexture: stale texture handle ignored");
-    return false;
-  }
-  if (current->cubemap || data == nullptr || width <= 0 || height <= 0) {
-    Logger::LogWarning("ReplaceTexture: invalid texture data ignored");
-    return false;
-  }
-  std::unique_ptr<VulkanTexture> replacement =
-    buildTexture(data, width, height, channels, options);
-  if (!replacement) {
-    return false;
-  }
-  releaseTexture(*current);
-  m_textures[handle.slot].resource = std::move(replacement);
-  m_units[0].texture2D = handle;
-  return true;
-}
-
-bool
-VulkanDevice::replaceCubemap(TextureHandle handle,
-                             const std::array<const unsigned char*, 6>& faces,
-                             int width,
-                             int height,
-                             int channels)
-{
-  ILLUMO_PROFILE_ZONE("VulkanDevice.replaceCubemap");
-  VulkanTexture* current = resolveTexture(handle);
-  if (current == nullptr || !current->cubemap || width <= 0 ||
-      width != height || (channels != 1 && channels != 3 && channels != 4)) {
-    return false;
-  }
-  std::unique_ptr<VulkanTexture> replacement =
-    buildCubemap(faces, width, height, channels);
-  if (!replacement) {
-    return false;
-  }
-  releaseTexture(*current);
-  m_textures[handle.slot].resource = std::move(replacement);
-  return true;
-}
-
-bool
-VulkanDevice::destroyTexture(TextureHandle handle)
-{
-  VulkanTexture* texture = resolveTexture(handle);
-  if (texture == nullptr) {
-    Logger::LogWarning("DestroyTexture: stale texture handle ignored");
-    return false;
-  }
-  releaseTexture(*texture);
-  m_textures[handle.slot] = Entry<VulkanTexture>{};
-  return m_textureHandles.release(handle);
-}
-
-bool
-VulkanDevice::isTextureValid(TextureHandle handle) const
-{
-  return m_textureHandles.isCurrent(handle) &&
-         resolveTexture(handle) != nullptr;
-}
-
-TextureInfo
-VulkanDevice::textureInfo(TextureHandle handle) const
-{
-  TextureInfo info;
-  const VulkanTexture* texture = resolveTexture(handle);
-  if (texture == nullptr) {
-    return info;
-  }
-  info.width = static_cast<int>(texture->image.width);
-  info.height = static_cast<int>(texture->image.height);
-  info.channels = texture->channels;
-  return info;
-}
-
-FramebufferHandle
-VulkanDevice::createFramebuffer(const FramebufferDesc& desc,
-                                FramebufferAttachments* outAttachments)
-{
-  ILLUMO_PROFILE_ZONE("VulkanDevice.createFramebuffer");
-  if (desc.width <= 0 || desc.height <= 0) {
-    Logger::LogError("CreateFramebuffer: invalid dimensions");
-    return {};
-  }
-  const uint32_t maximumColors = std::min(
-    kVulkanMaxColorAttachments, m_context.limits().maxColorAttachments);
-  if (desc.colorAttachments.size() > maximumColors ||
-      (desc.colorAttachments.empty() &&
-       desc.depthStencilFormat == TextureFormat::None)) {
-    Logger::LogError("CreateFramebuffer: framebuffer is incomplete");
-    return {};
-  }
-  std::unique_ptr<VulkanFramebuffer> framebuffer =
-    std::make_unique<VulkanFramebuffer>();
-  framebuffer->width = desc.width;
-  framebuffer->height = desc.height;
-  bool failed = false;
-  for (size_t index = 0; index < desc.colorAttachments.size(); ++index) {
-    const FramebufferAttachmentDesc& attachment = desc.colorAttachments[index];
-    const bool colorFormat =
-      attachment.format != TextureFormat::Depth24 &&
-      attachment.format != TextureFormat::Depth24Stencil8 &&
-      attachment.format != TextureFormat::None;
-    std::unique_ptr<VulkanTexture> texture =
-      colorFormat ? buildRenderTarget(desc.width,
-                                      desc.height,
-                                      attachment.format,
-                                      attachment.filter,
-                                      attachment.wrap)
-                  : nullptr;
-    if (!texture) {
-      Logger::LogError(
-        "CreateFramebuffer: failed to create color texture attachment " +
-        std::to_string(index));
-      failed = true;
-      break;
-    }
-    framebuffer->colorTextures.push_back(registerTexture(std::move(texture)));
-  }
-  if (!failed && desc.depthStencilFormat != TextureFormat::None) {
-    const bool depthFormat =
-      desc.depthStencilFormat == TextureFormat::Depth24 ||
-      desc.depthStencilFormat == TextureFormat::Depth24Stencil8;
-    std::unique_ptr<VulkanTexture> texture =
-      depthFormat ? buildRenderTarget(desc.width,
-                                      desc.height,
-                                      desc.depthStencilFormat,
-                                      desc.depthFilter,
-                                      TextureWrap::ClampToEdge)
-                  : nullptr;
-    if (!texture) {
-      Logger::LogError(
-        "CreateFramebuffer: failed to create depth texture attachment");
-      failed = true;
-    } else {
-      framebuffer->depthTexture = registerTexture(std::move(texture));
-    }
-  }
-  if (failed) {
-    for (TextureHandle texture : framebuffer->colorTextures) {
-      destroyTexture(texture);
-    }
-    if (framebuffer->depthTexture.isValid()) {
-      destroyTexture(framebuffer->depthTexture);
-    }
-    return {};
-  }
-  if (outAttachments != nullptr) {
-    outAttachments->colorTextures = framebuffer->colorTextures;
-    outAttachments->depthStencilTexture = framebuffer->depthTexture;
-  }
-  const FramebufferHandle handle = m_framebufferHandles.allocate();
-  Entry<VulkanFramebuffer>& entry = slotEntry(m_framebuffers, handle.slot);
-  entry.generation = handle.generation;
-  entry.resource = std::move(framebuffer);
-  // OpenGL creation leaves the default framebuffer bound and texture unit
-  // 0's 2D target empty.
-  m_framebuffer = FramebufferHandle{};
-  m_units[0].texture2D = TextureHandle{};
-  return handle;
-}
-
-bool
-VulkanDevice::destroyFramebuffer(FramebufferHandle handle)
-{
-  VulkanFramebuffer* framebuffer = resolveFramebuffer(handle);
-  if (framebuffer == nullptr) {
-    Logger::LogWarning("DestroyFramebuffer: stale framebuffer handle ignored");
-    return false;
-  }
   if (m_renderingActive && !m_target.backbuffer && m_target.handle == handle) {
     endRendering();
   }
-  if (m_framebuffer == handle) {
-    m_framebuffer = FramebufferHandle{};
-  }
-  const std::vector<TextureHandle> colors = framebuffer->colorTextures;
-  const TextureHandle depth = framebuffer->depthTexture;
-  for (TextureHandle texture : colors) {
-    if (texture.isValid()) {
-      destroyTexture(texture);
-    }
-  }
-  if (depth.isValid()) {
-    destroyTexture(depth);
-  }
-  m_framebuffers[handle.slot] = Entry<VulkanFramebuffer>{};
-  return m_framebufferHandles.release(handle);
 }
 
-bool
-VulkanDevice::isFramebufferValid(FramebufferHandle handle) const
+std::unique_ptr<GpuBuffer>
+VulkanDevice::buildBuffer(size_t capacityBytes)
 {
-  return m_framebufferHandles.isCurrent(handle) &&
-         resolveFramebuffer(handle) != nullptr;
-}
-
-BufferHandle
-VulkanDevice::createBuffer(BufferUsage usage, size_t capacityBytes)
-{
-  if (capacityBytes == 0) {
-    return {};
-  }
   std::unique_ptr<VulkanBuffer> buffer = std::make_unique<VulkanBuffer>();
-  buffer->usage = usage;
-  buffer->capacity = capacityBytes;
   if (!createBufferMemory(buffer->memory,
                           capacityBytes,
                           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
                             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)) {
-    return {};
+    return nullptr;
   }
-  const BufferHandle handle = m_bufferHandles.allocate();
-  Entry<VulkanBuffer>& entry = slotEntry(m_buffers, handle.slot);
-  entry.generation = handle.generation;
-  entry.resource = std::move(buffer);
-  return handle;
+  return buffer;
 }
 
-bool
-VulkanDevice::destroyBuffer(BufferHandle handle)
+void
+VulkanDevice::releaseBuffer(GpuBuffer& buffer)
 {
-  VulkanBuffer* buffer = resolveBuffer(handle);
-  if (buffer == nullptr) {
-    Logger::LogWarning("DestroyBuffer: stale buffer handle ignored");
-    return false;
-  }
-  retireBuffer(buffer->memory);
-  m_buffers[handle.slot] = Entry<VulkanBuffer>{};
-  return m_bufferHandles.release(handle);
-}
-
-bool
-VulkanDevice::isBufferValid(BufferHandle handle) const
-{
-  return m_bufferHandles.isCurrent(handle) && resolveBuffer(handle) != nullptr;
-}
-
-VulkanMesh*
-VulkanDevice::resolveMesh(MeshHandle handle) const
-{
-  return slotResource(m_meshes, handle.slot, handle.generation);
-}
-
-VulkanProgram*
-VulkanDevice::resolveProgram(ShaderHandle handle) const
-{
-  return slotResource(m_programs, handle.slot, handle.generation);
-}
-
-VulkanTexture*
-VulkanDevice::resolveTexture(TextureHandle handle) const
-{
-  return slotResource(m_textures, handle.slot, handle.generation);
-}
-
-VulkanFramebuffer*
-VulkanDevice::resolveFramebuffer(FramebufferHandle handle) const
-{
-  return slotResource(m_framebuffers, handle.slot, handle.generation);
-}
-
-VulkanBuffer*
-VulkanDevice::resolveBuffer(BufferHandle handle) const
-{
-  return slotResource(m_buffers, handle.slot, handle.generation);
+  retireBuffer(static_cast<VulkanBuffer&>(buffer).memory);
 }

@@ -636,7 +636,7 @@ VulkanDevice::requestFramebufferReadback(std::uint32_t stream,
                                          int height)
 {
   ILLUMO_PROFILE_ZONE("VulkanDevice.requestFramebufferReadback");
-  const VulkanFramebuffer* target = resolveFramebuffer(framebuffer);
+  const GpuFramebuffer* target = resolveFramebuffer(framebuffer);
   if (!isFramebufferValid(framebuffer) || target == nullptr ||
       target->colorTextures.empty() || width < 1 || height < 1 ||
       width > target->width || height > target->height) {

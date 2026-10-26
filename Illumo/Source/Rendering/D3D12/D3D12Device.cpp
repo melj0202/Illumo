@@ -760,17 +760,17 @@ D3D12Device::createDefaults(std::string* error)
 {
   // OpenGL samples an incomplete or missing texture as (0, 0, 0, 1).
   const unsigned char black[4] = { 0, 0, 0, 255 };
-  std::unique_ptr<D3D12Texture> texture =
+  std::unique_ptr<GpuTexture> texture =
     buildTexture(black, 1, 1, 4, TextureOptions{});
   const std::array<const unsigned char*, 6> faces = { black, black, black,
                                                       black, black, black };
-  std::unique_ptr<D3D12Texture> cube = buildCubemap(faces, 1, 1, 4);
+  std::unique_ptr<GpuTexture> cube = buildCubemap(faces, 1, 1, 4);
   if (!texture || !cube) {
     *error = "Direct3D 12 default textures could not be created";
     return false;
   }
-  m_blackTexture = std::move(*texture);
-  m_blackCube = std::move(*cube);
+  m_blackTexture = std::move(static_cast<D3D12Texture&>(*texture));
+  m_blackCube = std::move(static_cast<D3D12Texture&>(*cube));
   const std::vector<unsigned char> zeros(16384, 0);
   const float attribute[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
   if (!createBufferMemory(m_zeroUniforms, zeros.size()) ||
@@ -805,36 +805,7 @@ D3D12Device::shutdown()
   if (m_fence && m_lastSubmittedSerial > 0) {
     waitForSerial(m_lastSubmittedSerial, INFINITE);
   }
-  for (Entry<D3D12Mesh>& entry : m_meshes) {
-    if (entry.resource) {
-      releaseMesh(*entry.resource);
-    }
-  }
-  for (Entry<D3D12Program>& entry : m_programs) {
-    if (entry.resource) {
-      releaseProgram(*entry.resource);
-    }
-  }
-  for (Entry<D3D12Texture>& entry : m_textures) {
-    if (entry.resource) {
-      releaseTexture(*entry.resource);
-    }
-  }
-  for (Entry<D3D12Buffer>& entry : m_buffers) {
-    if (entry.resource) {
-      retireMemory(entry.resource->memory);
-    }
-  }
-  m_meshes.clear();
-  m_programs.clear();
-  m_textures.clear();
-  m_framebuffers.clear();
-  m_buffers.clear();
-  m_meshHandles.clear();
-  m_shaderHandles.clear();
-  m_textureHandles.clear();
-  m_framebufferHandles.clear();
-  m_bufferHandles.clear();
+  releaseResources();
   releaseTexture(m_blackTexture);
   releaseTexture(m_blackCube);
   retireMemory(m_zeroUniforms);

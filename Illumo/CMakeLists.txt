@@ -161,6 +161,8 @@ add_library(Illumo STATIC
   Source/Rendering/Gpu/GlslToSpirv.cpp
   Source/Rendering/Gpu/GlslProgramCache.cpp
   Source/Rendering/Gpu/GpuBackend.cpp
+  Source/Rendering/Gpu/GpuDevice.cpp
+  Source/Rendering/Gpu/GpuDeviceCommands.cpp
   Source/Rendering/Gpu/GpuProgramState.cpp
   Source/Rendering/Gpu/GpuShaderCache.cpp
   Source/Rendering/Gpu/GpuTexels.cpp
@@ -355,6 +357,7 @@ if(BUILD_TESTING)
     Tests/TestShaderPreprocessor.cpp
     Tests/TestVulkanShaders.cpp
     Tests/TestD3D12Shaders.cpp
+    Tests/TestGpuDevice.cpp
     Tests/TestGuiKit.cpp
     Tests/TestGuiDropdownList.cpp
     Tests/TestGuiFileTree.cpp

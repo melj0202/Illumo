@@ -57,47 +57,22 @@ struct D3D12Image
   int dsv = -1;
 };
 
-struct D3D12Texture
+struct D3D12Texture : GpuTexture
 {
   D3D12Image image;
-  int channels = 4;
-  bool cubemap = false;
-  bool renderTarget = false;
-  TextureFormat format = TextureFormat::RGBA8;
-  // Bytes per stored texel that updates convert into; 0: not updatable.
-  int storageBytes = 4;
   // Index into the shader-visible sampler heap.
   unsigned sampler = 0;
 };
 
-struct D3D12Mesh
+struct D3D12Mesh : GpuMesh
 {
   D3D12Memory vertices;
   D3D12Memory indices;
-  MeshVertexLayout layout = MeshVertexLayout::Pos3Color3Uv2;
-  bool dynamic = false;
-  size_t vertexCapacity = 0;
-  size_t indexCapacity = 0;
-  unsigned indexCount = 0;
-  // The instance stream SetInstanceStream attached, kept as a VAO keeps it.
-  BufferHandle instanceBuffer{};
-  unsigned instanceOffset = 0;
-  InstanceLayout instanceLayout = InstanceLayout::None;
 };
 
-struct D3D12Buffer
+struct D3D12Buffer : GpuBuffer
 {
   D3D12Memory memory;
-  BufferUsage usage = BufferUsage::Instance;
-  size_t capacity = 0;
-};
-
-struct D3D12Framebuffer
-{
-  std::vector<TextureHandle> colorTextures;
-  TextureHandle depthTexture{};
-  int width = 0;
-  int height = 0;
 };
 
 static constexpr unsigned kD3D12MaxColorAttachments = 8;
@@ -140,18 +115,14 @@ struct D3D12PipelineKeyEqual
                   const D3D12PipelineKey& right) const;
 };
 
-// A linked program, with the uniform state an OpenGL program object keeps:
-// values persist across draws and frames and start at zero.
-struct D3D12Program
+struct D3D12Program : GpuProgram
 {
-  GlslProgram reflection;
   std::vector<unsigned char> vertexCode;
   std::vector<unsigned char> pixelCode;
   // What the vertex code reads, by location (reflectVertexInputs).
   std::vector<GlslVertexInput> vertexInputs;
   D3D12Ref<ID3D12RootSignature> rootSignature;
   std::vector<D3D12RootBinding> rootLayout;
-  GpuProgramUniforms uniforms;
   uint64_t blockSerial = 0;
   D3D12_GPU_VIRTUAL_ADDRESS blockAddress = 0;
   std::unordered_map<D3D12PipelineKey,
@@ -185,9 +156,9 @@ private:
   std::vector<int> m_free;
 };
 
-// Executes the backend-neutral token stream with the OpenGL backend's
-// observable semantics (docs/d3d12-backend-plan.md, section 5.3), and owns
-// every GPU resource, the submissions and presentation.
+// GpuDevice on Direct3D 12: the resources, recording, submissions and
+// presentation behind the shared token interpreter, with the OpenGL backend's
+// observable semantics (docs/d3d12-backend-plan.md, section 5.3).
 class D3D12Device final : public GpuDevice
 {
 public:
@@ -206,66 +177,7 @@ public:
 
   void beginFrame() override;
   void endFrame() override;
-  void executeQueue(CommandQueue& queue) override;
   void plotFrameStats(size_t commandQueueHighWater) const override;
-
-  MeshHandle createMesh(const void* vertices,
-                        size_t vertexSize,
-                        const void* indices,
-                        size_t indexSize,
-                        MeshVertexLayout layout,
-                        bool dynamic) override;
-  bool replaceMesh(MeshHandle handle,
-                   const void* vertices,
-                   size_t vertexSize,
-                   const void* indices,
-                   size_t indexSize,
-                   MeshVertexLayout layout,
-                   bool dynamic) override;
-  bool destroyMesh(MeshHandle handle) override;
-  bool isMeshValid(MeshHandle handle) const override;
-
-  ShaderHandle createShader(const ShaderSources& sources,
-                            std::string* error) override;
-  bool replaceShader(ShaderHandle handle,
-                     const ShaderSources& sources,
-                     std::string* error) override;
-  bool destroyShader(ShaderHandle handle) override;
-  bool isShaderValid(ShaderHandle handle) const override;
-
-  TextureHandle createTexture(const unsigned char* data,
-                              int width,
-                              int height,
-                              int channels,
-                              const TextureOptions& options) override;
-  TextureHandle createCubemap(const std::array<const unsigned char*, 6>& faces,
-                              int width,
-                              int height,
-                              int channels) override;
-  bool replaceTexture(TextureHandle handle,
-                      const unsigned char* data,
-                      int width,
-                      int height,
-                      int channels,
-                      const TextureOptions& options) override;
-  bool replaceCubemap(TextureHandle handle,
-                      const std::array<const unsigned char*, 6>& faces,
-                      int width,
-                      int height,
-                      int channels) override;
-  bool destroyTexture(TextureHandle handle) override;
-  bool isTextureValid(TextureHandle handle) const override;
-  TextureInfo textureInfo(TextureHandle handle) const override;
-
-  FramebufferHandle createFramebuffer(
-    const FramebufferDesc& desc,
-    FramebufferAttachments* outAttachments) override;
-  bool destroyFramebuffer(FramebufferHandle handle) override;
-  bool isFramebufferValid(FramebufferHandle handle) const override;
-
-  BufferHandle createBuffer(BufferUsage usage, size_t capacityBytes) override;
-  bool destroyBuffer(BufferHandle handle) override;
-  bool isBufferValid(BufferHandle handle) const override;
 
   // Synchronous: submits everything recorded and waits for it.
   FrameReadback readBackbuffer(int width, int height) override;
@@ -280,8 +192,6 @@ public:
 
 private:
   static constexpr uint32_t kSlotCount = 3;
-  static constexpr unsigned kTextureUnits = 32;
-  static constexpr unsigned kUniformBindings = 36;
   static constexpr unsigned kRootParameters = 64;
 
   struct StagingChunk
@@ -316,12 +226,6 @@ private:
     int srv = -1;
     int rtv = -1;
     int dsv = -1;
-  };
-
-  struct TextureUnit
-  {
-    TextureHandle texture2D{};
-    TextureHandle cube{};
   };
 
   // The colour, depth and resolve images standing in for OpenGL's default
@@ -373,33 +277,6 @@ private:
     std::array<ReadbackSlot, 2> slots;
   };
 
-  template<typename T>
-  struct Entry
-  {
-    uint32_t generation = 0;
-    std::unique_ptr<T> resource;
-  };
-
-  // Handle slots are small and dense (ResourceHandlePool), so each registry
-  // is a vector indexed by slot; a released slot holds an empty entry.
-  template<typename T>
-  static Entry<T>& slotEntry(std::vector<Entry<T>>& table, uint32_t slot)
-  {
-    if (slot >= table.size()) {
-      table.resize(static_cast<size_t>(slot) + 1);
-    }
-    return table[slot];
-  }
-  template<typename T>
-  static T* slotResource(const std::vector<Entry<T>>& table,
-                         uint32_t slot,
-                         uint32_t generation)
-  {
-    return slot < table.size() && table[slot].generation == generation
-             ? table[slot].resource.get()
-             : nullptr;
-  }
-
   // Frames, submissions, memory and deferred destruction (D3D12Device.cpp).
   bool createSlots(std::string* error);
   void ensureRecording();
@@ -446,69 +323,76 @@ private:
   bool createDefaults(std::string* error);
 
   // Resources (D3D12DeviceResources.cpp).
-  std::unique_ptr<D3D12Mesh> buildMesh(const void* vertices,
-                                       size_t vertexSize,
-                                       const void* indices,
-                                       size_t indexSize,
-                                       MeshVertexLayout layout,
-                                       bool dynamic);
-  std::unique_ptr<D3D12Program> buildProgram(const ShaderSources& sources,
-                                             std::string* error);
-  std::unique_ptr<D3D12Texture> buildTexture(const unsigned char* data,
-                                             int width,
-                                             int height,
-                                             int channels,
-                                             const TextureOptions& options);
-  std::unique_ptr<D3D12Texture> buildCubemap(
+  std::unique_ptr<GpuMesh> buildMesh(size_t vertexSize,
+                                     size_t indexSize) override;
+  void releaseMesh(GpuMesh& mesh) override;
+  std::unique_ptr<GpuProgram> buildProgram(const ShaderSources& sources,
+                                           std::string* error) override;
+  void releaseProgram(GpuProgram& program) override;
+  std::unique_ptr<GpuTexture> buildTexture(
+    const unsigned char* data,
+    int width,
+    int height,
+    int channels,
+    const TextureOptions& options) override;
+  std::unique_ptr<GpuTexture> buildCubemap(
     const std::array<const unsigned char*, 6>& faces,
     int width,
     int height,
-    int channels);
-  std::unique_ptr<D3D12Texture> buildRenderTarget(int width,
-                                                  int height,
-                                                  TextureFormat format,
-                                                  TextureFilter filter,
-                                                  TextureWrap wrap);
-  void releaseMesh(D3D12Mesh& mesh);
-  void releaseProgram(D3D12Program& program);
-  void releaseTexture(D3D12Texture& texture);
-  TextureHandle registerTexture(std::unique_ptr<D3D12Texture> texture);
-  D3D12Mesh* resolveMesh(MeshHandle handle) const;
-  D3D12Program* resolveProgram(ShaderHandle handle) const;
-  D3D12Texture* resolveTexture(TextureHandle handle) const;
-  D3D12Framebuffer* resolveFramebuffer(FramebufferHandle handle) const;
-  D3D12Buffer* resolveBuffer(BufferHandle handle) const;
+    int channels) override;
+  std::unique_ptr<GpuTexture> buildRenderTarget(int width,
+                                                int height,
+                                                TextureFormat format,
+                                                TextureFilter filter,
+                                                TextureWrap wrap) override;
+  void releaseTexture(GpuTexture& texture) override;
+  std::unique_ptr<GpuBuffer> buildBuffer(size_t capacityBytes) override;
+  void releaseBuffer(GpuBuffer& buffer) override;
+  unsigned maxColorAttachments() const override;
+  void releaseFramebufferTarget(FramebufferHandle handle) override;
+  // This device's resource behind a handle, or nullptr.
+  D3D12Mesh* resolveMesh(MeshHandle handle) const
+  {
+    return static_cast<D3D12Mesh*>(findMesh(handle));
+  }
+  D3D12Program* resolveProgram(ShaderHandle handle) const
+  {
+    return static_cast<D3D12Program*>(findProgram(handle));
+  }
+  D3D12Texture* resolveTexture(TextureHandle handle) const
+  {
+    return static_cast<D3D12Texture*>(findTexture(handle));
+  }
+  D3D12Buffer* resolveBuffer(BufferHandle handle) const
+  {
+    return static_cast<D3D12Buffer*>(findBuffer(handle));
+  }
 
   // Tokens (D3D12DeviceCommands.cpp).
-  void executeCommand(const RenderCommand& command);
-  void executeList(const RecordedCommandList* list);
-  void reportFrameError(const char* message);
-  void setUniform(const char* name,
-                  const UniformKey& key,
-                  GlslValueType given,
-                  const void* value,
-                  size_t bytes);
-  void updateTexture(const CmdUpdateTexture& update);
-  void updateMeshBuffer(const CmdUpdateBuffer& update, bool indices);
-  void writeBuffer(const CmdWriteBuffer& write);
   void clear(bool color,
              bool depth,
              bool stencil,
              bool mrtAware,
              const CmdClearColor& value,
-             float depthValue);
-  enum class DrawKind
-  {
-    Arrays,
-    Indexed,
-    ArraysInstanced,
-    IndexedInstanced,
-  };
-  void draw(DrawKind kind,
-            unsigned count,
-            unsigned first,
-            unsigned instances,
-            const char* label);
+             float depthValue) override;
+  void recordDraw(DrawKind kind,
+                  unsigned count,
+                  unsigned first,
+                  unsigned instances,
+                  GpuProgram& program,
+                  GpuMesh& mesh) override;
+  bool uploadTexture(GpuTexture& texture,
+                     const CmdUpdateTexture& update,
+                     int channels) override;
+  void uploadMeshData(GpuMesh& mesh,
+                      bool indices,
+                      size_t offset,
+                      const void* data,
+                      size_t size) override;
+  void uploadBufferData(GpuBuffer& buffer,
+                        size_t offset,
+                        const void* data,
+                        size_t size) override;
   bool resolveTarget(RenderTarget* target);
   // Transitions the target's attachments and binds them unless bound.
   void bindTarget(const RenderTarget& target);
@@ -571,22 +455,6 @@ private:
   bool m_sessionLocked = false;
   std::chrono::steady_clock::time_point m_nextSessionCheck{};
 
-  // OpenGL's context state, which persists across submissions.
-  PipelineState m_state;
-  CullMode m_cullFace = CullMode::Back;
-  WindingOrder m_frontFace = WindingOrder::CounterClockwise;
-  CmdViewport m_viewport{ 0, 0, 0, 0 };
-  CmdScissor m_scissor{ false, 0, 0, 0, 0 };
-  FramebufferHandle m_framebuffer{};
-  std::array<TextureUnit, kTextureUnits> m_units{};
-  std::array<BufferHandle, kUniformBindings> m_uniformBindings{};
-  // GLDevice forgets these at every submission.
-  ShaderHandle m_program{};
-  MeshHandle m_mesh{};
-  bool m_framebufferKnown = false;
-  MeshHandle m_instanceMesh{};
-  size_t m_instanceCapacity = 0;
-
   // What the command list being recorded already holds, so a draw records
   // only what changed. Reset with each recording and by presentation.
   struct RecordedState
@@ -611,17 +479,6 @@ private:
   const D3D12Program* m_lastPipelineProgram = nullptr;
   D3D12PipelineKey m_lastPipelineKey{};
   ID3D12PipelineState* m_lastPipeline = nullptr;
-
-  std::vector<Entry<D3D12Mesh>> m_meshes;
-  std::vector<Entry<D3D12Program>> m_programs;
-  std::vector<Entry<D3D12Texture>> m_textures;
-  std::vector<Entry<D3D12Framebuffer>> m_framebuffers;
-  std::vector<Entry<D3D12Buffer>> m_buffers;
-  ResourceHandlePool<MeshHandle> m_meshHandles;
-  ResourceHandlePool<ShaderHandle> m_shaderHandles;
-  ResourceHandlePool<TextureHandle> m_textureHandles;
-  ResourceHandlePool<FramebufferHandle> m_framebufferHandles;
-  ResourceHandlePool<BufferHandle> m_bufferHandles;
 
   D3D12Texture m_blackTexture;
   D3D12Texture m_blackCube;
