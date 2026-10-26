@@ -2829,7 +2829,10 @@ def build_test_executables(
 
     Discovery only covers the scanned test runners; the WASM runtime and
     package tests are plain add_test() cases whose executables would
-    otherwise be stale or missing when CTest starts.
+    otherwise be stale or missing when CTest starts. CTest lists a test whose
+    executable does not exist yet with an empty command, so its target cannot
+    be named; a fresh tree then builds the default target once, which also
+    stages the app packages the distribution and pack scripts read.
     """
     built = [*workspace.discovery_targets, *workspace.smoke_targets]
     for target in built:
@@ -2840,6 +2843,9 @@ def build_test_executables(
     built_names = set(built) | {target.removesuffix("Discover") for target in built}
     extra: list[str] = []
     for test in ctest_listing(existing_tool("ctest", False), build_directory, arguments.config):
+        if not test.get("command"):
+            runner.run(build_command(arguments, cmake, []))
+            return
         target = ctest_executable_target(test, build_directory)
         if target and target not in built_names and target not in extra:
             extra.append(target)

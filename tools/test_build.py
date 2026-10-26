@@ -1336,6 +1336,20 @@ class WasmRuntimeTests(unittest.TestCase):
         targets = [command[command.index("--target") + 1:] for command in commands]
         self.assertEqual(targets, [["AppTestsDiscover"], ["AppWasmTests"]])
 
+    def test_test_builds_the_default_target_when_an_executable_is_missing(self):
+        # CTest lists a test with an empty command until its executable exists.
+        listing = self.listing()
+        listing[1] = {"name": "App.Wasm.Package"}
+        commands = []
+        runner = build.CommandRunner(False)
+        with patch.object(runner, "run", side_effect=commands.append), \
+             patch.object(build, "ctest_listing", return_value=listing), \
+             patch.object(build, "existing_tool", return_value="ctest"):
+            build.build_test_executables(self.parse(), "cmake", runner, self.workspace())
+        self.assertEqual(len(commands), 2)
+        self.assertEqual(commands[0][commands[0].index("--target") + 1:], ["AppTestsDiscover"])
+        self.assertNotIn("--target", commands[1])
+
     def test_exact_test_resolves_through_ctest_before_prefixes(self):
         commands = []
         arguments = build.create_parser().parse_args(
