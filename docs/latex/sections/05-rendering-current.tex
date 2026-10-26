@@ -559,23 +559,24 @@ SDK 1.4.363.0), built without exceptions; Windows supplies
 
 \subsection{Shared explicit-API backend (D-R40)}
 Vulkan and Direct3D 12 are one \symbolref{IBackend},
-\texttt{Rendering/Gpu/GpuBackend}, around an API-specific device.
+\texttt{Rendering/Gpu/GpuBackend}, around an API-specific driver. A driver
+here is the engine's code for one graphics API, not the GPU vendor's driver.
 \texttt{GpuBackend} owns the token queue, the FPS count, shader preprocessing
-and the readback guards. Its device derives from \texttt{GpuDevice}, which
+and the readback guards. Its driver derives from \texttt{GpuDriver}, which
 holds what does not depend on the API: OpenGL's context state, the token
 interpreter, the handle registries, and the create, replace and destroy front
-ends with every check OpenGL makes. \texttt{GpuDevice} keeps resources as
+ends with every check OpenGL makes. \texttt{GpuDriver} keeps resources as
 shared records (\texttt{GpuMesh}, \texttt{GpuProgram}, \texttt{GpuTexture},
 \texttt{GpuBuffer}, \texttt{GpuFramebuffer}); \texttt{VulkanMesh} and
 \texttt{D3D12Mesh} derive from \texttt{GpuMesh} and add their buffers. The base
 validates a token or call first and only then calls a protected hook, so
-\texttt{VulkanDevice} and \texttt{D3D12Device} contain only API work: build and
+\texttt{VulkanDriver} and \texttt{D3D12Driver} contain only API work: build and
 release resources, clear, record a validated draw, upload, submit, present and
 read back. A further explicit API would implement the same hooks.
 OpenGL keeps its own \texttt{GLBackend} and \texttt{GLDevice}: it is the
 reference \texttt{Illumo.Gpu.BackendParity} compares against.
-\texttt{Illumo.GpuDevice.*} test the shared code headlessly through a
-recording device. The plan and its open OpenGL milestone are in
+\texttt{Illumo.GpuDriver.*} test the shared code headlessly through a
+recording driver. The plan and its open OpenGL milestone are in
 \pathref{docs/gpu-backend-unification-plan.md}.
 
 \subsection{Primitive-composed UI (D-R20)}

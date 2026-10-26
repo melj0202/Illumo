@@ -17,16 +17,22 @@ End state of M1-M2:
 
 - `Rendering/Gpu/GpuBackend` is the only `IBackend` for Vulkan and Direct3D
   12. `VulkanBackend` and `D3D12Backend` no longer exist.
-- `Rendering/Gpu/GpuDevice` holds, once, what both devices duplicated: the
+- `Rendering/Gpu/GpuDriver` holds, once, what both drivers duplicated: the
   OpenGL context state, the token interpreter, handle registries and their
   validation, the create/replace/destroy front ends, frame errors and
   statistics.
-- `VulkanDevice` and `D3D12Device` derive from `GpuDevice` and implement only
+- `VulkanDriver` and `D3D12Driver` derive from `GpuDriver` and implement only
   API hooks: build and release resources, clear, record a validated draw,
   upload, present, read back, submit.
 - No observable change: same pixels, error text, state persistence and
   handle semantics. Profiler zone names in the moved code change from
-  `VulkanDevice.*`/`D3D12Device.*` to `GpuDevice.*`/`GpuBackend.*`.
+  `VulkanDriver.*`/`D3D12Driver.*` to `GpuDriver.*`/`GpuBackend.*`.
+
+Names: "driver" means the engine class that talks to one graphics API, not
+the GPU vendor's driver. M1 and M2 (e2829f0, 49d0de0) first named these
+classes devices (`GpuDevice`, `VulkanDevice`, `D3D12Device`); 9f1d853
+renamed them drivers at the owner's request. Section 2 uses the file names
+of the tree it measured.
 
 ## 2. Current-state evidence (release/v26.10 at a76bb68)
 
@@ -79,19 +85,19 @@ Not in scope:
 ```text
 IBackend
   GpuBackend            queue, FPS, shader preprocessing, readback guards
-    owns GpuDevice      OpenGL context state, token interpreter, handle
+    owns GpuDriver      OpenGL context state, token interpreter, handle
                         registries, validation, front ends (abstract)
-      VulkanDevice      API hooks: build/release, clear, draw, upload,
-      D3D12Device       frames, present, readback
+      VulkanDriver      API hooks: build/release, clear, draw, upload,
+      D3D12Driver       frames, present, readback
 ```
 
-- `GpuDevice` keeps API resources through base records: `GpuMesh`,
+- `GpuDriver` keeps API resources through base records: `GpuMesh`,
   `GpuProgram`, `GpuTexture`, `GpuBuffer` (polymorphic, non-copyable) and the
   concrete `GpuFramebuffer`. Each API type derives from its record and adds
   its handles (`VulkanMesh : GpuMesh` adds its two buffers). The base sets
   `GpuTexture::width`/`height` itself after a successful build.
-- Each device resolves its own types with a `static_cast` in typed helpers
-  (`VulkanDevice::resolveMesh`); a device only ever registers its own types.
+- Each driver resolves its own types with a `static_cast` in typed helpers
+  (`VulkanDriver::resolveMesh`); a driver only ever registers its own types.
 - Hooks are protected pure virtual functions. The base calls them only after
   it has validated the token or call, so every API sees the same checks in
   the same order. A virtual call per draw or update is a few nanoseconds;
@@ -121,24 +127,24 @@ preprocessor failed`); no test or tool matches it.
 
 ## 7. Ownership, lifetime, threading, errors, platform
 
-- `GpuBackend` owns the device; the device owns every resource as before.
-- Destruction order: each device's destructor calls its own `shutdown`,
-  which calls `GpuDevice::releaseResources` where it released the tables
+- `GpuBackend` owns the driver; the driver owns every resource as before.
+- Destruction order: each driver's destructor calls its own `shutdown`,
+  which calls `GpuDriver::releaseResources` where it released the tables
   before, so API objects are retired while the API device is alive.
 - The base never calls a hook from its constructor or destructor.
 - Direct3D 12 stays Windows-only; `Gpu/` builds everywhere.
 
 ## 8. Milestones
 
-- M1: `GpuBackend` replaces both facades; `GpuDevice` is the device's
+- M1: `GpuBackend` replaces both facades; `GpuDriver` is the driver's
   abstract public interface and holds the frame error, statistics and shader
   cache.
 - M2: the context state, interpreter, registries and front ends move into
-  `GpuDevice`; devices keep only hooks.
-- M3 (proposal): OpenGL as a third `GpuDevice`. `GLBackend`'s registries and
-  front ends and `GLDevice::executeCommand` would go; the GL device would set
+  `GpuDriver`; drivers keep only hooks.
+- M3 (proposal): OpenGL as a third `GpuDriver`. `GLBackend`'s registries and
+  front ends and `GLDevice::executeCommand` would go; the GL driver would set
   OpenGL state at draw time from the shared context state, keeping its bind
-  cache. Before starting: extend `Illumo.GpuDevice.*` (added in M2) until
+  cache. Before starting: extend `Illumo.GpuDriver.*` (added in M2) until
   the shared semantics have a reference that is not one of the backends
   under test, since the parity tests would then compare three users of one
   interpreter.
@@ -157,7 +163,7 @@ On Linux (this container; Ubuntu 24.04, GCC 13.3, Mesa 25.2.8):
 - Direct3D 12 compiled with MinGW-w64 g++ 13 (`-fsyntax-only -Wall
   -Wextra`) against Microsoft's DirectX-Headers, compared with the same
   check of the unchanged tree (whose only errors are MinGW header ABI
-  differences in `D3D12Device.cpp` and `D3D12ShaderCompiler.cpp`).
+  differences in `D3D12Driver.cpp` and `D3D12ShaderCompiler.cpp`).
 - clang-tidy with the repository configuration on the changed sources.
 
 On Windows (required before merging, not available here): Release build,
@@ -169,11 +175,11 @@ maximize.
 ## 10. Rollback
 
 M1 and M2 are separate commits on one branch; reverting M2 restores the
-per-device interpreter, reverting both restores the facades.
+per-API interpreter, reverting both restores the facades.
 
 ## 11. Open decisions
 
-- M3: move OpenGL onto `GpuDevice`, or keep it as the independent reference.
+- M3: move OpenGL onto `GpuDriver`, or keep it as the independent reference.
 
 ## 12. Validation log
 
@@ -190,13 +196,13 @@ Baseline: the unchanged tree a76bb68 built the same way.
   OpenGL and Vulkan) are byte-identical to the baseline's. The Direct3D 12
   syntax check reports exactly the baseline's diagnostics (MinGW header
   differences: `GetCPU/GPUDescriptorHandleForHeapStart` in
-  `D3D12Device.cpp`, a duplicate `d3d12shader.h` in
+  `D3D12Driver.cpp`, a duplicate `d3d12shader.h` in
   `D3D12ShaderCompiler.cpp`); every other D3D12 file is clean with `-Wall
   -Wextra`.
 - M2 (49d0de0): the same GPU results, all 14 images byte-identical to the
   baseline's. Full build and `ctest -L IllumoWorkspace`: 452/452 pass
-  (before the two new cases). `Illumo.GpuDevice.Resources` (22 checks) and
-  `Illumo.GpuDevice.TokenValidation` (17 checks) pass; removing the
+  (before the two new cases). `Illumo.GpuDriver.Resources` (22 checks) and
+  `Illumo.GpuDriver.TokenValidation` (17 checks) pass; removing the
   per-submission program reset or the index-range check makes three checks
   fail. The Direct3D 12 syntax check first caught a helper
   (`compileProgramCode`) the move had dropped; after restoring it the
@@ -206,8 +212,8 @@ Baseline: the unchanged tree a76bb68 built the same way.
   (`bugprone-suspicious-memory-comparison` on `VkViewport` in the Vulkan
   draw code, unchanged by this work).
 - Size: Vulkan sources 6,000 to 4,350 lines, Direct3D 12 5,774 to 4,128,
-  shared layer (`GpuBackend`, `GpuDevice`) 2,049; production code net
-  -1,247 lines. Verbatim overlap between the two device implementations
+  shared layer (`GpuBackend`, `GpuDriver`) 2,049; production code net
+  -1,247 lines. Verbatim overlap between the two driver implementations
   fell from about 2,400 to about 700 lines, nearly all in presentation,
   readback and submission (out of scope, section 3).
 
@@ -215,8 +221,8 @@ Deviations from the design:
 
 - Mesh enrollment moved into the base too (validation, record fields,
   uploads, GLMesh's byte-index widening); `buildMesh` only creates the
-  buffers. Both devices had the same code apart from the buffer calls.
-- The headless `Illumo.GpuDevice.*` tests were added in M2 instead of
+  buffers. Both drivers had the same code apart from the buffer calls.
+- The headless `Illumo.GpuDriver.*` tests were added in M2 instead of
   waiting for M3.
 - Two checks in the moved code became capacity checks: "the mesh has no
   index buffer" became "its index capacity (or count) is zero". A mesh has

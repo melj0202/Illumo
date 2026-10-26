@@ -44,9 +44,9 @@ into a reusable library. The Game of Life sim is CSim.
 - Shared Vulkan/D3D12 backend (D-R40, 2026-10-26, branch
   `ccr-9a9151a6-vex779` off `release/v26.10` a76bb68, pushed, NOT merged):
   `Rendering/Gpu/GpuBackend` is now the one IBackend of Vulkan and D3D12,
-  and the `GpuDevice` base holds the token interpreter, OpenGL context
-  state, handle registries and resource front ends once. `VulkanDevice` and
-  `D3D12Device` keep only API hooks. OpenGL is unchanged (it stays the
+  and the `GpuDriver` base holds the token interpreter, OpenGL context
+  state, handle registries and resource front ends once. `VulkanDriver` and
+  `D3D12Driver` keep only API hooks. OpenGL is unchanged (it stays the
   parity reference). Plan: docs/gpu-backend-unification-plan.md. Verified
   only on Linux (Mesa software GPU, see that plan's section 12). D3D12 was
   compiled with MinGW, never run. Before merging, someone must run the
@@ -134,7 +134,7 @@ into a reusable library. The Game of Life sim is CSim.
       `main` and `release/v26.10`, with the two stale Linux docs corrected
       in the same change.
 
-- [ ] OpenGL on the shared `GpuDevice` (D-R40 plan, M3): move OpenGL onto
+- [ ] OpenGL on the shared `GpuDriver` (D-R40 plan, M3): move OpenGL onto
       the shared interpreter too, or keep it as the independent parity
       reference. Claude recommends waiting until D-R40 is verified on
       Windows, then deciding. Owner decision.
@@ -170,7 +170,7 @@ into a reusable library. The Game of Life sim is CSim.
   as of this entry. Plan: docs/illed-editing-wave4-plan.md.
 
 - 2026-10-26 — D-R40: Vulkan and D3D12 share one IBackend (`GpuBackend`)
-  and one token interpreter and resource front end (`GpuDevice`), at Ryan's
+  and one token interpreter and resource front end (`GpuDriver`), at Ryan's
   request to unify the backends and keep per API only what differs. OpenGL
   stays separate for now (open decision above). Not yet verified on Windows.
 
@@ -296,9 +296,9 @@ into a reusable library. The Game of Life sim is CSim.
   backend's 6,000 lines were verbatim Vulkan/D3D12 copies; OpenGL is built
   differently. Wrote docs/gpu-backend-unification-plan.md, then M1
   (e2829f0: one `GpuBackend` replaces `VulkanBackend`/`D3D12Backend`) and
-  M2 (49d0de0: `GpuDevice` base with the interpreter, GL state, registries
-  and front ends; devices keep hooks). Added headless
-  `Illumo.GpuDevice.Resources` and `Illumo.GpuDevice.TokenValidation`.
+  M2 (49d0de0: `GpuDriver` base with the interpreter, GL state, registries
+  and front ends; drivers keep hooks). Added headless
+  `Illumo.GpuDriver.Resources` and `Illumo.GpuDriver.TokenValidation`.
   Recorded D-R40 (consensus doc, LaTeX chapter 05, decision log, open
   question for OpenGL) and updated the Rendering, Vulkan and D3D12
   AGENTS.md files.
@@ -313,10 +313,17 @@ into a reusable library. The Game of Life sim is CSim.
   packages. The design book (illumo.tex, architecture-map.tex) builds with
   latexmk here with no LaTeX errors and the same box warnings as before;
   docs/output/*.pdf is gitignored, so no PDF is committed.
+- Later the same session: at Ryan's request the per-API classes are
+  "drivers": `GpuDevice`, `VulkanDevice`, `D3D12Device` became `GpuDriver`,
+  `VulkanDriver`, `D3D12Driver` (files, profiler zones, `Illumo.GpuDriver.*`
+  tests; 9f1d853). The notes above use the new names; e2829f0 and 49d0de0
+  still say device. "Driver" means the engine class; the GPU maker's
+  software is the vendor driver. Same checks re-run: 454/454, parity images
+  byte-identical, MinGW D3D12 check unchanged.
 - Left open / next: the Windows checks (open item above) before merging;
-  owner decision on moving OpenGL onto GpuDevice (M3). No PR opened.
+  owner decision on moving OpenGL onto GpuDriver (M3). No PR opened.
 - Files changed: Illumo/Source/Rendering/{Gpu,Vulkan,D3D12}/*,
-  Illumo/CMakeLists.txt, Illumo/Tests/{TestGpuDevice,TestMain}.cpp,
+  Illumo/CMakeLists.txt, Illumo/Tests/{TestGpuDriver,TestMain}.cpp,
   docs/gpu-backend-unification-plan.md, docs/architecture-consensus.md,
   docs/{vulkan,d3d12}-backend-plan.md (status notes),
   docs/latex/sections/{05,09,10}-*.tex, AGENTS.md (source map),

@@ -28,11 +28,11 @@ never see it.
 - `D3D12ShaderCompiler`: the shared SPIR-V (`Rendering/Gpu/GlslToSpirv`)
   to HLSL 5.1 through SPIRV-Cross, DXBC through the system FXC, input
   signatures through `D3DReflect`, root signatures from the reflection.
-- `D3D12Device*`: the `GpuDevice` hooks: building and releasing resources,
+- `D3D12Driver*`: the `GpuDriver` hooks: building and releasing resources,
   clears, validated draws, uploads, submissions, presentation and readback.
 - Shared with Vulkan in `Rendering/Gpu/` (D-R40): `GpuBackend`, the
   `IBackend` (queue, statistics, shader preprocessing, validation text), and
-  `GpuDevice` (OpenGL context state, the token interpreter, handle registries
+  `GpuDriver` (OpenGL context state, the token interpreter, handle registries
   and resource front ends).
 - Dependency: `thirdparty/spirv-cross-1.4.363` built by
   `cmake/IllumoD3D12Deps.cmake`; Windows supplies `d3d12.dll`, `dxgi.dll` and
@@ -70,7 +70,7 @@ never see it.
 ## Verification
 
 - Headless: `Illumo.D3D12.*` in `IllumoTests` (program translation and every
-  engine shader file through HLSL and DXBC), `Illumo.GpuDevice.*` (the shared
+  engine shader file through HLSL and DXBC), `Illumo.GpuDriver.*` (the shared
   interpreter and front ends), plus the selection tests.
 - Real GPU (`IllumoGpu` label): `Illumo.Gpu.BackendParity` compares every
   scene on Vulkan and Direct3D 12 with OpenGL (`--dump <dir>` writes the

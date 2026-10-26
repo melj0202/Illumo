@@ -23,12 +23,12 @@ public headers, guests and products never see it.
   features (line rasterization, sample locations), format mapping.
 - Shared with Direct3D 12 in `Rendering/Gpu/` (D-R40): `GpuBackend` (the
   `IBackend`: queue, statistics, shader preprocessing, validation text),
-  `GpuDevice` (OpenGL context state, the token interpreter, handle registries
+  `GpuDriver` (OpenGL context state, the token interpreter, handle registries
   and resource front ends), `GlslToSpirv` (glslang, GLSL 330 to SPIR-V with
   reflection), `GpuProgramState` (OpenGL program uniform state, attribute
   layouts) and `GpuTexels` (CPU texel and readback conversions), all
   headless-tested.
-- `VulkanDevice*`: the `GpuDevice` hooks: building and releasing resources,
+- `VulkanDriver*`: the `GpuDriver` hooks: building and releasing resources,
   clears, validated draws, uploads, submissions, presentation and readback.
 - Dependencies: `thirdparty/{vulkan-headers,volk,vma,glslang}` built by
   `cmake/IllumoVulkanDeps.cmake`; the driver supplies `vulkan-1.dll`.
@@ -61,7 +61,7 @@ public headers, guests and products never see it.
 ## Verification
 
 - Headless: `Illumo.Vulkan.*` in `IllumoTests` (GLSL preparation, program
-  semantics, engine shaders compile, texel conversion), `Illumo.GpuDevice.*`
+  semantics, engine shaders compile, texel conversion), `Illumo.GpuDriver.*`
   (the shared interpreter and front ends), plus the selection
   tests (`Illumo.Host.GraphicsApiSelection`, `Illumo.BackendConfig.*`,
   `Illumo.SysCmdLine.GraphicsApiOption`, `Illumo.Capture.Validation`).

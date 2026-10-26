@@ -3432,15 +3432,16 @@ sampler token.\\
 \begin{decisionbox}[title={D-R40 \quad 2026-10-26}]
 \textbf{Decision:} \texttt{Rendering/Gpu/GpuBackend} is the one
 \texttt{IBackend} of the explicit graphics APIs: the token queue, FPS count,
-shader preprocessing and readback guards around a \texttt{GpuDevice}.
-\texttt{GpuDevice} holds once what \texttt{VulkanDevice} and
-\texttt{D3D12Device} each kept a copy of: OpenGL's context state, the token
+shader preprocessing and readback guards around a \texttt{GpuDriver} (a
+driver is the engine's code for one graphics API, not the vendor's driver).
+\texttt{GpuDriver} holds once what \texttt{VulkanDriver} and
+\texttt{D3D12Driver} each kept a copy of: OpenGL's context state, the token
 interpreter, the handle registries, the create, replace and destroy front
 ends with their validation, frame errors and statistics. It keeps resources
 as shared records (\texttt{GpuMesh}, \texttt{GpuProgram}, \texttt{GpuTexture},
 \texttt{GpuBuffer}, \texttt{GpuFramebuffer}) that each API's types derive
 from, validates every token or call first, and then calls protected hooks; a
-device implements only API work: build and release resources, clear, record
+driver implements only API work: build and release resources, clear, record
 a validated draw, upload, submit, present and read back. OpenGL keeps its own
 \texttt{GLBackend} and \texttt{GLDevice} as the reference the parity tests
 compare against.\\
@@ -3452,15 +3453,15 @@ to be made twice.\\
 the Direct3D 12 sources from 5,774 to 4,128; the shared layer is 2,049. A
 further explicit API implements the hooks and inherits the OpenGL semantics.
 Pixels, error text and handle semantics are unchanged; the moved code's
-profiler zones are \texttt{GpuDevice.*} and \texttt{GpuBackend.*}, and plot
-names stay per API. \texttt{Illumo.GpuDevice.Resources} and
-\texttt{Illumo.GpuDevice.TokenValidation} test the shared code through a
-recording device. On Linux with Mesa llvmpipe and lavapipe,
+profiler zones are \texttt{GpuDriver.*} and \texttt{GpuBackend.*}, and plot
+names stay per API. \texttt{Illumo.GpuDriver.Resources} and
+\texttt{Illumo.GpuDriver.TokenValidation} test the shared code through a
+recording driver. On Linux with Mesa llvmpipe and lavapipe,
 \texttt{IllumoGpuTests} backend parity, instancing and RenderWorld pass on
 OpenGL and Vulkan, and every parity image is byte-identical to the previous
 tree's. Direct3D 12 was compiled against DirectX-Headers with MinGW-w64 but
 not run; its Windows parity run is pending. Moving OpenGL onto
-\texttt{GpuDevice} stays open (\texttt{docs/gpu-backend-unification-plan.md},
+\texttt{GpuDriver} stays open (\texttt{docs/gpu-backend-unification-plan.md},
 M3).\\
 \textbf{Refines:} D-R33, D-R36
 \end{decisionbox}

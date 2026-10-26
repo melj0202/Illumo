@@ -106,7 +106,7 @@ the plan's validation log):
         a packaged scene is viewed by mounting it and running
         \texttt{viewer\_open}. A dialog-picked scene resolves relative
         references under \texttt{/local}, so they draw as placeholders.
-  \item \textbf{OpenGL on \texttt{GpuDevice}:} D-R40 shares one interpreter
+  \item \textbf{OpenGL on \texttt{GpuDriver}:} D-R40 shares one interpreter
         between Vulkan and Direct3D 12 only. Moving OpenGL onto it would
         remove its own interpreter and registries but also the independent
         reference the parity tests compare with; it needs headless
