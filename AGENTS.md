@@ -505,10 +505,12 @@ requested beyond `IllumoTidy`, report the extra checks and translation units.
 - Ruleset transitions and palettes must remain deterministic. Update factory
   selection, known-mode validation, console help/completion, source lists, and
   focused tests together when ruleset availability changes.
-- Windows is the only supported and currently verified platform. Linux sources
-  and CMake are repaired for Ubuntu 24.04 x86_64 (X11/XWayland, gtkmm-3
-  dialogs) and must not be described as supported until native configure,
-  compile, launch, dialog, render, and shutdown smoke exist on that host.
+- Windows is the only supported and currently verified platform. Linux
+  sources and CMake build on Ubuntu 24.04 x86_64 (X11/XWayland, gtkmm-3
+  dialogs): native configure, compile, and the 626 registered tests were
+  verified on that host on 2026-10-23. Linux must not be described as
+  supported until native launch, dialog, render, and shutdown smoke exist
+  on that host.
   The WASM runtime is Windows x64 only, so Linux currently builds only the
   engine libraries and native test suites and has no runnable applications.
   macOS is not targeted; its platform scaffold has been removed. See
