@@ -7,16 +7,16 @@ if (-not [Environment]::Is64BitOperatingSystem -or $env:OS -ne 'Windows_NT') {
 }
 $packages = @(
   @{
-    Name = 'wasmtime-v48.0.2-x86_64-windows-c-api'
-    Archive = 'wasmtime-v48.0.2-x86_64-windows-c-api.zip'
-    Url = 'https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.2/wasmtime-v48.0.2-x86_64-windows-c-api.zip'
-    Hash = '0aac55c8a8409a33920158f37f82a01ad1e8de757369364bfbd48cd1b834754e'
+    Name = 'wasmtime-v48.0.7-x86_64-windows-c-api'
+    Archive = 'wasmtime-v48.0.7-x86_64-windows-c-api.zip'
+    Url = 'https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.7/wasmtime-v48.0.7-x86_64-windows-c-api.zip'
+    Hash = 'd7f39ef35d9b4ab147a67dec2b26dca34bd2901f0b54efd81b6b51c491d9ca17'
   },
   @{
-    Name = 'wasmtime-v48.0.2-x86_64-windows'
-    Archive = 'wasmtime-v48.0.2-x86_64-windows.zip'
-    Url = 'https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.2/wasmtime-v48.0.2-x86_64-windows.zip'
-    Hash = 'a2e7fadc4f54387c3b0ac371ab984113999f7ce824332eb67201526dfbff2bfe'
+    Name = 'wasmtime-v48.0.7-x86_64-windows'
+    Archive = 'wasmtime-v48.0.7-x86_64-windows.zip'
+    Url = 'https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.7/wasmtime-v48.0.7-x86_64-windows.zip'
+    Hash = '23b43be8720d8fed20caee24d78104c9093717b90f2b4b0bdd171b6dd7f224af'
   },
   @{
     Name = 'wasi-sdk-34.0-x86_64-windows'

@@ -19,7 +19,7 @@ if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 set(ILLUMO_WASM_TOOLS "${CMAKE_SOURCE_DIR}/build-wasm-tools" CACHE PATH
   "Directory populated by tools/bootstrap-wasm.ps1")
-set(_wasmtime "${ILLUMO_WASM_TOOLS}/wasmtime-v48.0.2-x86_64-windows-c-api")
+set(_wasmtime "${ILLUMO_WASM_TOOLS}/wasmtime-v48.0.7-x86_64-windows-c-api")
 set(_wasi_sdk "${ILLUMO_WASM_TOOLS}/wasi-sdk-34.0-x86_64-windows")
 foreach(_required "${_wasmtime}/include/wasmtime.h"
     "${_wasmtime}/lib/wasmtime.dll.lib" "${_wasmtime}/lib/wasmtime.dll"
