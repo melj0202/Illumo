@@ -21,7 +21,7 @@ toward a general-purpose engine. It began as a terminal Conway's Game of
 Life sim, was rewritten for OpenGL, and the renderer/engine code was split
 into a reusable library. The Game of Life sim is CSim.
 
-## Current state — as of 2026-10-25 (renderer and Linux sections updated 2026-10-24; D3D12 parity and size corrected 2026-10-25)
+## Current state — as of 2026-10-29 (renderer and Linux sections updated 2026-10-24; D3D12 parity and size corrected 2026-10-25; Wasmtime pin and Linux WASM runtime added 2026-10-29)
 
 - Renderer is multi-backend. On `main`: OpenGL + Vulkan, OpenGL default.
 - On `release/v26.10` (HEAD 108f687, checked 2026-10-24) there is also a
@@ -88,6 +88,33 @@ into a reusable library. The Game of Life sim is CSim.
   The VM has no display, so Linux GUI/GLX
   smoke testing is impossible there; GUI/GLX smoke on Linux remains
   unproven.
+  Update 2026-10-29 (Claude Code, Ubuntu 24.04.5 cloud container, GCC 13.3,
+  CMake 3.28, no CSim): `release/v26.10` with its release-only Linux sources
+  now builds on Linux; the runtime-OFF Release build passes all 452
+  registered tests (the 626 figure includes CSim's cases; CSim is private
+  and was not cloned here).
+- Wasmtime pin (2026-10-29): bumped 48.0.2 -> 48.0.7 in
+  tools/bootstrap-wasm.ps1 and cmake/IllumoWasm.cmake only, PR #114 into
+  `release/v26.10` (branch `wasmtime-48.0.7`). Its Windows CI run
+  (40877186529, windows-2025, Release, no CSim) passed 543/543, including
+  every Illumo.Wasm.* and Illumo.Runtime.* case. The 48.0.7 C API headers
+  differ from 48.0.2 only in the version macros. Not merged as of this entry.
+- Linux WASM runtime (D-PL2, 2026-10-29): on branch `linux-wasm-runtime`
+  (stacked on the bump; PR into `release/v26.10`). Opt-in on Linux
+  (`ILLUMO_BUILD_WASM_RUNTIME` default OFF there; `bash
+  tools/bootstrap-wasm.sh` or `python3 build.py wasm-tools`, then `--wasm`).
+  Same pins (Wasmtime 48.0.7, WASI SDK 34.0). With it the registered tests go
+  452 -> 541 (+89: 68 Illumo.Wasm, 7 Illumo.Runtime, 6 IllEd.Wasm,
+  2 IllMeshViewer.Wasm, 2 Playground.Wasm, 3 Illumo.Dist, 1 Illumo.Pack) and
+  all 541 pass under Xvfb. GOTCHA: without a display, four WILL_FAIL runtime
+  cases (MountMissingDir, ProjectMissingDir, PackageMissing,
+  CaptureScriptNeedsCapture) pass for the wrong reason (GLFW start-up fails
+  first); run them under xvfb-run. Under Xvfb + Mesa llvmpipe, IllEd,
+  IllMeshViewer and Playground captures render correctly and
+  IllEd.Gpu.Smoke passes. Linux is still NOT supported: no desktop, GPU,
+  input, GTK dialog, fullscreen, audio or Vulkan check on Linux. The jed
+  estimate "626 toward 709" assumed CSim; without CSim the measured pair is
+  452 -> 541.
   Independently confirmed 2026-10-23 by Claude Code (Ubuntu 24.04 container,
   GCC 13.3.0, gtkmm 3.24.9): the minimal repro gives the same error at
   treeview.h:2543; the same file compiles with exceptions on; the narrow
@@ -123,6 +150,21 @@ into a reusable library. The Game of Life sim is CSim.
       jed's VM, 2026-10-23) and submitted 2026-10-25 as pull requests to
       `main` and `release/v26.10`, with the two stale Linux docs corrected
       in the same change.
+- [ ] Merge order (2026-10-29): PR #114 (Wasmtime 48.0.7, green) first,
+      then the Linux WASM runtime PR (stacked on it). Ryan decides.
+- [ ] Linux WASM runtime default: stays OFF until desktop GPU smoke
+      (launch, input, GTK dialogs, fullscreen, audio, shutdown) passes on a
+      named Ubuntu 24.04 host with a display. Who runs that smoke, and where?
+- [ ] Weak runtime refusal tests: Illumo.Runtime.{MountMissingDir,
+      ProjectMissingDir,PackageMissing,CaptureScriptNeedsCapture} only
+      check "exit nonzero". Without a display they pass on GLFW failure;
+      without CSim CaptureScriptNeedsCapture fails on the missing `game` app
+      (Windows CI too). Option: add PASS_REGULAR_EXPRESSION on the log
+      reason. Not changed (out of scope).
+- [ ] Linux compiler helper gaps vs the Windows job object (documented in
+      D-PL2): no one-process limit (descendants die with the process group);
+      RLIMIT_DATA is close to, not equal to, the job's commit limit. Decide
+      whether seccomp or a cgroup is wanted before Linux ships.
 
 ## Decision log
 
@@ -144,6 +186,13 @@ into a reusable library. The Game of Life sim is CSim.
   the release branch's sources were checked, but not its docs. Rule: for a
   release-branch feature, read that branch's docs and tests as well as its
   sources before saying what is or is not recorded.
+- 2026-10-29 — Ryan approved three decisions (relayed by jed in a MUSE
+  message to Claude Code): (1) Wasmtime 48.0.2 -> 48.0.7 in the two pin
+  files only, not Wasmtime 50; (2) start the Linux WASM port in a scoped
+  order (Linux bootstrap, CMake .so branch, POSIX compiler helper, ASan
+  staging guard check); (3) base the work on `release/v26.10`, not `main`
+  (#111 still open there). Claude recorded the port as D-PL2 in
+  docs/latex/sections/09-design-decision-log.tex.
 - 2026-10-25 — IllEd editing wave 4 (D-E42: autosave and recovery, project
   backups, Revert to Saved, editor tabs, the `Project` guest service for
   switching projects, `IllEd.Gpu.Smoke`, play programs that host Saturn's
@@ -265,3 +314,44 @@ into a reusable library. The Game of Life sim is CSim.
   (`CSIM_READ_TOKEN`).
 - Files changed: build.py, tools/test_build.py, AGENTS.md,
   docs/packages/platform-linux.md, AI_SYNC.md.
+
+### 2026-10-29 — Claude (Claude Code on the web) — Wasmtime 48.0.7 and the Linux WASM runtime
+- Did: Bumped Wasmtime 48.0.2 -> 48.0.7 in tools/bootstrap-wasm.ps1 and
+  cmake/IllumoWasm.cmake only (PR #114, branch `wasmtime-48.0.7`). Ported
+  the WASM runtime build to Linux x86_64 on branch `linux-wasm-runtime`,
+  stacked on the bump, in the approved order: tools/bootstrap-wasm.sh;
+  CMake host branch (libwasmtime.so, IMPORTED_NO_SONAME, $ORIGIN, no
+  implib); LinuxWasmCompiler.cpp + LinuxWasmCompilerMain.cpp (memfd,
+  process group, pidfd deadline, RLIMIT_DATA); confirmed
+  illumo_stage_msvc_asan is a no-op off MSVC. build.py: `wasm-tools`,
+  `doctor` and `--wasm` work on Linux; default stays OFF there. Fixed a
+  pre-existing CMake 3.x bug in cmake/IllumoDistribution.cmake (script
+  mode, CMP0057). Recorded D-PL2 and synced README, AGENTS.md,
+  platform-linux.md, architecture-consensus.md, frame-capture.md and the
+  LaTeX chapters 08/09/10.
+- Verified: Windows CI on #114: 543/543 (Release, windows-2025, no CSim).
+  Linux (Ubuntu 24.04.5 container, GCC 13.3, CMake 3.28, glibc 2.39, no
+  CSim): runtime OFF 452/452; runtime ON 541/541 under Xvfb; helper memory
+  limit (IllEd.wasm compiles at 256 MiB, killed at 64 MiB), 1 ms deadline,
+  and descriptor isolation checked with a scratch probe; IllEd,
+  IllMeshViewer and Playground captures and IllEd.Gpu.Smoke under Xvfb +
+  Mesa llvmpipe; clang-tidy clean on the two new C++ files;
+  tools/test_build.py 143 run: 2 failures, the same 2 as before the change
+  (Windows-only assumptions), 6 skipped.
+- Not verified: CSim game package on Linux (CSim not cloned); any desktop,
+  GPU, input, GTK dialog, fullscreen, audio or Vulkan check on Linux; a
+  Linux Debug/ASan runtime build (configure only); the Linux branch on
+  Windows (its PR's CI run decides); the PDF book (no TeX in the container,
+  docs/build.ps1 not run).
+- Left open / next: see Open decisions (merge order, Linux default, weak
+  refusal tests, helper gaps). README.md toolchain line said 48.0.2 after
+  #114; the Linux branch corrects it. Pre-existing quirk noted: a runtime
+  that fails during start-up can leave a launch option (GuestPackage) in
+  envvars.json; it never replays because launch options are cleared before
+  parsing.
+- Files changed: #114: tools/bootstrap-wasm.ps1, cmake/IllumoWasm.cmake.
+  Linux branch: tools/bootstrap-wasm.sh, Illumo/Source/Platform/Linux/
+  LinuxWasmCompiler*.cpp, cmake/IllumoWasm.cmake, IllumoWasiToolchain.cmake,
+  IllumoDistribution.cmake, build.py, tools/test_build.py, AGENTS.md,
+  Illumo/Source/Platform/Linux/AGENTS.md, README.md, docs (listed above),
+  IllMeshViewer/Tests/README.md, AI_SYNC.md.
