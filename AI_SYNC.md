@@ -99,8 +99,8 @@ into a reusable library. The Game of Life sim is CSim.
   (40877186529, windows-2025, Release, no CSim) passed 543/543, including
   every Illumo.Wasm.* and Illumo.Runtime.* case. The 48.0.7 C API headers
   differ from 48.0.2 only in the version macros. Not merged as of this entry.
-- Linux WASM runtime (D-PL2, 2026-10-29): on branch `linux-wasm-runtime`
-  (stacked on the bump; PR into `release/v26.10`). Opt-in on Linux
+- Linux WASM runtime (D-PL2, 2026-10-29): PR #115 from branch
+  `linux-wasm-runtime` (stacked on the bump) into `release/v26.10`. Opt-in on Linux
   (`ILLUMO_BUILD_WASM_RUNTIME` default OFF there; `bash
   tools/bootstrap-wasm.sh` or `python3 build.py wasm-tools`, then `--wasm`).
   Same pins (Wasmtime 48.0.7, WASI SDK 34.0). With it the registered tests go
@@ -151,7 +151,7 @@ into a reusable library. The Game of Life sim is CSim.
       `main` and `release/v26.10`, with the two stale Linux docs corrected
       in the same change.
 - [ ] Merge order (2026-10-29): PR #114 (Wasmtime 48.0.7, green) first,
-      then the Linux WASM runtime PR (stacked on it). Ryan decides.
+      then PR #115, the Linux WASM runtime (stacked on it). Ryan decides.
 - [ ] Linux WASM runtime default: stays OFF until desktop GPU smoke
       (launch, input, GTK dialogs, fullscreen, audio, shutdown) passes on a
       named Ubuntu 24.04 host with a display. Who runs that smoke, and where?
@@ -318,8 +318,8 @@ into a reusable library. The Game of Life sim is CSim.
 ### 2026-10-29 — Claude (Claude Code on the web) — Wasmtime 48.0.7 and the Linux WASM runtime
 - Did: Bumped Wasmtime 48.0.2 -> 48.0.7 in tools/bootstrap-wasm.ps1 and
   cmake/IllumoWasm.cmake only (PR #114, branch `wasmtime-48.0.7`). Ported
-  the WASM runtime build to Linux x86_64 on branch `linux-wasm-runtime`,
-  stacked on the bump, in the approved order: tools/bootstrap-wasm.sh;
+  the WASM runtime build to Linux x86_64 (PR #115, branch
+  `linux-wasm-runtime`, stacked on the bump), in the approved order: tools/bootstrap-wasm.sh;
   CMake host branch (libwasmtime.so, IMPORTED_NO_SONAME, $ORIGIN, no
   implib); LinuxWasmCompiler.cpp + LinuxWasmCompilerMain.cpp (memfd,
   process group, pidfd deadline, RLIMIT_DATA); confirmed
