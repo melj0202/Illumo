@@ -10,18 +10,19 @@ configure and compile the engine libraries and run the native test suites —
 verified 2026-10-23 on Ubuntu 24.04.5 (GCC 13.3) at `main` a0aaf67: the full
 build succeeds and all 626 registered tests pass. `LinuxChildProcess.cpp`,
 the relaunch arguments in `LinuxProcessRelaunch.cpp` and
-`SaveLoad::GetFolderLocation` came later on `release/v26.10` and have not
-been built on Linux. That is not a support claim until the
+`SaveLoad::GetFolderLocation` came later on `release/v26.10`; that branch
+built on Ubuntu 24.04.5 (GCC 13.3) on 2026-10-29 and passed its 452
+registered tests without CSim. That is not a support claim until the
 named host has completed native launch, dialog, input, persistence, and
 shutdown smoke; GUI/GLX smoke remains untested (the verifying VM has no
 display).
 
 Every interactive application (IllumoGame, IllEd, IllMeshViewer) and the
-command-line frame capture now run only as WASM packages inside
-`IllumoRuntime`, whose pinned Wasmtime/WASI SDK toolchain is Windows x64 only.
-A Linux tree therefore has **no runnable applications** until a Linux runtime
-pin is added and verified. The native executables `IllEd`, `IllMeshViewer` and
-`IllumoCapture` are no longer built on any platform.
+command-line frame capture run only as WASM packages inside `IllumoRuntime`.
+On Linux the runtime is **opt-in** (D-PL2, [WASM runtime](#wasm-runtime-opt-in-d-pl2)
+below); a default Linux tree has no runnable applications. The native
+executables `IllEd`, `IllMeshViewer` and `IllumoCapture` are no longer built
+on any platform.
 
 macOS is not targeted; its scaffold has been removed.
 
@@ -132,7 +133,7 @@ cmake --build build-linux-rel --parallel
 
 `python build.py build --config Debug --no-docs --no-tidy` is the orchestrator
 equivalent if you prefer it. `python build.py doctor` reports tools; it does
-not compile. `python build.py play` is Windows x64 only.
+not compile. `python build.py play` needs the runtime (`--wasm` on Linux).
 
 The default Ninja `ALL` target builds the tests without running them, unless
 `ILLUMO_RUN_TESTS_ON_BUILD` is `ON`. Debug AddressSanitizer
@@ -150,7 +151,7 @@ After a successful Debug build, `build-linux/Debug/` should contain the
 test executables and staged runtime files (Ninja puts them in a config folder
 so they do not collide with source-named binary directories such as `IllEd/`):
 
-- Applications: none on Linux (see above)
+- Applications: none unless the WASM runtime is on (see below)
 - Tests: `IllumoTests`, `IllumoGameTests`, `IllEdTests`,
   `IllMeshViewerTests`, `IllumoPublicHeaderSmoke`
 - Staged runtime: `Shader/`, `Assets/`, `envvars.json`,
@@ -164,9 +165,10 @@ ctest --test-dir build-linux -L IllumoWorkspace --output-on-failure
 
 That label includes `Illumo.AtomicFile` / `Illumo.Platform.AtomicFile`,
 the headless `Illumo.Capture.*` API checks, and the native product oracle
-suites. The `*.Wasm.*` and `Illumo.Runtime.*` cases need the Windows runtime
-and are not registered on Linux. Headless tests do not prove GLFW, OpenGL, or
-GTK dialogs.
+suites. The `*.Wasm.*`, `Illumo.Runtime.*`, `Illumo.Dist.*` and
+`Illumo.Pack.*` cases are registered only with the WASM runtime on (below);
+run those under a display. Headless tests do not prove GLFW, OpenGL, or GTK
+dialogs.
 
 If CTest discovery is empty on Ninja, list and run the runners directly:
 
@@ -191,16 +193,78 @@ Windows as a shared bug, not a Linux-only defect.
 | `ios::noreplace` missing | Compiler too old; use GCC 13 or Clang 18 |
 | `glxinfo` / window creation fails | Driver or session; use X11/XWayland |
 
+## WASM runtime (opt-in, D-PL2)
+
+Linux x86_64 has its own runtime pin since 2026-10-29: the Linux builds of
+the Windows toolchain, Wasmtime 48.0.7 (C API and CLI) and WASI SDK 34.0,
+SHA256-pinned in `tools/bootstrap-wasm.sh` and named in
+`cmake/IllumoWasm.cmake`. `ILLUMO_BUILD_WASM_RUNTIME` defaults to `OFF` on
+Linux, so the default build is unchanged and needs no toolchain.
+
+```bash
+python3 build.py wasm-tools        # or: bash tools/bootstrap-wasm.sh
+python3 build.py build --wasm --config Release --no-docs --no-tidy
+```
+
+With CMake directly, add `-DILLUMO_BUILD_WASM_RUNTIME=ON` to a configure
+above. The build adds `IllumoRuntime`, the module compiler helper
+`IllumoWasmCompiler` and the app packages under `apps/`.
+
+How it differs from Windows:
+
+- `libwasmtime.so` has no SONAME. CMake links it by name
+  (`IMPORTED_NO_SONAME`) and copies it beside the runtime, and the runtime and
+  the helper search `$ORIGIN` first, so a `python build.py dist` folder runs
+  where it is moved.
+- `LinuxWasmCompiler.cpp` / `LinuxWasmCompilerMain.cpp` keep the Windows
+  helper's contract (buffer layout, exit codes, error texts). The buffer is a
+  `memfd` on descriptor 3; stdin and stdout are `/dev/null`; no other
+  descriptor is inherited except stderr. The helper leads its own process
+  group, which is killed on the deadline and after every run, asks to die
+  with its parent, writes no core dump, and sets `RLIMIT_DATA` to the
+  compiler memory limit before it reads the module.
+- Gaps against the Windows job object: there is no one-process limit (a
+  descendant of the helper dies with its group), and `RLIMIT_DATA` counts
+  private writable mappings, which is close to but not the job's commit
+  limit. The helper needs glibc 2.34+ (`posix_spawn_file_actions_addclosefrom_np`);
+  the deadline waits on `pidfd_open` (Linux 5.3+) and polls every 2 ms
+  without it.
+
+Verified 2026-10-29 on Ubuntu 24.04.5 (GCC 13.3, CMake 3.28, glibc 2.39) in a
+display-less cloud container, `release/v26.10` with this change, without
+CSim:
+
+- Release build with the runtime: 541 registered `IllumoWorkspace` tests (452
+  without it), all passing under Xvfb: 68 `Illumo.Wasm.*`, 7
+  `Illumo.Runtime.*`, the IllEd, IllMeshViewer and Playground package tests,
+  `Illumo.Dist.*` and `Illumo.Pack.StagedApp`.
+- Without a display, `Illumo.Runtime.MountMissingDir`, `ProjectMissingDir`,
+  `PackageMissing` and `CaptureScriptNeedsCapture` pass for the wrong reason:
+  they expect a failure (`WILL_FAIL`) and the runtime fails at GLFW start-up
+  before it reads the option. Run the suite under `xvfb-run -a` or a desktop
+  session. Without CSim, `CaptureScriptNeedsCapture` fails because the default
+  `game` app is missing, on every host.
+- The helper compiles `IllEd.wasm` within 1 GiB and 256 MiB limits and is
+  stopped at 64 MiB and 16 MiB (`WASM compiler terminated (signal 6)`); a
+  1 ms deadline reports `exceeded its deadline`; a descriptor the host left
+  open without close-on-exec does not reach it.
+- Under Xvfb with Mesa llvmpipe (OpenGL 4.5), `--capture` of `illed`,
+  `meshviewer` and `playground` renders correct frames and exits 0, and
+  `IllEd.Gpu.Smoke` passes. The Vulkan GPU cases skip (no Vulkan driver).
+- Not verified: a desktop session, a GPU driver, input, GTK dialogs,
+  fullscreen, audio output, the Vulkan backend, CSim's game package, and a
+  Debug (AddressSanitizer) runtime build.
+
 ## Run from the staged directory
 
-There is currently nothing to launch on Linux. IllumoGame, IllEd,
-IllMeshViewer and `IllumoRuntime --capture` (which replaced the `IllumoCapture`
-CLI; see [frame-capture.md](../frame-capture.md)) all need the Windows x64
-WASM runtime. The launch, working-directory-independence, capture, and
-application smoke below apply once a Linux runtime pin exists; until then
-record them as unvalidated rather than treating the port as broken.
+A default Linux tree has nothing to launch. With the WASM runtime on,
+`IllumoRuntime --app illed` (or `meshviewer`, `playground`, and `game` with
+CSim) launches from the staged directory, and `--capture` writes a PNG (see
+[frame-capture.md](../frame-capture.md)). Launches have been checked only on
+a virtual X server; the desktop launch, working-directory-independence and
+application smoke below remain unvalidated.
 
-When a runtime exists, each window should accept keyboard and mouse, then exit
+Each window should accept keyboard and mouse, then exit
 0 from `Esc`/`Q` and from the window-manager close button, and a launch from
 `/tmp` must read and write the staged `envvars.json`, not `/tmp/envvars.json`.
 

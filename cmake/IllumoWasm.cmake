@@ -1,10 +1,20 @@
 include_guard(GLOBAL)
 
-# Applications exist only as WASM packages hosted by IllumoRuntime. The pinned
-# Wasmtime/WASI SDK pair is Windows x64 only, so other hosts build the engine
-# and tools without applications. Nothing here names a product: each program
-# brings its own GuestTargets.cmake and PackageTargets.cmake (ILLUMO_PROGRAMS).
+# Applications exist only as WASM packages hosted by IllumoRuntime. The
+# Wasmtime/WASI SDK pins exist for Windows x64, where the runtime builds by
+# default, and Linux x86_64, where it is opt-in (-DILLUMO_BUILD_WASM_RUNTIME=ON)
+# and Linux is not a supported platform (docs/packages/platform-linux.md).
+# Other hosts build the engine and tools without applications. Nothing here
+# names a product: each program brings its own GuestTargets.cmake and
+# PackageTargets.cmake (ILLUMO_PROGRAMS).
+set(_illumo_wasm_host "")
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+  set(_illumo_wasm_host windows)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND
+    CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+  set(_illumo_wasm_host linux)
+endif()
+if(_illumo_wasm_host STREQUAL "windows")
   set(_illumo_wasm_default ON)
 else()
   set(_illumo_wasm_default OFF)
@@ -14,18 +24,33 @@ option(ILLUMO_BUILD_WASM_RUNTIME
 if(NOT ILLUMO_BUILD_WASM_RUNTIME)
   return()
 endif()
-if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-  message(FATAL_ERROR "The pinned WASM runtime currently requires Windows x64")
+if(_illumo_wasm_host STREQUAL "")
+  message(FATAL_ERROR "The pinned WASM runtime requires Windows x64 or Linux x86_64")
 endif()
 set(ILLUMO_WASM_TOOLS "${CMAKE_SOURCE_DIR}/build-wasm-tools" CACHE PATH
-  "Directory populated by tools/bootstrap-wasm.ps1")
-set(_wasmtime "${ILLUMO_WASM_TOOLS}/wasmtime-v48.0.2-x86_64-windows-c-api")
-set(_wasi_sdk "${ILLUMO_WASM_TOOLS}/wasi-sdk-34.0-x86_64-windows")
-foreach(_required "${_wasmtime}/include/wasmtime.h"
-    "${_wasmtime}/lib/wasmtime.dll.lib" "${_wasmtime}/lib/wasmtime.dll"
-    "${_wasi_sdk}/bin/clang++.exe")
+  "Directory populated by tools/bootstrap-wasm.ps1 (Windows) or tools/bootstrap-wasm.sh (Linux)")
+# The pins: one Wasmtime and WASI SDK per host, fetched by the host's
+# bootstrap script. build.py reads these directory names from here.
+if(_illumo_wasm_host STREQUAL "windows")
+  set(_wasmtime "${ILLUMO_WASM_TOOLS}/wasmtime-v48.0.7-x86_64-windows-c-api")
+  set(_wasi_sdk "${ILLUMO_WASM_TOOLS}/wasi-sdk-34.0-x86_64-windows")
+  set(_wasmtime_library "${_wasmtime}/lib/wasmtime.dll")
+  set(_wasmtime_implib "${_wasmtime}/lib/wasmtime.dll.lib")
+  set(_wasm_bootstrap tools/bootstrap-wasm.ps1)
+  set(_wasm_platform "${CMAKE_SOURCE_DIR}/Illumo/Source/Platform/Windows/WinWasm")
+else()
+  set(_wasmtime "${ILLUMO_WASM_TOOLS}/wasmtime-v48.0.7-x86_64-linux-c-api")
+  set(_wasi_sdk "${ILLUMO_WASM_TOOLS}/wasi-sdk-34.0-x86_64-linux")
+  set(_wasmtime_library "${_wasmtime}/lib/libwasmtime.so")
+  set(_wasmtime_implib "")
+  set(_wasm_bootstrap tools/bootstrap-wasm.sh)
+  set(_wasm_platform "${CMAKE_SOURCE_DIR}/Illumo/Source/Platform/Linux/LinuxWasm")
+endif()
+set(_wasi_clang "${_wasi_sdk}/bin/clang++${CMAKE_EXECUTABLE_SUFFIX}")
+foreach(_required "${_wasmtime}/include/wasmtime.h" "${_wasmtime_library}"
+    ${_wasmtime_implib} "${_wasi_clang}")
   if(NOT EXISTS "${_required}")
-    message(FATAL_ERROR "Missing ${_required}; run tools/bootstrap-wasm.ps1 "
+    message(FATAL_ERROR "Missing ${_required}; run ${_wasm_bootstrap} "
       "explicitly, or configure with -DILLUMO_BUILD_WASM_RUNTIME=OFF to build "
       "without IllumoRuntime and the application packages")
   endif()
@@ -33,16 +58,24 @@ endforeach()
 
 add_library(IllumoWasmtime SHARED IMPORTED GLOBAL)
 set_target_properties(IllumoWasmtime PROPERTIES
-  IMPORTED_IMPLIB "${_wasmtime}/lib/wasmtime.dll.lib"
-  IMPORTED_LOCATION "${_wasmtime}/lib/wasmtime.dll"
+  IMPORTED_LOCATION "${_wasmtime_library}"
   INTERFACE_INCLUDE_DIRECTORIES "${_wasmtime}/include")
+if(_wasmtime_implib)
+  set_target_properties(IllumoWasmtime PROPERTIES
+    IMPORTED_IMPLIB "${_wasmtime_implib}")
+else()
+  # Wasmtime's libwasmtime.so has no SONAME. Linking it by name keeps the
+  # build path out of each executable's DT_NEEDED; the copy staged beside the
+  # runtime is found through $ORIGIN (below).
+  set_target_properties(IllumoWasmtime PROPERTIES IMPORTED_NO_SONAME TRUE)
+endif()
 add_library(IllumoWasmRuntime STATIC
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmInstance.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmModuleCache.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmGuest.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmWorker.cpp"
   "${CMAKE_SOURCE_DIR}/Illumo/Source/Wasm/WasmProfile.cpp"
-  "${CMAKE_SOURCE_DIR}/Illumo/Source/Platform/Windows/WinWasmCompiler.cpp")
+  "${_wasm_platform}Compiler.cpp")
 add_library(Illumo::WasmRuntime ALIAS IllumoWasmRuntime)
 target_include_directories(IllumoWasmRuntime PUBLIC "${CMAKE_SOURCE_DIR}/Illumo/Include")
 target_include_directories(IllumoWasmRuntime PUBLIC "${CMAKE_SOURCE_DIR}/IllumoGuest/Include")
@@ -52,8 +85,7 @@ target_include_directories(IllumoWasmRuntime SYSTEM PRIVATE
 # Illumo compiles the Tracy client the guest profiling imports report to.
 target_link_libraries(IllumoWasmRuntime PRIVATE IllumoWasmtime Illumo::Illumo)
 illumo_configure_runtime_target(IllumoWasmRuntime)
-add_executable(IllumoWasmCompiler
-  "${CMAKE_SOURCE_DIR}/Illumo/Source/Platform/Windows/WinWasmCompilerMain.cpp")
+add_executable(IllumoWasmCompiler "${_wasm_platform}CompilerMain.cpp")
 target_link_libraries(IllumoWasmCompiler PRIVATE IllumoWasmtime)
 # Header-only Foundation helpers (ParseNumber) only; no Illumo library link.
 target_include_directories(IllumoWasmCompiler PRIVATE
@@ -137,6 +169,12 @@ add_custom_command(TARGET IllumoRuntime POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "$<TARGET_FILE:IllumoWasmtime>" "$<TARGET_FILE_DIR:IllumoRuntime>"
   VERBATIM)
+# On Linux the runtime and its compiler helper find the libwasmtime.so copied
+# beside them, so a distribution folder runs wherever it is moved.
+if(_illumo_wasm_host STREQUAL "linux")
+  set_property(TARGET IllumoRuntime IllumoWasmCompiler APPEND
+    PROPERTY BUILD_RPATH "$ORIGIN")
+endif()
 # The Illumo icon from docs/brand (IllumoRuntime.rc). The preprocessor's
 # dependency scan does not follow ICON statements, so the .ico is listed.
 if(WIN32)
@@ -398,7 +436,7 @@ if(BUILD_TESTING)
   set(_guest_binary "${CMAKE_BINARY_DIR}/wasm-tests/compatibility.wasm")
   add_custom_command(OUTPUT "${_guest_binary}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/wasm-tests"
-    COMMAND "${_wasi_sdk}/bin/clang++.exe" "${_guest_source}"
+    COMMAND "${_wasi_clang}" "${_guest_source}"
       "-I${CMAKE_SOURCE_DIR}/IllumoGuest/Include"
       -std=c++23 -O2 -msimd128 -fno-exceptions -mexec-model=reactor
       -Wl,--export=compatibility -Wl,--export=counter
@@ -415,7 +453,7 @@ if(BUILD_TESTING)
   set(_lifecycle_binary "${CMAKE_BINARY_DIR}/wasm-tests/lifecycle.wasm")
   add_custom_command(OUTPUT "${_lifecycle_binary}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/wasm-tests"
-    COMMAND "${_wasi_sdk}/bin/clang++.exe"
+    COMMAND "${_wasi_clang}"
       "${CMAKE_SOURCE_DIR}/Illumo/Tests/Wasm/LifecycleGuest.cpp"
       "-I${CMAKE_SOURCE_DIR}/IllumoGuest/Include"
       -std=c++23 -O2 -msimd128 -fno-exceptions -mexec-model=reactor

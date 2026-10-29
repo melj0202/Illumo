@@ -131,10 +131,22 @@ COMPILER_COMMANDS = (
 )
 
 # IllumoGame ships only as a WASM package played by IllumoRuntime. The pinned
-# Wasmtime/WASI SDK pair (cmake/IllumoWasm.cmake) is Windows x64 only.
-WASM_HOST_SUPPORTED = os.name == "nt" and platform.machine().lower() in ("amd64", "x86_64")
+# Wasmtime/WASI SDK pairs (cmake/IllumoWasm.cmake) exist for Windows x64, where
+# the runtime builds by default, and Linux x86_64, where it is opt-in (--wasm)
+# because Linux is not a supported platform.
+_WASM_X86_64 = platform.machine().lower() in ("amd64", "x86_64")
+if os.name == "nt" and _WASM_X86_64:
+    WASM_HOST_PLATFORM = "x86_64-windows"
+elif sys.platform.startswith("linux") and _WASM_X86_64:
+    WASM_HOST_PLATFORM = "x86_64-linux"
+else:
+    WASM_HOST_PLATFORM = ""
+WASM_HOST_SUPPORTED = bool(WASM_HOST_PLATFORM)
+WASM_DEFAULT_ON = WASM_HOST_PLATFORM == "x86_64-windows"
 WASM_CMAKE_MODULE = REPOSITORY_ROOT / "cmake" / "IllumoWasm.cmake"
-WASM_BOOTSTRAP_SCRIPT = REPOSITORY_ROOT / "tools" / "bootstrap-wasm.ps1"
+WASM_BOOTSTRAP_SCRIPT = REPOSITORY_ROOT / "tools" / (
+    "bootstrap-wasm.sh" if WASM_HOST_PLATFORM == "x86_64-linux" else "bootstrap-wasm.ps1"
+)
 DEFAULT_WASM_TOOLS_DIRECTORY = REPOSITORY_ROOT / "build-wasm-tools"
 WASM_RUNTIME_APPLICATION = "IllumoRuntime"
 # Installed applications live in <runtime dir>/apps/<name>/ with illumo.json.
@@ -704,7 +716,7 @@ class DashboardState:
     testing_enabled: bool = True
     documentation_enabled: bool = True
     tracy_enabled: bool = False
-    wasm_enabled: bool = WASM_HOST_SUPPORTED
+    wasm_enabled: bool = WASM_DEFAULT_ON
     parallel_index: int = 0
     compiler: str = "default"
     optimization: str = "default"
@@ -1134,7 +1146,7 @@ def dashboard_value(state: DashboardState, key: str) -> str:
         return "On" if state.tracy_enabled else "Off"
     if key == "wasm":
         if not WASM_HOST_SUPPORTED:
-            return "Windows x64 only"
+            return "Windows x64 or Linux x86_64 only"
         return "On" if state.wasm_enabled else "Off"
     if key == "parallel":
         return dashboard_parallel_label(state)
@@ -1157,7 +1169,7 @@ def dashboard_workspace_status(state: DashboardState, ok: str, bad: str) -> tupl
 
 def _dashboard_workspace_status(state: DashboardState, ok: str, bad: str) -> tuple[str, str]:
     if not WASM_HOST_SUPPORTED:
-        return "Apps: IllumoRuntime and its packages are Windows x64 only", ANSI_DIM
+        return "Apps: IllumoRuntime and its packages are Windows x64 or Linux x86_64 only", ANSI_DIM
     if not state.wasm_enabled:
         return "Apps: WASM runtime off; no applications will be built", ANSI_DIM
     settings = dashboard_settings(state)
@@ -1712,7 +1724,7 @@ def apply_dashboard_profile(state: DashboardState, name: str | None, settings: d
     state.testing_enabled = not settings.get("no_tests", False)
     state.documentation_enabled = not settings.get("no_docs", False)
     state.tracy_enabled = settings.get("tracy", False)
-    state.wasm_enabled = not settings.get("no_wasm", not WASM_HOST_SUPPORTED)
+    state.wasm_enabled = not settings.get("no_wasm", not WASM_DEFAULT_ON)
     state.parallel_index = next((i for i, item in enumerate(DASHBOARD_PARALLEL_OPTIONS)
                                  if item[1] == settings.get("parallel", 0)), 0)
     state.compiler = settings.get("compiler", "default")
@@ -5071,7 +5083,7 @@ def profile_arguments(settings: dict) -> list[str]:
             result.append(f"{option}={value}")
         elif key in PROFILE_FLAGS and value:
             result.append(option)
-        elif key == "no_wasm" and not WASM_HOST_SUPPORTED:
+        elif key == "no_wasm" and not WASM_DEFAULT_ON:
             # Only this flag's default depends on the host; keep an explicit
             # opt-in on hosts where it is off.
             result.append("--wasm")
@@ -5268,7 +5280,7 @@ def print_build_summary(
     build_directory = resolve_build_directory(arguments.build_dir)
     rows: list[tuple[str, str, str]] = []
     outputs = runtime_outputs(build_directory, arguments.config)
-    if not getattr(arguments, "no_wasm", not WASM_HOST_SUPPORTED):
+    if not getattr(arguments, "no_wasm", not WASM_DEFAULT_ON):
         if outputs.runtime is not None:
             rows.append(("ok", "Runtime", str(outputs.runtime)))
             for app in outputs.apps:
@@ -5419,7 +5431,7 @@ def run_doctor(arguments: argparse.Namespace) -> None:
         )
     wasm = enabled("ILLUMO_BUILD_WASM_RUNTIME")
     if wasm and not WASM_HOST_SUPPORTED:
-        record("wasm toolchain", "error", "IllumoRuntime requires Windows x64; use --no-wasm.")
+        record("wasm toolchain", "error", "IllumoRuntime requires Windows x64 or Linux x86_64; use --no-wasm.")
     elif wasm:
         tools = wasm_tools_directory(arguments.cmake_arg, cache)
         missing = missing_wasm_tools(tools)
@@ -5427,11 +5439,15 @@ def run_doctor(arguments: argparse.Namespace) -> None:
             record("wasm toolchain", "error", wasm_toolchain_error(missing))
         else:
             record("wasm toolchain", "ok", f"{' + '.join(wasm_toolchain_packages())} in {tools}")
-    elif WASM_HOST_SUPPORTED:
+    elif WASM_DEFAULT_ON:
         record("wasm toolchain", "warning",
                "Disabled (--no-wasm): IllumoRuntime and its applications are not built.")
+    elif WASM_HOST_SUPPORTED:
+        record("wasm toolchain", "ok",
+               "Off by default on Linux; --wasm builds IllumoRuntime (Linux is not a supported platform).")
     else:
-        record("wasm toolchain", "ok", "Not built on this host (the WASM runtime is Windows x64 only).")
+        record("wasm toolchain", "ok",
+               "Not built on this host (the WASM runtime is Windows x64 or Linux x86_64 only).")
     cached_wasm = cache.get("ILLUMO_BUILD_WASM_RUNTIME")
     if cached_wasm is not None and cmake_truthy(cached_wasm) != wasm:
         record(
@@ -5627,7 +5643,7 @@ def add_common_build_arguments(parser: argparse.ArgumentParser) -> None:
         help=(
             "skip IllumoRuntime and the IllumoGame WASM package with "
             "ILLUMO_BUILD_WASM_RUNTIME=OFF (default: "
-            + ("on" if WASM_HOST_SUPPORTED else "off")
+            + ("on" if WASM_DEFAULT_ON else "off")
             + " on this host)"
         ),
     )
@@ -5661,7 +5677,7 @@ def add_common_build_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.set_defaults(
         tracy=False, no_tests=False, no_docs=False, no_tidy=False,
-        no_wasm=not WASM_HOST_SUPPORTED,
+        no_wasm=not WASM_DEFAULT_ON,
     )
 
 
@@ -6453,7 +6469,7 @@ def configure_command(arguments: argparse.Namespace, cmake: str) -> list[str]:
     tidy_enabled = "OFF" if getattr(arguments, "no_tidy", False) else "ON"
     # Always explicit: CMake's option() keeps a stale cached OFF, which
     # silently dropped IllumoRuntime and the game package from old trees.
-    wasm_enabled = "OFF" if getattr(arguments, "no_wasm", not WASM_HOST_SUPPORTED) else "ON"
+    wasm_enabled = "OFF" if getattr(arguments, "no_wasm", not WASM_DEFAULT_ON) else "ON"
     command.extend(
         (
             f"-DCMAKE_BUILD_TYPE={arguments.config}",
@@ -6503,29 +6519,36 @@ def wasm_tools_directory(cmake_arguments: Sequence[str], cache: dict[str, str]) 
 
 
 def wasm_toolchain_packages() -> tuple[str, str]:
-    """Wasmtime C API and WASI SDK directory names, as pinned by CMake."""
-    names = ["wasmtime-v48.0.2-x86_64-windows-c-api", "wasi-sdk-34.0-x86_64-windows"]
+    """This host's Wasmtime C API and WASI SDK directory names, as pinned by CMake."""
+    host = WASM_HOST_PLATFORM or "x86_64-windows"
+    names = [f"wasmtime-v48.0.7-{host}-c-api", f"wasi-sdk-34.0-{host}"]
     try:
         text = WASM_CMAKE_MODULE.read_text(encoding="utf-8", errors="replace")
     except OSError:
         text = ""
+    # CMake pins one directory per host; take the line that names this one.
     for index, variable in enumerate(("_wasmtime", "_wasi_sdk")):
-        match = re.search(
+        for match in re.finditer(
             rf'set\(\s*{variable}\s+"\$\{{ILLUMO_WASM_TOOLS\}}/([^"]+)"\s*\)', text
-        )
-        if match:
-            names[index] = match[1]
+        ):
+            if host in match[1]:
+                names[index] = match[1]
+                break
     return names[0], names[1]
 
 
 def missing_wasm_tools(directory: Path) -> list[Path]:
     wasmtime, wasi_sdk = wasm_toolchain_packages()
-    required = (
-        directory / wasmtime / "include" / "wasmtime.h",
-        directory / wasmtime / "lib" / "wasmtime.dll.lib",
-        directory / wasmtime / "lib" / "wasmtime.dll",
-        directory / wasi_sdk / "bin" / "clang++.exe",
-    )
+    if WASM_HOST_PLATFORM == "x86_64-linux":
+        libraries = (directory / wasmtime / "lib" / "libwasmtime.so",)
+        compiler = directory / wasi_sdk / "bin" / "clang++"
+    else:
+        libraries = (
+            directory / wasmtime / "lib" / "wasmtime.dll.lib",
+            directory / wasmtime / "lib" / "wasmtime.dll",
+        )
+        compiler = directory / wasi_sdk / "bin" / "clang++.exe"
+    required = (directory / wasmtime / "include" / "wasmtime.h", *libraries, compiler)
     return [path for path in required if not path.is_file()]
 
 
@@ -6545,7 +6568,7 @@ def require_wasm_toolchain(arguments: argparse.Namespace, dry_run: bool) -> None
         return
     if not WASM_HOST_SUPPORTED:
         raise BuildError(
-            "IllumoRuntime and the IllumoGame package require Windows x64; "
+            "IllumoRuntime and the IllumoGame package require Windows x64 or Linux x86_64; "
             "drop --wasm or pass --no-wasm on this host."
         )
     directory = resolve_build_directory(arguments.build_dir)
@@ -6994,28 +7017,39 @@ def positive_interval(value: str) -> float:
 
 def run_wasm_tools(arguments: argparse.Namespace) -> None:
     if not WASM_HOST_SUPPORTED:
-        raise BuildError("The pinned Wasmtime and WASI SDK toolchain is Windows x64 only.")
+        raise BuildError(
+            "The pinned Wasmtime and WASI SDK toolchains are Windows x64 and Linux x86_64 only."
+        )
     runner = CommandRunner(arguments.dry_run)
     missing = missing_wasm_tools(DEFAULT_WASM_TOOLS_DIRECTORY)
     wasmtime, wasi_sdk = wasm_toolchain_packages()
     if not missing:
         print(f"WASM toolchain ready: {wasmtime} + {wasi_sdk} in {DEFAULT_WASM_TOOLS_DIRECTORY}")
         return
-    powershell = shutil.which("pwsh") or shutil.which("powershell")
-    if powershell is None:
-        if not runner.dry_run:
-            raise BuildError(f"PowerShell was not found on PATH; {WASM_BOOTSTRAP_SCRIPT.name} requires it.")
-        powershell = "powershell"
+    if WASM_HOST_PLATFORM == "x86_64-linux":
+        bash = shutil.which("bash")
+        if bash is None:
+            if not runner.dry_run:
+                raise BuildError(f"bash was not found on PATH; {WASM_BOOTSTRAP_SCRIPT.name} requires it.")
+            bash = "bash"
+        command = (bash, str(WASM_BOOTSTRAP_SCRIPT), str(DEFAULT_WASM_TOOLS_DIRECTORY))
+    else:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if powershell is None:
+            if not runner.dry_run:
+                raise BuildError(f"PowerShell was not found on PATH; {WASM_BOOTSTRAP_SCRIPT.name} requires it.")
+            powershell = "powershell"
+        command = (
+            powershell, "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", str(WASM_BOOTSTRAP_SCRIPT),
+            "-Destination", str(DEFAULT_WASM_TOOLS_DIRECTORY),
+        )
     print(
         f"Fetching the SHA256-pinned {wasmtime} and {wasi_sdk} release archives "
         f"from GitHub into {DEFAULT_WASM_TOOLS_DIRECTORY}.",
         flush=True,
     )
-    runner.run((
-        powershell, "-NoProfile", "-ExecutionPolicy", "Bypass",
-        "-File", str(WASM_BOOTSTRAP_SCRIPT),
-        "-Destination", str(DEFAULT_WASM_TOOLS_DIRECTORY),
-    ))
+    runner.run(command)
     if runner.dry_run:
         return
     missing = missing_wasm_tools(DEFAULT_WASM_TOOLS_DIRECTORY)

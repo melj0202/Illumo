@@ -4182,3 +4182,41 @@ CMake rejects Apple targets explicitly. Windows remains supported; Linux keeps
 its existing source-repaired, native-validation-pending status. Vendored
 dependency portability code and historical design records retain their provenance.
 A future macOS port requires a new scope and native validation.
+
+\subsection*{D-PL2 --- Linux x86\_64 pins the WASM runtime, opt-in}
+\begin{decisionbox}[title={D-PL2 \quad 2026-10-29}]
+\textbf{Decision:} \pathref{cmake/IllumoWasm.cmake} names one Wasmtime and
+WASI SDK per host: Windows x64, fetched by \pathref{tools/bootstrap-wasm.ps1},
+and Linux x86\_64, fetched by \pathref{tools/bootstrap-wasm.sh}, both
+Wasmtime 48.0.7 and WASI SDK 34.0 with SHA256-pinned archives. On Linux
+\texttt{ILLUMO\_BUILD\_WASM\_RUNTIME} defaults to \texttt{OFF}; turned on, it
+builds \texttt{IllumoRuntime}, the module compiler helper and every app
+package. \texttt{libwasmtime.so} has no SONAME, so it is imported with
+\texttt{IMPORTED\_NO\_SONAME} (linked by name) and copied beside the runtime,
+which finds it through \texttt{\$ORIGIN}. The Linux helper
+(\pathref{Illumo/Source/Platform/Linux/LinuxWasmCompiler.cpp},
+\pathref{Illumo/Source/Platform/Linux/LinuxWasmCompilerMain.cpp}) keeps the
+Windows contract: buffer layout, exit codes 2--4 and error texts. Its buffer
+is a \texttt{memfd} on descriptor 3; it inherits no other descriptor but
+stderr, leads its own process group (killed on the deadline and after each
+run), waits on a \texttt{pidfd} deadline, dies with its parent, and sets
+\texttt{RLIMIT\_DATA} to the compiler memory limit before it reads the
+module.\\
+\textbf{Why:} Owner approval (Ryan, 2026-10-29) to start the Linux WASM port
+in a scoped order: bootstrap, CMake platform branch, a POSIX counterpart of
+the Windows compiler helper, and a check that the MSVC ASan staging stays off
+Linux. Every application runs only inside the runtime (D-E13), so a Linux
+tree without a pin had none.\\
+\textbf{Consequences:} Linux remains unsupported (D-PL1 status): no desktop,
+GPU, input, dialog, fullscreen or audio check exists, so the default stays
+\texttt{OFF}. On 2026-10-29 (Ubuntu 24.04.5, GCC 13.3, without CSim) the
+runtime adds 89 registered tests (452 to 541), and all 541 pass under Xvfb;
+without a display four \texttt{WILL\_FAIL} runtime cases pass for the wrong
+reason (GLFW start-up). Captures of IllEd, IllMeshViewer and the Playground
+render under Xvfb with Mesa software OpenGL. The helper has no counterpart to
+the job's one-process limit, and \texttt{RLIMIT\_DATA} counts private
+writable mappings rather than the job's commit charge. It needs glibc 2.34+;
+without \texttt{pidfd\_open} (Linux 5.3+) the deadline polls. The two hosts'
+pins must move together.\\
+\textbf{Refines:} D-E13 (runtime platform), D-PL1 (Linux status).
+\end{decisionbox}

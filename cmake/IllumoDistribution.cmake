@@ -7,6 +7,9 @@
 #         -DENGINE_SHADERS=<Illumo/Shader> -DENGINE_MANIFEST=<illumo.json>
 #         -DVERSION_CMAKE=<Generated/IllumoVersion.cmake> -DSCRATCH=<dir>
 #         [-DAPPS=<name;name>] -P IllumoDistribution.cmake
+# Script mode sets no policies: without this, CMake 3.x reads if(IN_LIST)
+# with the old CMP0057 behaviour and fails.
+cmake_minimum_required(VERSION 3.25)
 foreach(_required RUNTIME_DIR OUT_DIR PACK ENGINE_ASSETS ENGINE_SHADERS
     ENGINE_MANIFEST VERSION_CMAKE SCRATCH)
   if(NOT DEFINED ${_required})
@@ -30,16 +33,24 @@ endfunction()
 file(REMOVE_RECURSE "${OUT_DIR}" "${SCRATCH}")
 file(MAKE_DIRECTORY "${OUT_DIR}/apps")
 
-# The runtime, the module compiler it launches, their DLLs, the default
-# settings and the third-party notices.
-foreach(_file IllumoRuntime.exe IllumoWasmCompiler.exe envvars.json
-    THIRD_PARTY_NOTICES.md)
+# The runtime, the module compiler it launches, their shared libraries (DLLs
+# on Windows, libwasmtime.so on Linux), the default settings and the
+# third-party notices.
+if(CMAKE_HOST_WIN32)
+  set(_executable_suffix ".exe")
+  set(_library_pattern "*.dll")
+else()
+  set(_executable_suffix "")
+  set(_library_pattern "*.so")
+endif()
+foreach(_file IllumoRuntime${_executable_suffix}
+    IllumoWasmCompiler${_executable_suffix} envvars.json THIRD_PARTY_NOTICES.md)
   if(NOT EXISTS "${RUNTIME_DIR}/${_file}")
     message(FATAL_ERROR "${RUNTIME_DIR}/${_file} is missing; build IllumoRuntime first")
   endif()
   file(COPY "${RUNTIME_DIR}/${_file}" DESTINATION "${OUT_DIR}")
 endforeach()
-file(GLOB _libraries "${RUNTIME_DIR}/*.dll")
+file(GLOB _libraries "${RUNTIME_DIR}/${_library_pattern}")
 file(COPY ${_libraries} DESTINATION "${OUT_DIR}")
 file(COPY "${RUNTIME_DIR}/licenses" DESTINATION "${OUT_DIR}")
 
