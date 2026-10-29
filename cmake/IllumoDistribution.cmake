@@ -7,6 +7,9 @@
 #         -DENGINE_SHADERS=<Illumo/Shader> -DENGINE_MANIFEST=<illumo.json>
 #         -DVERSION_CMAKE=<Generated/IllumoVersion.cmake> -DSCRATCH=<dir>
 #         [-DAPPS=<name;name>] -P IllumoDistribution.cmake
+# Script mode sets no policies: without this, CMake 3.x reads if(IN_LIST)
+# with the old CMP0057 behaviour and fails.
+cmake_minimum_required(VERSION 3.25)
 foreach(_required RUNTIME_DIR OUT_DIR PACK ENGINE_ASSETS ENGINE_SHADERS
     ENGINE_MANIFEST VERSION_CMAKE SCRATCH)
   if(NOT DEFINED ${_required})
