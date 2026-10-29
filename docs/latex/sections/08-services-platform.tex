@@ -95,6 +95,10 @@ dialogs behind the public \symbolref{SaveLoad} contract:
   \item Windows \pathref{WinMain.cpp}/\pathref{WinSaveLoad.cpp} is supported.
   \item Linux sources target Ubuntu 24.04 x86\_64 X11/XWayland with gtkmm-3
         dialogs and clipboard; they are not supported until native smoke.
+        The WASM runtime builds there only on request
+        (\texttt{ILLUMO\_BUILD\_WASM\_RUNTIME=ON}, D-PL2), with its own
+        module compiler helper
+        (\pathref{Illumo/Source/Platform/Linux/LinuxWasmCompiler.cpp}).
         macOS is not targeted; its scaffold has been removed.
 \end{itemize}
 Platform bootstrap calls \symbolref{CreateIllumoApplication} and then the

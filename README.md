@@ -23,7 +23,7 @@ Rulesets, or IllEd. Application policy stays in the consuming product.
 |---|---|
 | `Illumo/` | Static library: runner, platform, services, SceneGraph, OpenGL token renderer, assets |
 | `CSim/` | Optional, a separate repository (see [Get the build running](#get-the-build-running)). Cellular-automata sandbox, shipped only as the isolated `IllumoGame.wasm` package. Saves write sparse `.csim` version 4; loads versions 4, 3, and 2 plus legacy dense / `.illumo` |
-| `IllumoRuntime` | Generic native host (Windows x64): window, OpenGL, Vulkan or Direct3D 12, services and a Wasmtime sandbox. Runs every interactive client program as a WASM package staged beside it in `apps/<name>/`, and captures PNG frames with `--capture` ([docs/wasm-game-runtime-design.md](docs/wasm-game-runtime-design.md), [docs/frame-capture.md](docs/frame-capture.md)) |
+| `IllumoRuntime` | Generic native host (Windows x64; Linux x86_64 opt-in, not supported): window, OpenGL, Vulkan or Direct3D 12, services and a Wasmtime sandbox. Runs every interactive client program as a WASM package staged beside it in `apps/<name>/`, and captures PNG frames with `--capture` ([docs/wasm-game-runtime-design.md](docs/wasm-game-runtime-design.md), [docs/frame-capture.md](docs/frame-capture.md)) |
 | `IllumoGuest/` | Guest SDK and WASI build tree: ABI wire headers, guest-side engine and program (`GuestProgram`), recording backend |
 | `IllEd/` | SceneGraph world editor, shipped as the `IllEd.wasm` package (`--app illed`). Writes `.ilsc` format 2 scenes for later Illumo applications; its Hierarchy, Assets, Tools and Inspector panels dock or pop out into their own windows |
 | `IllMeshViewer/` | `.obj` mesh and `.ilsc` scene viewer with orbit, pan, zoom, and rotate, and detachable Info and Display panels, shipped as the `IllMeshViewer.wasm` package (`--app meshviewer`) |
@@ -43,7 +43,7 @@ Architecture, decisions, and current-state truth:
 | Platform | Status |
 |---|---|
 | Windows, GLFW, OpenGL, MSVC | Supported, verified production path |
-| Linux, Ubuntu 24.04 x86_64, X11/XWayland, GCC 13+ or Clang 18, gtkmm-3 | Sources and CMake repaired so the engine libraries and native test suites configure, compile, and run; the WASM runtime and its apps are Windows x64 only. That is **not a support claim** until native GUI smoke on that host. See [docs/packages/platform-linux.md](docs/packages/platform-linux.md) |
+| Linux, Ubuntu 24.04 x86_64, X11/XWayland, GCC 13+ or Clang 18, gtkmm-3 | Sources and CMake repaired so the engine libraries and native test suites configure, compile, and run. The WASM runtime and its apps build there on request (`--wasm`, D-PL2) and pass the headless runtime tests. That is **not a support claim** until native GUI smoke on that host. See [docs/packages/platform-linux.md](docs/packages/platform-linux.md) |
 | macOS | Not targeted; no port sources are retained |
 
 The stack is C++23, CMake 3.25 or newer, and vendored GLFW, GLEW, GLM, and
@@ -134,7 +134,7 @@ directory on each host.
   Visual Studio 2026 generator)
 - Python 3.10+ on `PATH` if you use `build.py` (standard library only)
 - Git
-- The pinned WASM toolchain (Wasmtime 48.0.2 C API and WASI SDK 34.0). Run
+- The pinned WASM toolchain (Wasmtime 48.0.7 C API and WASI SDK 34.0). Run
   `python build.py wasm-tools` (or `.\tools\bootstrap-wasm.ps1`) once; it
   downloads SHA256-verified archives into `build-wasm-tools/` without
   touching `PATH`. IllumoGame, IllEd and IllMeshViewer are built only as WASM
@@ -221,11 +221,13 @@ variable `CSIM_REF` selects the CSim branch (default `main`).
 
 ### Linux (Ubuntu 24.04 x86_64 — repaired, not supported)
 
-Windows remains the verified production path. The pinned WASM runtime is
-Windows x64 only, and every interactive application (IllumoGame, IllEd,
-IllMeshViewer) and the capture mode now run only inside it, so a Linux tree
-has no runnable applications until a Linux Wasmtime pin is added and
-verified. It still builds the engine libraries and the native test suites
+Windows remains the verified production path. Every interactive application
+(IllumoGame, IllEd, IllMeshViewer) and the capture mode run only inside the
+WASM runtime. On Linux that runtime is opt-in (D-PL2): `python3 build.py
+wasm-tools` (or `bash tools/bootstrap-wasm.sh`) fetches the Linux builds of
+the same pinned Wasmtime and WASI SDK, and `--wasm` /
+`-DILLUMO_BUILD_WASM_RUNTIME=ON` builds `IllumoRuntime` and the app packages.
+Without it a Linux tree builds the engine libraries and the native test suites
 (`IllumoTests`, `IllumoGameTests`, `IllEdTests`, `IllMeshViewerTests`). Use a Linux tree only on a real
 Ubuntu 24.04 x86_64 host with X11 or XWayland, GCC 13+ or Clang 18+, and
 CMake 3.25+. Ubuntu 22.04's default GCC 11 and CMake 3.22 are not sufficient
@@ -289,9 +291,12 @@ cmake --build build-linux --parallel
 Ninja stages runtimes under `build-linux/RelWithDebInfo/` (or `Debug/`) so
 executables do not collide with source-named CMake directories such as `IllEd/`.
 
-**Run.** There is nothing to launch on Linux yet: IllumoGame, IllEd,
-IllMeshViewer and frame capture run only as WASM packages inside the Windows
-x64 `IllumoRuntime`. The staged directory holds the native test runners.
+**Run.** A default Linux tree has nothing to launch: IllumoGame, IllEd,
+IllMeshViewer and frame capture run only as WASM packages inside
+`IllumoRuntime`, which a Linux tree builds only with `--wasm`. With it,
+`IllumoRuntime --app illed` (or `meshviewer`, `playground`) launches from the
+staged directory; launches have been checked only on a virtual X server
+(Xvfb, Mesa software OpenGL), not on a desktop or GPU.
 
 **Test.** The default build only builds the tests (`ILLUMO_RUN_TESTS_ON_BUILD`
 is `OFF`). For a faster headless pass:

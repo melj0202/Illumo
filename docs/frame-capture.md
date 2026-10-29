@@ -11,8 +11,10 @@ Illumo has two capture paths:
   native code on either backend, verified by the explicit real-GPU
   `IllumoCaptureGpuTests` target.
 
-Both need a real graphics device and driver. The WASM runtime is Windows x64
-only, so there is currently no command-line capture on Linux.
+Both need a real graphics device and driver. On Linux the WASM runtime, and
+so command-line capture, exists only in a tree built with
+`-DILLUMO_BUILD_WASM_RUNTIME=ON` (D-PL2); it has been checked only on a
+virtual X server with Mesa software OpenGL.
 
 ## Runtime capture mode
 

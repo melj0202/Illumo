@@ -1964,9 +1964,11 @@ module bytes from there (`docs/content-packages-and-scenes-design.md`). The old 
   the lanes' owned-column source rows merge into the next one (D-E29).
   The legacy whole-world `CSW1` worker remains for parity tests in
   the same worker module.
-- **Limits**: the pinned runtime is Windows x64 only, so Linux has no
-  runnable applications; it builds the engine libraries and native test
-  suites.
+- **Limits**: the runtime is supported on Windows x64. Linux x86_64 has its
+  own pin of the same Wasmtime and WASI SDK versions and builds the runtime
+  only on request (`-DILLUMO_BUILD_WASM_RUNTIME=ON`, D-PL2); its headless
+  runtime tests pass, but Linux is not a supported platform. A default Linux
+  tree builds the engine libraries and native test suites only.
 - **Verification**: `IllumoGame.Wasm.GamePackage`, `IllEd.Wasm.Package` and
   `IllMeshViewer.Wasm.Package` drive the real packages through the generic
   host; `IllEd.Wasm.ProjectPackage` places project assets and saves into
@@ -2327,6 +2329,7 @@ disabled.
 | **D-F3** | No C++ exceptions (2026-09-29, `.agent/no-exceptions-plan.md`). The host builds with `/EHs-c- _HAS_EXCEPTIONS=0` (MSVC) or `-fno-exceptions` for every C++ target, vendored ones included; first-party MSVC targets make C4530 an error; guests build with `-fno-exceptions` against the WASI SDK's no-exceptions libc++, and Wasmtime runs with the exception proposal off, so a module using exception opcodes is refused. Failures return errors (`bool`/error strings, sticky `GuestWireWriter::failed()`, recorder `fail()`), numbers parse with `Foundation/ParseNumber.h`, JSON reads use `allow_exceptions=false`, paths convert through `Platform/PathText.h`. Programming errors and running out of memory or threads end the process through `illumoFatal` (`Foundation/Fatal.h`); the former allocation-failure recovery in `SparseCellGrid`, `SceneGraphCompile` and `SceneQueryIndex` is removed. `Illumo.Build.NoExceptions` fails on any `try`/`catch`/`throw` in first-party C++. |
 | **D-F4** | Release and MinSizeRel `IllumoRuntime` builds link as Windows programs (`/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup`), so launching one opens no console window; Debug and RelWithDebInfo keep their console. Started from a terminal with unredirected output, the runtime attaches to that console for `--help` and capture/bench results. |
 | **D-F5** | The game is a separate repository (2026-10-11): CSim, formerly `IllumoGame/`, is cloned into the engine's ignored `CSim/` folder and is optional. The root `CMakeLists.txt` adds `ILLUMO_GAME_DIR` only when it exists; without it the engine configures, builds and passes its suite (the game's 237 cases drop out). CSim refuses a standalone configure and pins its oldest supported engine commit in `ENGINE_MIN_COMMIT`. Target and test names keep `IllumoGame`. Open: the game package carries the engine's version (D-F2). Supersedes the separate-repository non-goal of `docs/illumo-library-and-illumogame-design.md`. |
+| **D-PL2** | Linux x86_64 pins the WASM runtime, opt-in (2026-10-29): `cmake/IllumoWasm.cmake` names one Wasmtime (48.0.7) and WASI SDK (34.0) per host, fetched by `tools/bootstrap-wasm.ps1` or `tools/bootstrap-wasm.sh`; `ILLUMO_BUILD_WASM_RUNTIME` stays `OFF` by default on Linux. `libwasmtime.so` (no SONAME) is linked by name and found beside the runtime through `$ORIGIN`. The Linux module compiler helper keeps the Windows contract with a `memfd` buffer, no other inherited descriptors but stderr, its own process group, a `pidfd` deadline and a self-imposed `RLIMIT_DATA`; it has no counterpart to the job's one-process limit. Linux stays unsupported until desktop smoke. |
 
 ---
 

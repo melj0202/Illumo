@@ -459,13 +459,17 @@ suite passes.
 - Windows is the only supported and currently verified platform. Linux
   sources and CMake build on Ubuntu 24.04 x86_64 (X11/XWayland, gtkmm-3
   dialogs): native configure, compile, and the 626 registered tests were
-  verified on that host on 2026-10-23 at `main` a0aaf67. Linux sources
-  added on `release/v26.10` since then (child process, relaunch arguments,
-  folder dialog) have not been built on Linux. Linux must not be described as
-  supported until native launch, dialog, render, and shutdown smoke exist
-  on that host.
-  The WASM runtime is Windows x64 only, so Linux currently builds only the
-  engine libraries and native test suites and has no runnable applications.
+  verified on that host on 2026-10-23 at `main` a0aaf67, and
+  `release/v26.10` (with its later child-process, relaunch and folder-dialog
+  sources) built and passed its 452 registered tests without CSim on
+  2026-10-29. Linux must not be described as supported until native launch,
+  dialog, render, and shutdown smoke exist on that host.
+  The WASM runtime is opt-in on Linux x86_64 (D-PL2): `tools/bootstrap-wasm.sh`
+  and `-DILLUMO_BUILD_WASM_RUNTIME=ON` (default `OFF` there) build
+  `IllumoRuntime` and the app packages, whose headless runtime tests pass
+  under a display (Xvfb); without it Linux builds only the engine libraries
+  and native test suites. Keep the Windows and Linux Wasmtime/WASI SDK pins
+  at the same versions.
   macOS is not targeted; its platform scaffold has been removed. See
   `docs/packages/platform-linux.md`.
 - Keep generic engine/services independent of game-domain policy. Keep raw

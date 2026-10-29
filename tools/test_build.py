@@ -1177,7 +1177,8 @@ class WasmRuntimeTests(unittest.TestCase):
 
     def test_configure_always_states_the_wasm_option(self):
         # A stale cached OFF used to survive every configure and drop the game.
-        expected = "ON" if build.WASM_HOST_SUPPORTED else "OFF"
+        # On by default only where it is supported (Windows x64); Linux opts in.
+        expected = "ON" if build.WASM_DEFAULT_ON else "OFF"
         self.assertEqual(build.configure_definitions(self.parse())["ILLUMO_BUILD_WASM_RUNTIME"], expected)
         self.assertEqual(build.configure_definitions(self.parse("--no-wasm"))["ILLUMO_BUILD_WASM_RUNTIME"], "OFF")
         self.assertEqual(build.configure_definitions(self.parse("--wasm"))["ILLUMO_BUILD_WASM_RUNTIME"], "ON")
@@ -1198,10 +1199,15 @@ class WasmRuntimeTests(unittest.TestCase):
                 build.require_wasm_toolchain(self.parse("--wasm"), dry_run=True)
 
     def test_toolchain_names_follow_cmake_pins(self):
-        wasmtime, wasi_sdk = build.wasm_toolchain_packages()
         text = build.WASM_CMAKE_MODULE.read_text(encoding="utf-8")
-        self.assertIn(wasmtime, text)
-        self.assertIn(wasi_sdk, text)
+        # Each host reads its own pinned directories from the CMake module.
+        for host in ("x86_64-windows", "x86_64-linux"):
+            with patch.object(build, "WASM_HOST_PLATFORM", host):
+                wasmtime, wasi_sdk = build.wasm_toolchain_packages()
+            self.assertIn(wasmtime, text)
+            self.assertIn(wasi_sdk, text)
+            self.assertIn(host, wasmtime)
+            self.assertIn(host, wasi_sdk)
 
     def test_wasi_guest_trees_are_not_applications(self):
         (self.root / "CMakeLists.txt").write_text("add_subdirectory(App)\n")
@@ -1373,6 +1379,7 @@ class WasmRuntimeTests(unittest.TestCase):
         packages = (build.AppPackage("illed", "IllEd.wasm"),
                     build.AppPackage("game", "IllumoGame.wasm"))
         with patch.object(build, "WASM_HOST_SUPPORTED", True), \
+             patch.object(build, "WASM_DEFAULT_ON", True), \
              patch.object(build, "installed_apps", return_value=packages):
             state.wasm_enabled = True
             build.adjust_dashboard_setting(state, 1)
