@@ -324,6 +324,20 @@ inputV2()
   return input;
 }
 
+static GuestInput
+inputV3()
+{
+  GuestInput input = inputV2();
+  input.version = 3;
+  input.gamepad.connected = true;
+  input.gamepad.axes = { 0.5f, -0.25f, 0.75f, -0.8f, 0.9f, 0.1f };
+  input.gamepad.buttons[static_cast<std::size_t>(GuestGamepadButton::A)] =
+    GuestKeyAction::Press;
+  input.gamepad.buttons[static_cast<std::size_t>(GuestGamepadButton::B)] =
+    GuestKeyAction::Hold;
+  return input;
+}
+
 static bool
 readsInput(const GuestInput& input, GuestInput* decoded = nullptr)
 {
@@ -382,6 +396,28 @@ testInputV2()
   mismatched.write(bytes);
   testTrue(
     counters, bytes.failed(), "an event without a window tag cannot be sent");
+  GuestInput decodedV3;
+  testTrue(counters,
+           readsInput(inputV3(), &decodedV3) && decodedV3.version == 3 &&
+             decodedV3.gamepad.connected &&
+             decodedV3.gamepad.leftStick()[0] == 0.5f &&
+             decodedV3.gamepad.leftStick()[1] == -0.25f &&
+             decodedV3.gamepad.rightStick()[0] == 0.75f &&
+             decodedV3.gamepad.rightStick()[1] == -0.8f &&
+             decodedV3.gamepad.leftTrigger() == 0.9f &&
+             decodedV3.gamepad.rightTrigger() == 0.1f &&
+             decodedV3.gamepad.justPressed(GuestGamepadButton::A) &&
+             decodedV3.gamepad.held(GuestGamepadButton::B) &&
+             !decodedV3.gamepad.held(GuestGamepadButton::X),
+           "input v3 round-trips gamepad connection, analog sticks, and "
+           "digital buttons");
+  GuestInput badAxis = inputV3();
+  badAxis.gamepad.axes[0] = 1.5f;
+  GuestInput nanAxis = inputV3();
+  nanAxis.gamepad.axes[0] = std::numeric_limits<float>::quiet_NaN();
+  testTrue(counters,
+           !readsInput(badAxis) && !readsInput(nanAxis),
+           "out-of-range or non-finite gamepad axes are refused");
   return counters.failures;
 }
 

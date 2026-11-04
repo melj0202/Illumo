@@ -204,7 +204,9 @@ void
 WasmPanelWindows::collectInput(GuestInput& input)
 {
   ILLUMO_PROFILE_ZONE("WasmPanelWindows.collectInput");
-  input.version = 2;
+  if (input.version < 2) {
+    input.version = 2;
+  }
   input.eventSurfaces.assign(input.events.size(), 0u);
   input.characterSurfaces.assign(input.characters.size(), 0u);
   m_factory.mainOrigin(m_mainWindow, &input.originX, &input.originY);

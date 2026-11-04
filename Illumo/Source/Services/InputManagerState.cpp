@@ -114,3 +114,76 @@ InputManager::registerInputContext(InputContext inputContext)
   Logger::LogError("Input context capacity or identifier space exhausted");
   return -1;
 }
+
+void
+InputManager::setGamepadState(const GamepadState& state)
+{
+  m_previousGamepadState = m_gamepadState;
+  m_gamepadState = state;
+}
+
+float
+InputManager::getGamepadAxis(GamepadAxis axis) const
+{
+  const size_t index = static_cast<size_t>(axis);
+  return index < m_gamepadState.axes.size() ? m_gamepadState.axes[index] : 0.0f;
+}
+
+std::array<float, 2>
+InputManager::getGamepadLeftStick() const
+{
+  return { m_gamepadState.axes[static_cast<size_t>(GamepadAxis::LeftX)],
+           m_gamepadState.axes[static_cast<size_t>(GamepadAxis::LeftY)] };
+}
+
+std::array<float, 2>
+InputManager::getGamepadRightStick() const
+{
+  return { m_gamepadState.axes[static_cast<size_t>(GamepadAxis::RightX)],
+           m_gamepadState.axes[static_cast<size_t>(GamepadAxis::RightY)] };
+}
+
+float
+InputManager::getGamepadLeftTrigger() const
+{
+  return m_gamepadState.axes[static_cast<size_t>(GamepadAxis::LeftTrigger)];
+}
+
+float
+InputManager::getGamepadRightTrigger() const
+{
+  return m_gamepadState.axes[static_cast<size_t>(GamepadAxis::RightTrigger)];
+}
+
+InputAction
+InputManager::getGamepadButtonAction(GamepadButton button) const
+{
+  const size_t index = static_cast<size_t>(button);
+  return index < m_gamepadState.buttons.size() ? m_gamepadState.buttons[index]
+                                               : InputAction::None;
+}
+
+bool
+InputManager::isGamepadButtonPressed(GamepadButton button) const
+{
+  const InputAction action = getGamepadButtonAction(button);
+  return action == InputAction::Press || action == InputAction::Hold;
+}
+
+bool
+InputManager::isGamepadButtonDown(GamepadButton button) const
+{
+  return isGamepadButtonPressed(button);
+}
+
+bool
+InputManager::isGamepadButtonJustPressed(GamepadButton button) const
+{
+  return getGamepadButtonAction(button) == InputAction::Press;
+}
+
+bool
+InputManager::isGamepadButtonReleased(GamepadButton button) const
+{
+  return getGamepadButtonAction(button) == InputAction::Release;
+}

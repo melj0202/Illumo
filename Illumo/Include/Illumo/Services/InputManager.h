@@ -2,6 +2,7 @@
 
 // Pure input service: no Game includes (D-E2).
 
+#include <Illumo/Services/Gamepad.h>
 #include <Illumo/Services/InputContext.h>
 #include <Illumo/Services/KeyCode.h>
 
@@ -124,6 +125,9 @@ private:
   int m_modifierFlags;
   std::array<double, 2> m_snapshotMouse{};
   std::array<bool, static_cast<size_t>(KeyCode::F12) + 1> m_suppressedKeys{};
+  GamepadState m_gamepadState{};
+  GamepadState m_previousGamepadState{};
+  void pollGamepad();
 
   static KeyCode TranslateKeyCodeToGLFW(int glfwKey);
 
@@ -209,6 +213,23 @@ public:
   double* getMouseScrollOffset() { return scrollOffset; }
 
   std::array<double, 2> getMousePosition();
+
+  // Gamepad state and continuous 360 radial thumbstick queries.
+  bool isGamepadConnected() const { return m_gamepadState.connected; }
+  const GamepadState& getGamepadState() const { return m_gamepadState; }
+  void setGamepadState(const GamepadState& state);
+
+  float getGamepadAxis(GamepadAxis axis) const;
+  std::array<float, 2> getGamepadLeftStick() const;
+  std::array<float, 2> getGamepadRightStick() const;
+  float getGamepadLeftTrigger() const;
+  float getGamepadRightTrigger() const;
+
+  InputAction getGamepadButtonAction(GamepadButton button) const;
+  bool isGamepadButtonPressed(GamepadButton button) const;
+  bool isGamepadButtonReleased(GamepadButton button) const;
+  bool isGamepadButtonDown(GamepadButton button) const;
+  bool isGamepadButtonJustPressed(GamepadButton button) const;
 
   static void characterCallback(GLFWwindow* /*window*/, unsigned int codepoint);
 

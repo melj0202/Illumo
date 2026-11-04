@@ -54,6 +54,13 @@ InputManager::update()
 {
   clearCharQueue();
   clearKeyQueue();
+  for (std::size_t i = 0; i < m_gamepadState.buttons.size(); ++i) {
+    if (m_gamepadState.buttons[i] == InputAction::Press) {
+      m_gamepadState.buttons[i] = InputAction::Hold;
+    } else if (m_gamepadState.buttons[i] == InputAction::Release) {
+      m_gamepadState.buttons[i] = InputAction::None;
+    }
+  }
 }
 InputAction
 InputManager::GetInputAction(KeyCode key)
@@ -115,4 +122,11 @@ GuestInputProvider::accept(InputManager& manager, const GuestInput& input)
   manager.m_modifierFlags = static_cast<int>(input.modifiers);
   *manager.scrollOffset = input.scroll;
   manager.m_snapshotMouse = { input.mouseX, input.mouseY };
+  GamepadState gamepad;
+  gamepad.connected = input.gamepad.connected;
+  gamepad.axes = input.gamepad.axes;
+  for (std::size_t i = 0; i < GamepadState::ButtonCount; ++i) {
+    gamepad.buttons[i] = nativeAction(input.gamepad.buttons[i]);
+  }
+  manager.setGamepadState(gamepad);
 }

@@ -57,6 +57,10 @@ inputContract()
   input.scroll = -2;
   input.events = { { GuestKey::F1, GuestKeyAction::Press, 3 } };
   input.characters = { 'a', 0x1f642 };
+  input.gamepad.connected = true;
+  input.gamepad.axes = { -0.5f, 0.75f, 0.0f, 0.0f, 0.0f, 0.0f };
+  input.gamepad.buttons[static_cast<std::size_t>(GuestGamepadButton::A)] =
+    GuestKeyAction::Press;
   GuestInputProvider::accept(manager, input);
   require(manager.isActionActive("menu") &&
             manager.isMouseButtonPressed(KeyCode::MouseLeft) &&
@@ -64,14 +68,24 @@ inputContract()
             manager.getMousePosition()[0] == 120.5 &&
             *manager.getMouseScrollOffset() == -2 &&
             manager.getCharQueue().size() == 2 &&
-            manager.getKeyQueue().front().action == InputAction::Press,
+            manager.getKeyQueue().front().action == InputAction::Press &&
+            manager.isGamepadConnected() &&
+            manager.getGamepadLeftStick()[0] == -0.5f &&
+            manager.getGamepadLeftStick()[1] == 0.75f &&
+            manager.isGamepadButtonPressed(GamepadButton::A) &&
+            manager.isGamepadButtonJustPressed(GamepadButton::A),
           "Input translation preserves actions, modifiers, pointer and queues");
   input.keys[static_cast<std::size_t>(GuestKey::F1)] = GuestKeyAction::Hold;
+  input.gamepad.buttons[static_cast<std::size_t>(GuestGamepadButton::A)] =
+    GuestKeyAction::Hold;
   input.events.clear();
   input.characters.clear();
   GuestInputProvider::accept(manager, input);
   require(!manager.isActionActive("menu") &&
-            manager.isKeyPressed(KeyCode::F1) && manager.getKeyQueue().empty(),
+            manager.isKeyPressed(KeyCode::F1) &&
+            manager.getKeyQueue().empty() &&
+            manager.isGamepadButtonPressed(GamepadButton::A) &&
+            !manager.isGamepadButtonJustPressed(GamepadButton::A),
           "Held key does not repeat an edge action");
   manager.suppressKeyForFrame(KeyCode::F1);
   require(!manager.isKeyPressed(KeyCode::F1), "Overlay suppression");

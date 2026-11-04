@@ -63,6 +63,80 @@ struct GuestSurfaceInput
   bool focused = false;
 };
 
+enum class GuestGamepadButton : std::uint32_t
+{
+  A = 0,
+  B = 1,
+  X = 2,
+  Y = 3,
+  LeftBumper = 4,
+  RightBumper = 5,
+  Back = 6,
+  Start = 7,
+  Guide = 8,
+  LeftThumb = 9,
+  RightThumb = 10,
+  DpadUp = 11,
+  DpadRight = 12,
+  DpadDown = 13,
+  DpadLeft = 14,
+  Count = 15
+};
+
+enum class GuestGamepadAxis : std::uint32_t
+{
+  LeftX = 0,
+  LeftY = 1,
+  RightX = 2,
+  RightY = 3,
+  LeftTrigger = 4,
+  RightTrigger = 5,
+  Count = 6
+};
+
+// Input v3: Gamepad state (analog sticks, triggers, digital buttons).
+struct GuestGamepad
+{
+  static constexpr std::uint32_t ButtonCount = 15;
+  static constexpr std::uint32_t AxisCount = 6;
+
+  bool connected = false;
+  std::array<float, AxisCount> axes{};
+  std::array<GuestKeyAction, ButtonCount> buttons{};
+
+  bool isConnected() const { return connected; }
+
+  bool held(GuestGamepadButton button) const
+  {
+    const std::size_t index = static_cast<std::size_t>(button);
+    return index < buttons.size() && (buttons[index] == GuestKeyAction::Press ||
+                                      buttons[index] == GuestKeyAction::Hold);
+  }
+
+  bool justPressed(GuestGamepadButton button) const
+  {
+    const std::size_t index = static_cast<std::size_t>(button);
+    return index < buttons.size() && buttons[index] == GuestKeyAction::Press;
+  }
+
+  bool released(GuestGamepadButton button) const
+  {
+    const std::size_t index = static_cast<std::size_t>(button);
+    return index < buttons.size() && buttons[index] == GuestKeyAction::Release;
+  }
+
+  float axis(GuestGamepadAxis a) const
+  {
+    const std::size_t index = static_cast<std::size_t>(a);
+    return index < axes.size() ? axes[index] : 0.0f;
+  }
+
+  std::array<float, 2> leftStick() const { return { axes[0], axes[1] }; }
+  std::array<float, 2> rightStick() const { return { axes[2], axes[3] }; }
+  float leftTrigger() const { return axes[4]; }
+  float rightTrigger() const { return axes[5]; }
+};
+
 struct GuestInput
 {
   static constexpr std::uint32_t MaximumEvents = 256;
@@ -70,7 +144,8 @@ struct GuestInput
   static constexpr std::uint32_t MaximumWindowEvents = 64;
   // Version 1 describes the main window only. Version 2 appends the main
   // window's screen origin, the surface windows, which window each key and
-  // character event came from, the focused window and window events.
+  // character event came from, the focused window and window events. Version 3
+  // appends gamepad connection status, 6 axes, and 15 digital button actions.
   std::uint32_t version = 1;
   double elapsed = 0;
   std::uint32_t width = 1280;
@@ -91,6 +166,8 @@ struct GuestInput
   std::vector<std::uint32_t> characterSurfaces; // one per character
   std::vector<GuestSurfaceInput> surfaces;
   std::vector<GuestWindowEvent> windowEvents;
+  // Version 3 only (gamepad).
+  GuestGamepad gamepad{};
 
   const GuestSurfaceInput* surface(std::uint32_t id) const
   {
@@ -111,8 +188,8 @@ struct GuestInput
   void write(GuestWireWriter& output) const
   {
     if (events.size() > MaximumEvents || characters.size() > MaximumEvents ||
-        (version != 1 && version != 2) ||
-        (version == 2 && (eventSurfaces.size() != events.size() ||
+        (version < 1 || version > 3) ||
+        (version >= 2 && (eventSurfaces.size() != events.size() ||
                           characterSurfaces.size() != characters.size() ||
                           surfaces.size() > MaximumSurfaces ||
                           windowEvents.size() > MaximumWindowEvents))) {
@@ -173,6 +250,16 @@ struct GuestInput
       output.u32(static_cast<std::uint32_t>(event.x));
       output.u32(static_cast<std::uint32_t>(event.y));
     }
+    if (version == 2) {
+      return;
+    }
+    output.u32(gamepad.connected ? 1u : 0u);
+    for (float axisVal : gamepad.axes) {
+      output.f32(axisVal);
+    }
+    for (GuestKeyAction action : gamepad.buttons) {
+      output.u32(static_cast<std::uint32_t>(action));
+    }
   }
   // A surface id named by input: 0 (main) or one of the open surfaces.
   bool knownSurface(std::uint32_t id) const
@@ -194,7 +281,7 @@ struct GuestInput
     input.modifiers = reader.u32();
     const std::uint32_t console = reader.u32();
     input.consoleOpen = console != 0;
-    if ((version != 1 && version != 2) || !std::isfinite(input.elapsed) ||
+    if ((version < 1 || version > 3) || !std::isfinite(input.elapsed) ||
         input.elapsed < 0 || input.width == 0 || input.width > 65536 ||
         input.height == 0 || input.height > 65536 ||
         !std::isfinite(input.mouseX) || !std::isfinite(input.mouseY) ||
@@ -236,7 +323,10 @@ struct GuestInput
         return false;
       }
     }
-    if (version == 2 && !readVersion2(reader, input)) {
+    if (version >= 2 && !readVersion2(reader, input)) {
+      return false;
+    }
+    if (version >= 3 && !readVersion3(reader, input)) {
       return false;
     }
     if (!reader.finished()) {
@@ -325,6 +415,32 @@ private:
         return false;
       }
       event.kind = static_cast<GuestWindowEventKind>(kind);
+    }
+    return reader.valid();
+  }
+
+  static bool readVersion3(GuestWireReader& reader, GuestInput& input)
+  {
+    if (reader.remaining() < 88u) {
+      return false;
+    }
+    const std::uint32_t connected = reader.u32();
+    if (!reader.valid() || connected > 1u) {
+      return false;
+    }
+    input.gamepad.connected = connected != 0;
+    for (float& axisVal : input.gamepad.axes) {
+      axisVal = reader.f32();
+      if (!std::isfinite(axisVal) || axisVal < -1.0f || axisVal > 1.0f) {
+        return false;
+      }
+    }
+    for (GuestKeyAction& action : input.gamepad.buttons) {
+      const std::uint32_t val = reader.u32();
+      if (val > 3u) {
+        return false;
+      }
+      action = static_cast<GuestKeyAction>(val);
     }
     return reader.valid();
   }

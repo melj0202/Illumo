@@ -624,6 +624,91 @@ testInputManagerContextsAndCapacity()
 }
 
 static void
+testInputManagerGamepad()
+{
+  testSection("InputManager: gamepad state, axes and button transitions");
+  InputManager input(nullptr);
+
+  testTrue(g, !input.isGamepadConnected(), "gamepad disconnected by default");
+  testTrue(g,
+           input.getGamepadLeftStick()[0] == 0.0f &&
+             input.getGamepadLeftStick()[1] == 0.0f,
+           "left stick defaults to zero");
+  testTrue(g,
+           input.getGamepadRightStick()[0] == 0.0f &&
+             input.getGamepadRightStick()[1] == 0.0f,
+           "right stick defaults to zero");
+  testTrue(
+    g, input.getGamepadLeftTrigger() == 0.0f, "left trigger defaults to zero");
+  testTrue(g,
+           input.getGamepadRightTrigger() == 0.0f,
+           "right trigger defaults to zero");
+  testTrue(g,
+           !input.isGamepadButtonPressed(GamepadButton::A),
+           "button A default is not pressed");
+  testTrue(g,
+           !input.isGamepadButtonReleased(GamepadButton::A),
+           "button A default is not released");
+  testTrue(g,
+           input.getGamepadButtonAction(GamepadButton::A) == InputAction::None,
+           "button A default action is None");
+
+  GamepadState state;
+  state.connected = true;
+  state.axes[static_cast<size_t>(GamepadAxis::LeftX)] = 0.75f;
+  state.axes[static_cast<size_t>(GamepadAxis::LeftY)] = -0.5f;
+  state.axes[static_cast<size_t>(GamepadAxis::RightX)] = -1.0f;
+  state.axes[static_cast<size_t>(GamepadAxis::RightY)] = 1.0f;
+  state.axes[static_cast<size_t>(GamepadAxis::LeftTrigger)] = 0.8f;
+  state.axes[static_cast<size_t>(GamepadAxis::RightTrigger)] = 0.2f;
+  state.buttons[static_cast<size_t>(GamepadButton::A)] = InputAction::Press;
+  state.buttons[static_cast<size_t>(GamepadButton::B)] = InputAction::Release;
+  InputManagerTestAccess::setGamepadState(input, state);
+
+  testTrue(g, input.isGamepadConnected(), "gamepad connection is observed");
+  const std::array<float, 2> left = input.getGamepadLeftStick();
+  testTrue(g,
+           left[0] == 0.75f && left[1] == -0.5f,
+           "continuous 360 left thumbstick coordinates match");
+  const std::array<float, 2> right = input.getGamepadRightStick();
+  testTrue(g,
+           right[0] == -1.0f && right[1] == 1.0f,
+           "continuous 360 right thumbstick coordinates match");
+  testTrue(
+    g, input.getGamepadLeftTrigger() == 0.8f, "left trigger axis matches");
+  testTrue(
+    g, input.getGamepadRightTrigger() == 0.2f, "right trigger axis matches");
+  testTrue(
+    g, input.isGamepadButtonPressed(GamepadButton::A), "button A is pressed");
+  testTrue(g,
+           input.isGamepadButtonJustPressed(GamepadButton::A),
+           "button A is just pressed");
+  testTrue(g,
+           !input.isGamepadButtonPressed(GamepadButton::B),
+           "button B is not pressed");
+  testTrue(
+    g, input.isGamepadButtonReleased(GamepadButton::B), "button B is released");
+
+  input.update();
+  testTrue(
+    g, input.isGamepadConnected(), "gamepad remains connected across update");
+  testTrue(g,
+           input.getGamepadButtonAction(GamepadButton::A) == InputAction::Hold,
+           "Press transitions to Hold on next update");
+  testTrue(
+    g, input.isGamepadButtonPressed(GamepadButton::A), "button A remains held");
+  testTrue(g,
+           !input.isGamepadButtonJustPressed(GamepadButton::A),
+           "button A is no longer just pressed");
+  testTrue(g,
+           input.getGamepadButtonAction(GamepadButton::B) == InputAction::None,
+           "Release transitions to None on next update");
+  testTrue(g,
+           !input.isGamepadButtonReleased(GamepadButton::B),
+           "button B is no longer released");
+}
+
+static void
 testBackendConfigTokens()
 {
   testSection("BackendConfig: environment token conversion");
@@ -1530,6 +1615,8 @@ registerRuntimeUtilityTests(IllumoTestRegistry& registry)
   registry.add("Illumo.InputManager.ContextCapacity", []() {
     return runRuntimeUtilityCase(testInputManagerContextsAndCapacity);
   });
+  registry.add("Illumo.InputManager.Gamepad",
+               []() { return runRuntimeUtilityCase(testInputManagerGamepad); });
   registry.add("Illumo.BackendConfig.TokenConversion",
                []() { return runRuntimeUtilityCase(testBackendConfigTokens); });
   registry.add("Illumo.Presentation.FramePacingPolicy", []() {

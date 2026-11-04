@@ -1,6 +1,8 @@
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <utility>
 
@@ -341,6 +343,18 @@ InputManager::InputManager(GLFWwindow* window)
     glfwSetKeyCallback(window, normalKeyCallback);
     glfwSetCharCallback(window, characterCallback);
     glfwSetScrollCallback(window, scrollCallback);
+
+    // Register modern Bluetooth gamepad mappings for Windows DirectInput fallback.
+    // Modern Xbox Wireless / Series controllers over Bluetooth expose a DirectInput HID
+    // report where buttons are offset (X=b3, Y=b4, LB=b6, RB=b7, Back=b10, Start=b11,
+    // Guide=b12, LS=b13, RS=b14).
+    static constexpr const char* s_gamepadMappings =
+      "030000005e040000130b000000000000,Xbox Wireless Controller,platform:Windows,a:b0,b:b1,x:b3,y:b4,back:b10,start:b11,guide:b12,leftshoulder:b6,rightshoulder:b7,leftstick:b13,rightstick:b14,lefttrigger:a2,righttrigger:a5,leftx:a0,lefty:a1,rightx:a3,righty:a4,dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,\n"
+      "030000005e040000fd02000000000000,Xbox Wireless Controller,platform:Windows,a:b0,b:b1,x:b3,y:b4,back:b10,start:b11,guide:b12,leftshoulder:b6,rightshoulder:b7,leftstick:b13,rightstick:b14,lefttrigger:a2,righttrigger:a5,leftx:a0,lefty:a1,rightx:a3,righty:a4,dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,\n"
+      "030000005e040000200b000000000000,Xbox Wireless Controller,platform:Windows,a:b0,b:b1,x:b3,y:b4,back:b10,start:b11,guide:b12,leftshoulder:b6,rightshoulder:b7,leftstick:b13,rightstick:b14,lefttrigger:a2,righttrigger:a5,leftx:a0,lefty:a1,rightx:a3,righty:a4,dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,\n"
+      "030000005e040000050b000000000000,Xbox Elite Wireless Controller Series 2,platform:Windows,a:b0,b:b1,x:b3,y:b4,back:b10,start:b11,guide:b12,leftshoulder:b6,rightshoulder:b7,leftstick:b13,rightstick:b14,lefttrigger:a2,righttrigger:a5,leftx:a0,lefty:a1,rightx:a3,righty:a4,dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,\n"
+      "030000005e040000220b000000000000,Xbox Elite Wireless Controller Series 2,platform:Windows,a:b0,b:b1,x:b3,y:b4,back:b10,start:b11,guide:b12,leftshoulder:b6,rightshoulder:b7,leftstick:b13,rightstick:b14,lefttrigger:a2,righttrigger:a5,leftx:a0,lefty:a1,rightx:a3,righty:a4,dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,\n";
+    glfwUpdateGamepadMappings(s_gamepadMappings);
   }
   scrollOffset = new double(0.0);
 
@@ -372,6 +386,7 @@ InputManager::update()
     ILLUMO_PROFILE_ZONE("InputManager.pollEvents");
     glfwPollEvents();
   }
+  pollGamepad();
   ILLUMO_PROFILE_ZONE("InputManager.pollKeys");
   for (KeyCode keyCode : AllKeyCodes) {
     inputStatesCurrent[keyCode] = GetInputAction(keyCode);
@@ -530,5 +545,118 @@ InputManager::normalKeyCallback(GLFWwindow* /*window*/,
       return;
     }
     s_Instance->keyQueue.push({ localKey, localAction, mods });
+  }
+}
+
+static_assert(static_cast<int>(GamepadButton::A) == GLFW_GAMEPAD_BUTTON_A);
+static_assert(static_cast<int>(GamepadButton::B) == GLFW_GAMEPAD_BUTTON_B);
+static_assert(static_cast<int>(GamepadButton::X) == GLFW_GAMEPAD_BUTTON_X);
+static_assert(static_cast<int>(GamepadButton::Y) == GLFW_GAMEPAD_BUTTON_Y);
+static_assert(static_cast<int>(GamepadButton::LeftBumper) ==
+              GLFW_GAMEPAD_BUTTON_LEFT_BUMPER);
+static_assert(static_cast<int>(GamepadButton::RightBumper) ==
+              GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER);
+static_assert(static_cast<int>(GamepadButton::Back) ==
+              GLFW_GAMEPAD_BUTTON_BACK);
+static_assert(static_cast<int>(GamepadButton::Start) ==
+              GLFW_GAMEPAD_BUTTON_START);
+static_assert(static_cast<int>(GamepadButton::Guide) ==
+              GLFW_GAMEPAD_BUTTON_GUIDE);
+static_assert(static_cast<int>(GamepadButton::LeftThumb) ==
+              GLFW_GAMEPAD_BUTTON_LEFT_THUMB);
+static_assert(static_cast<int>(GamepadButton::RightThumb) ==
+              GLFW_GAMEPAD_BUTTON_RIGHT_THUMB);
+static_assert(static_cast<int>(GamepadButton::DpadUp) ==
+              GLFW_GAMEPAD_BUTTON_DPAD_UP);
+static_assert(static_cast<int>(GamepadButton::DpadRight) ==
+              GLFW_GAMEPAD_BUTTON_DPAD_RIGHT);
+static_assert(static_cast<int>(GamepadButton::DpadDown) ==
+              GLFW_GAMEPAD_BUTTON_DPAD_DOWN);
+static_assert(static_cast<int>(GamepadButton::DpadLeft) ==
+              GLFW_GAMEPAD_BUTTON_DPAD_LEFT);
+
+static_assert(static_cast<int>(GamepadAxis::LeftX) == GLFW_GAMEPAD_AXIS_LEFT_X);
+static_assert(static_cast<int>(GamepadAxis::LeftY) == GLFW_GAMEPAD_AXIS_LEFT_Y);
+static_assert(static_cast<int>(GamepadAxis::RightX) ==
+              GLFW_GAMEPAD_AXIS_RIGHT_X);
+static_assert(static_cast<int>(GamepadAxis::RightY) ==
+              GLFW_GAMEPAD_AXIS_RIGHT_Y);
+static_assert(static_cast<int>(GamepadAxis::LeftTrigger) ==
+              GLFW_GAMEPAD_AXIS_LEFT_TRIGGER);
+static_assert(static_cast<int>(GamepadAxis::RightTrigger) ==
+              GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER);
+
+void
+InputManager::pollGamepad()
+{
+  ILLUMO_PROFILE_ZONE("InputManager.pollGamepad");
+  m_previousGamepadState = m_gamepadState;
+
+  if (window == nullptr) {
+    for (size_t i = 0; i < m_gamepadState.buttons.size(); ++i) {
+      if (m_gamepadState.buttons[i] == InputAction::Press) {
+        m_gamepadState.buttons[i] = InputAction::Hold;
+      } else if (m_gamepadState.buttons[i] == InputAction::Release) {
+        m_gamepadState.buttons[i] = InputAction::None;
+      }
+    }
+    return;
+  }
+
+  int gamepadId = -1;
+  for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
+    if (glfwJoystickPresent(jid) && glfwJoystickIsGamepad(jid)) {
+      gamepadId = jid;
+      break;
+    }
+  }
+
+  if (gamepadId == -1) {
+    m_gamepadState.connected = false;
+    m_gamepadState.axes.fill(0.0f);
+    for (size_t i = 0; i < m_gamepadState.buttons.size(); ++i) {
+      if (m_previousGamepadState.buttons[i] == InputAction::Press ||
+          m_previousGamepadState.buttons[i] == InputAction::Hold) {
+        m_gamepadState.buttons[i] = InputAction::Release;
+      } else {
+        m_gamepadState.buttons[i] = InputAction::None;
+      }
+    }
+    return;
+  }
+
+  GLFWgamepadstate state;
+  if (!glfwGetGamepadState(gamepadId, &state)) {
+    m_gamepadState.connected = false;
+    m_gamepadState.axes.fill(0.0f);
+    m_gamepadState.buttons.fill(InputAction::None);
+    return;
+  }
+
+  m_gamepadState.connected = true;
+  for (size_t i = 0; i < m_gamepadState.axes.size(); ++i) {
+    float val = state.axes[i];
+    if (!std::isfinite(val)) {
+      val = 0.0f;
+    }
+    m_gamepadState.axes[i] = std::clamp(val, -1.0f, 1.0f);
+  }
+
+  for (size_t i = 0; i < m_gamepadState.buttons.size(); ++i) {
+    const bool pressed = state.buttons[i] == GLFW_PRESS;
+    const InputAction prev = m_previousGamepadState.buttons[i];
+    if (pressed) {
+      if (prev == InputAction::Press || prev == InputAction::Hold) {
+        m_gamepadState.buttons[i] = InputAction::Hold;
+      } else {
+        m_gamepadState.buttons[i] = InputAction::Press;
+      }
+    } else {
+      if (prev == InputAction::Press || prev == InputAction::Hold) {
+        m_gamepadState.buttons[i] = InputAction::Release;
+      } else {
+        m_gamepadState.buttons[i] = InputAction::None;
+      }
+    }
   }
 }

@@ -41,4 +41,9 @@ public:
   {
     return input.TranslateInputActionGLFW(action);
   }
+
+  static void setGamepadState(InputManager& input, const GamepadState& state)
+  {
+    input.setGamepadState(state);
+  }
 };

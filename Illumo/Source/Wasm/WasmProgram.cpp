@@ -61,6 +61,7 @@ static GuestInput
 snapshot(IllumoContext& context, double elapsed)
 {
   GuestInput input;
+  input.version = 3;
   input.elapsed = elapsed;
   const std::array<int, 2> dimensions = context.window->getWindowDimensions();
   input.width = static_cast<std::uint32_t>(std::clamp(dimensions[0], 1, 65536));
@@ -103,6 +104,16 @@ snapshot(IllumoContext& context, double elapsed)
       input.characters.push_back(character);
     }
   }
+  input.eventSurfaces.assign(input.events.size(), 0u);
+  input.characterSurfaces.assign(input.characters.size(), 0u);
+
+  const GamepadState& gamepad = manager.getGamepadState();
+  input.gamepad.connected = gamepad.connected;
+  input.gamepad.axes = gamepad.axes;
+  for (std::size_t i = 0; i < GamepadState::ButtonCount; ++i) {
+    input.gamepad.buttons[i] = wasmGuestAction(gamepad.buttons[i]);
+  }
+
   return input;
 }
 
