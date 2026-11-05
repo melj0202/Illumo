@@ -41,6 +41,12 @@ frame live in Illumo:
   is closed (plain keys only). Listings are read synchronously when a
   directory expands; a withdrawn tree closes the browser, and hosts without a
   tree report that none is mounted. `Illumo.Debug.FileTreeOverlay` covers it.
+  Its `gamepad [on|off|toggle]` (`joystick_debug [on|off|toggle]`) command and
+  `showGamepadVisuals` environment variable (default `0`) toggle
+  `GamepadOverlay` (`Illumo/Source/Engine/GamepadOverlay.h`), which draws the
+  gamepad status line, 2D analog-stick deflection circles with L3/R3 click
+  flashes, and logs button/trigger press edges to the console.
+  `Illumo.Debug.GamepadOverlay` and `Illumo.Host.DebugOverlayGamepad` cover it.
 - `IllumoApplicationDefinition` accepts declarative consumer policy: name,
   command line, defaults and the `run` callback,
   `int (*)(Illumo&, std::chrono::steady_clock::time_point launched)`, which

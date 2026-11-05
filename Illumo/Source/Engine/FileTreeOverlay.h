@@ -146,6 +146,14 @@ public:
     rebuild();
   }
 
+  void setTop(float top)
+  {
+    if (m_top != top) {
+      m_top = top;
+      m_dirty = true;
+    }
+  }
+  float top() const { return m_top; }
   const std::vector<GuiFileTreeRow>& rows() const { return m_rows; }
   std::string selectedPath() const
   {
@@ -158,7 +166,7 @@ public:
 private:
   std::size_t visibleRows() const
   {
-    const float height = std::max(m_height, 200.0f) - kTop - 8.0f;
+    const float height = std::max(m_height, m_top + 160.0f) - m_top - 8.0f;
     const float rows = (height - kHeaderHeight - kFooterHeight) / kRowHeight;
     return rows < 1.0f ? 1u : static_cast<std::size_t>(rows);
   }
@@ -241,9 +249,9 @@ private:
   {
     m_visual.clearPrimitives();
     const float width = std::max(160.0f, std::min(kWidth, m_width - 16.0f));
-    const float height = std::max(200.0f, m_height) - kTop - 8.0f;
+    const float height = std::max(m_top + 160.0f, m_height) - m_top - 8.0f;
     const float x = 8.0f;
-    const float y = kTop;
+    const float y = m_top;
     m_visual.addFilledRect(x, y, width, height, { 24, 27, 34, 235 });
     m_visual.addOutlineRect(x, y, width, height, { 108, 120, 139, 255 });
     m_visual.addText(
@@ -276,6 +284,7 @@ private:
   std::size_t m_first = 0;
   std::string m_status;
   GameVisual m_visual{ 2048 };
+  float m_top = kTop;
   bool m_dirty = true;
   float m_width = 0.0f;
   float m_height = 0.0f;

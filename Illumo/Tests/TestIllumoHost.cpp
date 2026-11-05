@@ -10,6 +10,7 @@
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/IllumoTestAccess.h>
 #include <Illumo/Testing/MockBackend.h>
+#include <Illumo/Testing/TestAccess.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -573,6 +574,135 @@ testDebugOverlayWatermarkDispatched()
   }
   std::filesystem::remove(path, error);
 }
+
+static void
+testDebugOverlayGamepadCommandsAndDispatch()
+{
+  testSection("Illumo: Debug overlay registers gamepad/joystick_debug commands "
+              "and dispatches joystick HUD");
+  const std::filesystem::path path =
+    temporaryEnvironmentPath("debug-overlay-gamepad");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  int windowDestructions = 0;
+  {
+    Illumo host(headlessConfig(path));
+    setHeadlessFactories(host, &windowDestructions);
+    testTrue(g, host.initialize(), "host initializes");
+    testTrue(g,
+             host.environment().getVars().count("showGamepadVisuals") == 1 &&
+               !host.environment().getVar("showGamepadVisuals").valueAsBool,
+             "host seeds showGamepadVisuals default off");
+    DebugOverlay overlay;
+    testTrue(g, overlay.start(host.context()), "overlay starts");
+
+    CommandRegistry& registry = *host.context().commandRegistry;
+    testTrue(g,
+             registry.HasCommand("gamepad") &&
+               registry.HasCommand("joystick_debug"),
+             "gamepad and joystick_debug commands registered");
+
+    registry.QueueCommand("joystick_debug", { "on" });
+    host.beginUpdate(0.016);
+    overlay.update(0.016);
+    host.endUpdate();
+    testTrue(g,
+             host.environment().getVar("showGamepadVisuals").valueAsBool,
+             "joystick_debug on enables showGamepadVisuals");
+
+    GamepadState gamepad;
+    gamepad.connected = true;
+    gamepad.axes[static_cast<std::size_t>(GamepadAxis::LeftX)] = 0.5f;
+    gamepad.buttons[static_cast<std::size_t>(GamepadButton::A)] =
+      InputAction::Press;
+    InputManagerTestAccess::setGamepadState(*host.context().inputManager,
+                                            gamepad);
+    host.beginUpdate(0.016);
+    overlay.update(0.016);
+    host.endUpdate();
+
+    bool buttonLogged = false;
+    for (const CommandLine::historyBuffer& entry :
+         host.context().commandLine->getHistory()) {
+      if (entry.content.find("Gamepad button pressed: A") !=
+          std::string::npos) {
+        buttonLogged = true;
+        break;
+      }
+    }
+    testTrue(
+      g, buttonLogged, "DebugOverlay logs gamepad button press when enabled");
+
+    DrawList* scene = host.beginRender();
+    overlay.dispatch(*scene);
+    GLString* gamepadStatus = nullptr;
+    for (DrawableBase* drawable : scene->drawablesIn(RenderLayerId::Debug)) {
+      GLString* str = dynamic_cast<GLString*>(drawable);
+      if (str != nullptr &&
+          str->getContent().find("Gamepad: [Connected]") != std::string::npos) {
+        gamepadStatus = str;
+        break;
+      }
+    }
+    testTrue(g,
+             gamepadStatus != nullptr,
+             "DebugOverlay dispatches gamepad status to Debug layer");
+    testTrue(g,
+             gamepadStatus != nullptr && gamepadStatus->getX() == 12 &&
+               gamepadStatus->getY() == 12,
+             "gamepad overlay sits at top-left (12, 12) when FPS and memory "
+             "are off");
+    host.endRender();
+
+    // Enabling FPS and memory stacks FPS, memory, and gamepad vertically
+    // without overlapping.
+    host.environment().setVar("showFPS", true);
+    host.environment().setVar("showMemory", true);
+    host.beginUpdate(0.016);
+    overlay.update(0.016);
+    host.endUpdate();
+    scene = host.beginRender();
+    overlay.dispatch(*scene);
+    GLString* fpsLabel = nullptr;
+    GLString* memLabel = nullptr;
+    gamepadStatus = nullptr;
+    for (DrawableBase* drawable : scene->drawablesIn(RenderLayerId::Debug)) {
+      GLString* str = dynamic_cast<GLString*>(drawable);
+      if (str == nullptr) {
+        continue;
+      }
+      if (str->getContent().find("fps") != std::string::npos) {
+        fpsLabel = str;
+      } else if (str->getContent().find("RAM:") != std::string::npos ||
+                 str->getContent().find("Memory:") != std::string::npos) {
+        memLabel = str;
+      } else if (str->getContent().find("Gamepad: [Connected]") !=
+                 std::string::npos) {
+        gamepadStatus = str;
+      }
+    }
+    testTrue(g,
+             fpsLabel != nullptr && memLabel != nullptr &&
+               gamepadStatus != nullptr,
+             "FPS, memory, and gamepad labels are all dispatched");
+    testTrue(g,
+             fpsLabel != nullptr && memLabel != nullptr &&
+               gamepadStatus != nullptr && fpsLabel->getY() == 12 &&
+               memLabel->getY() > fpsLabel->getY() &&
+               gamepadStatus->getY() > memLabel->getY(),
+             "DebugOverlay layout stacks FPS, memory, and gamepad in "
+             "non-overlapping vertical order");
+    host.endRender();
+
+    overlay.stop();
+    testTrue(g,
+             !registry.HasCommand("gamepad") &&
+               !registry.HasCommand("joystick_debug"),
+             "overlay stop unregisters gamepad commands");
+    host.shutdown();
+  }
+  std::filesystem::remove(path, error);
+}
 #endif
 
 static void
@@ -966,6 +1096,9 @@ registerIllumoHostTests(IllumoTestRegistry& registry)
                []() { return runHostCase(testDebugOverlayConsoleIsGlobal); });
   registry.add("Illumo.Host.DebugOverlayWatermarkDispatched", []() {
     return runHostCase(testDebugOverlayWatermarkDispatched);
+  });
+  registry.add("Illumo.Host.DebugOverlayGamepad", []() {
+    return runHostCase(testDebugOverlayGamepadCommandsAndDispatch);
   });
 #endif
 }

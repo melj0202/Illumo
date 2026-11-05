@@ -26,6 +26,7 @@
 
 #include "Engine/DebugOverlayState.h"
 #include "Engine/FileTreeOverlay.h"
+#include "Engine/GamepadOverlay.h"
 #include "Engine/ProfilerOverlay.h"
 #include <map>
 
@@ -1537,6 +1538,196 @@ testFileTreeOverlayNavigation()
 }
 
 static void
+testGamepadOverlay()
+{
+  testSection("GamepadOverlay: button names, press edges, triggers, joystick "
+              "visual, and overlay state");
+  testTrue(
+    g,
+    std::string(gamepadButtonName(GamepadButton::A)) == "A" &&
+      std::string(gamepadButtonName(GamepadButton::B)) == "B" &&
+      std::string(gamepadButtonName(GamepadButton::X)) == "X" &&
+      std::string(gamepadButtonName(GamepadButton::Y)) == "Y" &&
+      std::string(gamepadButtonName(GamepadButton::LeftBumper)) ==
+        "Left Bumper" &&
+      std::string(gamepadButtonName(GamepadButton::RightBumper)) ==
+        "Right Bumper" &&
+      std::string(gamepadButtonName(GamepadButton::Back)) == "Back" &&
+      std::string(gamepadButtonName(GamepadButton::Start)) == "Start" &&
+      std::string(gamepadButtonName(GamepadButton::Guide)) == "Guide" &&
+      std::string(gamepadButtonName(GamepadButton::LeftThumb)) ==
+        "Left Thumb" &&
+      std::string(gamepadButtonName(GamepadButton::RightThumb)) ==
+        "Right Thumb" &&
+      std::string(gamepadButtonName(GamepadButton::DpadUp)) == "Dpad Up" &&
+      std::string(gamepadButtonName(GamepadButton::DpadRight)) ==
+        "Dpad Right" &&
+      std::string(gamepadButtonName(GamepadButton::DpadDown)) == "Dpad Down" &&
+      std::string(gamepadButtonName(GamepadButton::DpadLeft)) == "Dpad Left" &&
+      std::string(gamepadButtonName(GamepadButton::Count)) == "Unknown",
+    "button names translate");
+
+  testTrue(g,
+           normalizeGamepadTrigger(-1.0f) == 0.0f &&
+             normalizeGamepadTrigger(0.0f) == 0.0f &&
+             normalizeGamepadTrigger(1.0f) == 1.0f &&
+             std::abs(normalizeGamepadTrigger(0.5f) - 0.5f) < 0.01f,
+           "trigger normalization handles [-1, 1] and [0, 1] scales");
+
+  NullRenderWindow window(640, 480);
+  EnvVars env(std::filesystem::path{});
+  CommandRegistry commands;
+  CommandLine console(&env, &commands, &window, nullptr, "Test");
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  InputManager input(nullptr);
+  GamepadDebugNotifier notifier;
+
+  testTrue(
+    g, notifier.poll(&input).empty(), "no button reported when disconnected");
+  testTrue(g, !notifier.isDown(GamepadButton::A), "button A is not down");
+
+  GamepadState state;
+  state.connected = true;
+  state.buttons[static_cast<std::size_t>(GamepadButton::A)] =
+    InputAction::Press;
+  InputManagerTestAccess::setGamepadState(input, state);
+
+  std::vector<GamepadButton> pressed = notifier.poll(&input);
+  testTrue(g,
+           pressed.size() == 1 && pressed[0] == GamepadButton::A &&
+             notifier.isDown(GamepadButton::A),
+           "fresh button A press reported");
+
+  state.buttons[static_cast<std::size_t>(GamepadButton::A)] = InputAction::Hold;
+  InputManagerTestAccess::setGamepadState(input, state);
+  testTrue(g,
+           notifier.poll(&input).empty() && notifier.isDown(GamepadButton::A),
+           "held button A does not re-report");
+
+  state.buttons[static_cast<std::size_t>(GamepadButton::A)] =
+    InputAction::Release;
+  state.buttons[static_cast<std::size_t>(GamepadButton::Y)] =
+    InputAction::Press;
+  state.axes[static_cast<std::size_t>(GamepadAxis::LeftTrigger)] = 0.85f;
+  InputManagerTestAccess::setGamepadState(input, state);
+
+  const int notified = notifier.pollAndNotify(&input, &console);
+  testEqInt(g, notified, 2, "Y button and Left Trigger notified");
+  testTrue(g, notifier.isLeftTriggerDown(), "LT is down past threshold");
+  testTrue(g,
+           notifier.lastPressedButton() == "Left Trigger",
+           "last pressed tracks trigger");
+
+  bool foundY = false;
+  bool foundLt = false;
+  for (const CommandLine::historyBuffer& line : console.getHistory()) {
+    if (line.content.find("Gamepad button pressed: Y") != std::string::npos) {
+      foundY = true;
+    }
+    if (line.content.find("Gamepad button pressed: Left Trigger") !=
+        std::string::npos) {
+      foundLt = true;
+    }
+  }
+  testTrue(g,
+           foundY && foundLt,
+           "console history received button and trigger notifications");
+
+  // Hysteresis: LT held does not re-notify; releasing below 15% resets.
+  state.buttons[static_cast<std::size_t>(GamepadButton::Y)] = InputAction::Hold;
+  InputManagerTestAccess::setGamepadState(input, state);
+  testEqInt(
+    g, notifier.pollAndNotify(&input, &console), 0, "held LT does not repeat");
+  state.axes[static_cast<std::size_t>(GamepadAxis::LeftTrigger)] = 0.05f;
+  InputManagerTestAccess::setGamepadState(input, state);
+  notifier.pollAndNotify(&input, &console);
+  testTrue(g, !notifier.isLeftTriggerDown(), "LT resets below 15%");
+
+  // Joystick visual deflection, clamping, and click flash decay.
+  JoystickDebugVisual visual;
+  InputManager disconnectedInput(nullptr);
+  visual.update(&disconnectedInput, 0.016);
+  testTrue(g,
+           !visual.isConnected() && visual.shapeCount() == 0,
+           "disconnected visual produces no shapes");
+
+  state.axes[static_cast<std::size_t>(GamepadAxis::LeftX)] = 1.5f;
+  state.axes[static_cast<std::size_t>(GamepadAxis::LeftY)] = 0.0f;
+  state.axes[static_cast<std::size_t>(GamepadAxis::RightX)] = -0.3f;
+  state.axes[static_cast<std::size_t>(GamepadAxis::RightY)] = 0.6f;
+  state.buttons[static_cast<std::size_t>(GamepadButton::LeftThumb)] =
+    InputAction::Press;
+  InputManagerTestAccess::setGamepadState(input, state);
+  visual.update(&input, 0.016);
+  testTrue(g,
+           visual.isConnected() && visual.shapeCount() > 0,
+           "connected visual generates stick shapes");
+  testTrue(g,
+           std::abs(visual.leftPosition()[0] - 1.0f) < 0.01f &&
+             std::abs(visual.rightPosition()[0] - (-0.3f)) < 0.01f &&
+             std::abs(visual.rightPosition()[1] - 0.6f) < 0.01f,
+           "stick positions clamp to unit circle");
+  testTrue(g,
+           visual.isLeftClicked() && visual.leftFlash() > 0.3f,
+           "left stick click activates flash");
+  state.buttons[static_cast<std::size_t>(GamepadButton::LeftThumb)] =
+    InputAction::Release;
+  InputManagerTestAccess::setGamepadState(input, state);
+  visual.update(&input, 0.400);
+  testTrue(g,
+           !visual.isLeftClicked() && visual.leftFlash() == 0.0f,
+           "flash decays to zero after release");
+
+  // GamepadOverlay envvar gating and DrawList dispatch.
+  GamepadOverlay gamepadOverlay;
+  gamepadOverlay.prepare(&renderer, &window, &camera);
+  testTrue(g,
+           !GamepadOverlay::isEnabled(nullptr) &&
+             !GamepadOverlay::isEnabled(&env),
+           "disabled by default");
+  gamepadOverlay.update(0.016, &env, &input, &console);
+  testTrue(g, !gamepadOverlay.visible(), "overlay hidden when disabled");
+
+  env.setVar("showGamepadVisuals", "1");
+  testTrue(
+    g, GamepadOverlay::isEnabled(&env), "enabled via showGamepadVisuals");
+  gamepadOverlay.update(0.016, &env, &input, &console);
+  testTrue(g, gamepadOverlay.visible(), "overlay visible when enabled");
+  testTrue(g,
+           gamepadOverlay.statusLabel().getContent().find(
+             "Gamepad: [Connected]") != std::string::npos,
+           "status label reports connected gamepad");
+  testTrue(g,
+           gamepadOverlay.statusLabel().getX() == 12 &&
+             gamepadOverlay.statusLabel().getY() == 12,
+           "standalone gamepad overlay starts at top-left (12, 12)");
+  const float initialCenterY = gamepadOverlay.joystickVisual().leftCenter()[1];
+  testTrue(g,
+           initialCenterY > 12.0f && initialCenterY < 85.0f,
+           "joystick sockets sit directly beneath top-left status label");
+  float laidOutWidth = 0.0f;
+  float laidOutBottom = 0.0f;
+  gamepadOverlay.layout(
+    12.0f, 110.0f, Font::getDefaultFont().get(), &laidOutWidth, &laidOutBottom);
+  testTrue(g,
+           gamepadOverlay.statusLabel().getY() == 110 &&
+             gamepadOverlay.joystickVisual().leftCenter()[1] > 110.0f &&
+             laidOutWidth > 100.0f &&
+             laidOutBottom > gamepadOverlay.joystickVisual().leftCenter()[1],
+           "layout repositions status text and joystick sockets together");
+  DrawList drawList(&window, &camera);
+  gamepadOverlay.dispatch(drawList);
+  testEqSize(g,
+             drawList.drawablesIn(RenderLayerId::Debug).size(),
+             2u,
+             "connected overlay dispatches joystick visual and status label to "
+             "Debug layer");
+}
+
+static void
 testParseNumber()
 {
   long value = 0;
@@ -1591,6 +1782,8 @@ registerRuntimeUtilityTests(IllumoTestRegistry& registry)
   registry.add("Illumo.Debug.FileTreeOverlay", []() {
     return runRuntimeUtilityCase(testFileTreeOverlayNavigation);
   });
+  registry.add("Illumo.Debug.GamepadOverlay",
+               []() { return runRuntimeUtilityCase(testGamepadOverlay); });
   registry.add("Illumo.Profiler.Accounting", []() {
     return runRuntimeUtilityCase(testFrameProfilerAccounting);
   });

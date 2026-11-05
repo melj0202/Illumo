@@ -10,13 +10,15 @@
 class DebugOverlayState;
 class FileTreeOverlay;
 class FrameProfiler;
+class GamepadOverlay;
 class PixelWindow;
 class ProfilerOverlay;
 class SoftwareCanvas;
 
 // The developer overlay of debug-tool builds (ILLUMO_ENABLE_DEBUG_TOOLS): the
 // console and its detached window, the diagnostics and profiler overlays, the
-// `files` browser, the watermark and the renderer demo. The runtime updates it
+// `files` browser, the gamepad/joystick debug HUD, the watermark and the
+// renderer demo. The runtime updates it
 // before the program, so console keys come first, and dispatches it after the
 // program, so it draws on top.
 class DebugOverlay
@@ -40,6 +42,7 @@ private:
   std::unique_ptr<ProfilerOverlay> m_profilerOverlay;
   // The `files` browser over IllumoContext::fileTree.
   std::unique_ptr<FileTreeOverlay> m_fileTreeOverlay;
+  std::unique_ptr<GamepadOverlay> m_gamepadOverlay;
   void updateDiagnostics(double dt);
   void layoutDiagnostics();
   void updateFrameGraph();

@@ -3,6 +3,7 @@
 #endif
 #include "DebugOverlayState.h"
 #include "FileTreeOverlay.h"
+#include "GamepadOverlay.h"
 #include "Platform/PixelWindow.h"
 #include "ProfilerOverlay.h"
 #include <GLFW/glfw3.h>
@@ -57,6 +58,8 @@ DebugOverlay::start(IllumoContext& context)
   }
   m_fileTreeOverlay = std::make_unique<FileTreeOverlay>();
   m_fileTreeOverlay->prepare(ic->renderer, ic->window, ic->camera);
+  m_gamepadOverlay = std::make_unique<GamepadOverlay>();
+  m_gamepadOverlay->prepare(ic->renderer, ic->window, ic->camera);
 
   // Required for GLString / SplashText screen-space drawing
   GLString::setRenderWindow(ic->window);
@@ -306,6 +309,46 @@ DebugOverlay::registerRendererCommands()
     "asset_reload <all|path>",
     "Queue explicit texture/shader reloads",
     { "all" });
+
+  auto handleGamepadCommand = [this](const char* commandName,
+                                     const std::vector<std::string>& args) {
+    if (args.size() > 1 || (!args.empty() && args[0] != "on" &&
+                            args[0] != "off" && args[0] != "toggle")) {
+      ic->commandLine->logError(std::string("Usage: ") + commandName +
+                                " [on|off|toggle]");
+      return;
+    }
+    bool enabled = GamepadOverlay::isEnabled(ic->envVars);
+    if (!args.empty()) {
+      enabled = args[0] == "toggle" ? !enabled : args[0] == "on";
+      if (ic->envVars != nullptr) {
+        ic->envVars->setVar("showGamepadVisuals", enabled);
+      }
+      if (m_gamepadOverlay != nullptr) {
+        m_gamepadOverlay->update(
+          0.0, ic->envVars, ic->inputManager, ic->commandLine);
+      }
+      layoutDiagnostics();
+    }
+    ic->commandLine->logSuccess(std::string("Gamepad overlay: ") +
+                                (enabled ? "on" : "off"));
+  };
+  ic->commandRegistry->RegisterCommand(
+    "gamepad",
+    [handleGamepadCommand](const std::vector<std::string>& args) {
+      handleGamepadCommand("gamepad", args);
+    },
+    "gamepad [on|off|toggle]",
+    "Show or hide the gamepad and joystick debug overlay",
+    { "on", "off", "toggle" });
+  ic->commandRegistry->RegisterCommand(
+    "joystick_debug",
+    [handleGamepadCommand](const std::vector<std::string>& args) {
+      handleGamepadCommand("joystick_debug", args);
+    },
+    "joystick_debug [on|off|toggle]",
+    "Show or hide the gamepad and joystick debug overlay",
+    { "on", "off", "toggle" });
 }
 
 void
@@ -321,6 +364,8 @@ DebugOverlay::unregisterRendererCommands()
   }
   ic->commandRegistry->UnregisterCommand("assets");
   ic->commandRegistry->UnregisterCommand("asset_reload");
+  ic->commandRegistry->UnregisterCommand("gamepad");
+  ic->commandRegistry->UnregisterCommand("joystick_debug");
 }
 
 void
@@ -390,11 +435,40 @@ DebugOverlay::layoutDiagnostics()
   } else if (memoryLabel->isVisible()) {
     blockBottom = memoryY + sizePt * 3.0f;
   }
+  const bool hasPriorSection =
+    (diagnostics->showsFrameRate() && !diagnostics->frameRateText().empty()) ||
+    memoryLabel->isVisible();
+  if (m_gamepadOverlay != nullptr) {
+    const float gamepadY = hasPriorSection ? (blockBottom + 6.0f) : 12.0f;
+    float gamepadWidth = 0.0f;
+    float gamepadBottom = gamepadY;
+    m_gamepadOverlay->layout(
+      12.0f, gamepadY, font.get(), &gamepadWidth, &gamepadBottom);
+    if (m_gamepadOverlay->visible()) {
+      if (gamepadWidth > blockWidth) {
+        blockWidth = gamepadWidth;
+      }
+      blockBottom = gamepadBottom;
+    }
+  }
+  const bool showBlock =
+    diagnosticsLabel->isVisible() || memoryLabel->isVisible() ||
+    (m_gamepadOverlay != nullptr && m_gamepadOverlay->visible());
+  if (m_fileTreeOverlay != nullptr) {
+    const float fileTreeTop =
+      showBlock ? std::max(FileTreeOverlay::kTop, blockBottom + 12.0f)
+                : FileTreeOverlay::kTop;
+    m_fileTreeOverlay->setTop(fileTreeTop);
+  }
+  if (rendererDemo != nullptr) {
+    Transform2D demoTransform = rendererDemo->getTransform();
+    const float demoTop = showBlock ? (blockBottom + 12.0f) : 64.0f;
+    demoTransform.y = std::max(0.0f, demoTop - 64.0f);
+    rendererDemo->setTransform(demoTransform);
+  }
   if (m_diagnosticsBackdrop == nullptr) {
     return;
   }
-  const bool showBlock =
-    diagnosticsLabel->isVisible() || memoryLabel->isVisible();
   m_diagnosticsBackdrop->setVisible(showBlock && blockWidth > 0.0f);
   ShapePrimitive* plate = m_diagnosticsBackdrop->getShape(0);
   if (plate != nullptr) {
@@ -569,6 +643,11 @@ DebugOverlay::update(double dt)
     return;
   }
 
+  if (m_gamepadOverlay != nullptr) {
+    ILLUMO_PROFILE_ZONE("DebugOverlay.gamepadOverlay");
+    m_gamepadOverlay->update(
+      dt, ic->envVars, ic->inputManager, ic->commandLine);
+  }
   updateDiagnostics(dt);
   updateWatermarkPosition();
   if (rendererDemoEnabled && rendererDemo != nullptr) {
@@ -971,6 +1050,7 @@ DebugOverlay::stop()
   unregisterRendererCommands();
   m_profilerOverlay.reset();
   m_fileTreeOverlay.reset();
+  m_gamepadOverlay.reset();
   if (m_profiler != nullptr) {
     m_profiler->setEnabled(false);
   }
@@ -1036,6 +1116,9 @@ DebugOverlay::dispatch(DrawList& scene)
   }
   if (m_fileTreeOverlay != nullptr && m_fileTreeOverlay->visible()) {
     scene.AddDrawable(&m_fileTreeOverlay->visual(), RenderLayerId::Debug);
+  }
+  if (m_gamepadOverlay != nullptr && m_gamepadOverlay->visible()) {
+    m_gamepadOverlay->dispatch(scene);
   }
   if (watermarkLabel && watermarkLabel->isVisible()) {
     scene.AddDrawable(watermarkLabel, RenderLayerId::Debug);
