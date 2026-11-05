@@ -24,10 +24,9 @@ is a WASM package in `apps/<name>/` beside that one host: `game`, `illed`
 (`IllEd.wasm`) and `meshviewer` (`IllMeshViewer.wasm`); `IllEdCore` and
 `IllMeshViewerCore` remain only as native test-oracle libraries. The supported product path is
 Windows, GLFW, OpenGL, and — for the simulator — the sparse infinite or
-finite-toroidal canvas. Vulkan 1.3 (D-R33) and, on Windows, Direct3D 12
-(D-R36) backends with OpenGL's observable behaviour are selectable per launch
-(`GraphicsAPI`, `--graphics-api vulkan|d3d12`) and fall back to OpenGL when
-they cannot start. Illumo remains a reusable runtime and rendering
+finite-toroidal canvas. A Vulkan 1.3 backend (D-R33) with OpenGL's observable
+behaviour is selectable per launch (`GraphicsAPI`, `--graphics-api vulkan`) and
+falls back to OpenGL when it cannot start. Illumo remains a reusable runtime and rendering
 foundation; application policy stays in the consuming product. The optional
 `Illumo::Content` layer owns the one scene format every program reads
 (`.ilsc` format 2, instantiated by `SceneInstance`), `.ilpk` packages, and
@@ -205,8 +204,8 @@ cloned.
 | Launching other apps (Play in a window) | `Illumo/Include/Illumo/Wasm/{AppLauncher,RuntimeAppLauncher}.h`, `Illumo/Source/Wasm/RuntimeAppLauncher.cpp`, `Illumo/Include/Illumo/Platform/ChildProcess.h`, platform `*ChildProcess.cpp`, `IllumoGuest/Include/IllumoGuest/Launcher.h` |
 | Scene behaviours and playing a scene | `Illumo/Include/Illumo/Content/{BehaviourSchema,SceneBehaviours}.h`, `IllumoGuest/Include/IllumoGuest/PlayProgram.h`, `Playground/*` |
 | Debug renderer atlas and shader | `Illumo/Assets/RendererDemo/*` |
-| Production backend factories and selection | `Illumo/Source/Rendering/OpenGL/CreateOpenGLBackend.*`, `Illumo/Source/Rendering/Vulkan/CreateVulkanBackend.*`, `Illumo/Source/Rendering/D3D12/CreateD3D12Backend.*`, `Illumo/Source/Rendering/BackendConfig.h` (composed in `Engine/Illumo.cpp`) |
-| Real graphics execution | `Illumo/Source/Rendering/OpenGL/*`, `Illumo/Source/Rendering/Vulkan/*`, `Illumo/Source/Rendering/D3D12/*`, shared explicit-API pieces in `Illumo/Source/Rendering/Gpu/*` (dependencies in `Illumo/cmake/IllumoVulkanDeps.cmake` and `IllumoD3D12Deps.cmake`) |
+| Production backend factories and selection | `Illumo/Source/Rendering/OpenGL/CreateOpenGLBackend.*`, `Illumo/Source/Rendering/Vulkan/CreateVulkanBackend.*`, `Illumo/Source/Rendering/BackendConfig.h` (composed in `Engine/Illumo.cpp`) |
+| Real graphics execution | `Illumo/Source/Rendering/OpenGL/*`, `Illumo/Source/Rendering/Vulkan/*`, device-free SPIR-V/program/texel pieces in `Illumo/Source/Rendering/Gpu/*` (dependencies in `Illumo/cmake/IllumoVulkanDeps.cmake`) |
 | Headless backend | `Illumo/TestSupport/Include/Illumo/Testing/MockBackend.h` |
 | Input, console, env, logging, system CLI | `Illumo/Source/Services/*` |
 | OS entry and native save/load | `Illumo/Source/Platform/*` |
@@ -553,7 +552,6 @@ Subsystem rules live in:
 - `Illumo/Source/Rendering/AGENTS.md` plus
   `Illumo/Source/Rendering/OpenGL/AGENTS.md`,
   `Illumo/Source/Rendering/Vulkan/AGENTS.md`,
-  `Illumo/Source/Rendering/D3D12/AGENTS.md`,
   `Illumo/Source/Rendering/Primitives/AGENTS.md`; test-only MockBackend guidance
   lives in `Illumo/TestSupport/AGENTS.md`.
 

@@ -293,16 +293,6 @@ displayBackendContract()
   require(settings.getVar("GraphicsAPI").value == "VULKAN" &&
             window.graphicsApi() == "OPENGL" && exchange(queue).records.empty(),
           "A saved backend waits for the next launch and is not resent");
-
-  settings.setVar("GraphicsAPI", "d3d12");
-  window.synchronizeDisplay();
-  GuestServices direct3d = exchange(queue);
-  require(direct3d.records.size() == 1 &&
-            GuestDisplayRequest::read(direct3d.records[0].payload, request) &&
-            request.version == kGuestDisplayVersion &&
-            request.state.graphicsApi ==
-              GuestDisplayState::kGraphicsApiDirectX12,
-          "A Direct3D 12 choice travels in the current display version");
 }
 static void
 clipboardContract()

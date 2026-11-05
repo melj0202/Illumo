@@ -314,19 +314,14 @@ WasmGameServices::completeDisplay(GuestServices& results)
                                           static_cast<std::uint32_t>(running))
                           ? static_cast<std::uint32_t>(running)
                           : GuestDisplayState::kUnknownMsaa;
-    // The saved choice as the next launch reads it (a backend this build
-    // cannot start starts OpenGL; Direct3D 12 is Windows-only), and the
-    // backend the running window was created for.
+    // The saved choice as the next launch reads it (an unknown or unsupported
+    // setting starts OpenGL), and the backend the running window was created
+    // for.
     const std::uint32_t savedApi = GuestDisplayState::graphicsApiCode(
       m_environment->getVar("GraphicsAPI").value);
-#ifdef _WIN32
-    const bool startable = savedApi == GuestDisplayState::kGraphicsApiVulkan ||
-                           savedApi == GuestDisplayState::kGraphicsApiDirectX12;
-#else
-    const bool startable = savedApi == GuestDisplayState::kGraphicsApiVulkan;
-#endif
-    actual.graphicsApi =
-      startable ? savedApi : GuestDisplayState::kGraphicsApiOpenGl;
+    actual.graphicsApi = savedApi == GuestDisplayState::kGraphicsApiVulkan
+                           ? savedApi
+                           : GuestDisplayState::kGraphicsApiOpenGl;
     actual.activeGraphicsApi =
       GuestDisplayState::graphicsApiCode(m_window->graphicsApi());
     const EnvVar& motionBlur = m_environment->getVar("motionBlurEnabled");

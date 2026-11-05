@@ -1,7 +1,6 @@
 #include <Illumo/Engine/Illumo.h>
 
 #include "Rendering/BackendConfig.h"
-#include "Rendering/D3D12/CreateD3D12Backend.h"
 #include "Rendering/OpenGL/CreateOpenGLBackend.h"
 #include "Rendering/RenderWindow.h"
 #include "Rendering/Vulkan/CreateVulkanBackend.h"
@@ -47,20 +46,12 @@ createBackend(IRenderWindow* window, BackendDef api)
   if (api == BackendDef::VULKAN) {
     return CreateVulkanBackend(window);
   }
-#ifdef _WIN32
-  if (api == BackendDef::DIRECTX12) {
-    return CreateD3D12Backend(window);
-  }
-#endif
   return CreateOpenGLBackend(window);
 }
 
 static const char*
 backendDisplayName(BackendDef api)
 {
-  if (api == BackendDef::DIRECTX12) {
-    return "Direct3D 12";
-  }
   return api == BackendDef::VULKAN ? "Vulkan" : "OpenGL";
 }
 

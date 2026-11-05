@@ -21,47 +21,37 @@ toward a general-purpose engine. It began as a terminal Conway's Game of
 Life sim, was rewritten for OpenGL, and the renderer/engine code was split
 into a reusable library. The Game of Life sim is CSim.
 
-## Current state — as of 2026-10-25 (renderer and Linux sections updated 2026-10-24; D3D12 parity and size corrected 2026-10-25)
+## Current state — as of 2026-11-05 (renderer section updated 2026-11-05 for D3D12 retirement D-R40; Linux section updated 2026-10-25)
 
-- Renderer is multi-backend. On `main`: OpenGL + Vulkan, OpenGL default.
-- On `release/v26.10` (HEAD 108f687, checked 2026-10-24) there is also a
-  DirectX 12 backend: `Illumo/Source/Rendering/D3D12/` with 14 source
-  files, 196 KB (162 KB .cpp + 34 KB .h, from git ls-tree at 108f687;
-  the earlier "~175 KB" was low), plus an AGENTS.md. Largest files:
-  DeviceCommands 43.5 KB, DeviceResources 33 KB, Device 27 KB,
-  DevicePresent 23.5 KB, Device.h 22 KB. Status per Ryan
-  (2026-10-24): it passes and works — he has run it. jed verified the
-  sources exist; jed has NOT run the D3D12 backend.
-  The release branch's own docs agree: docs/d3d12-backend-plan.md says
-  "Status: complete, M0-M8 (D-R36)"; D-R36 is in
-  docs/architecture-consensus.md (decided 2026-10-01). Selection:
-  `GraphicsAPI` `DIRECTX12`/`d3d12` or `--graphics-api d3d12`; a failed
-  start falls back to OpenGL.
-- Branch-scope gotcha: `main` has no D3D12 directory, and jed's local
-  clone is main-only. A grep of main or of the local clone does NOT
-  settle questions about release-branch features. State the branch
-  with every backend claim.
+- Renderer is multi-backend on both `main` and `release/v26.10`: OpenGL
+  (default) + Vulkan 1.3.
+- Direct3D 12 retired on `release/v26.10` (2026-11-05, D-R40 superseding
+  D-R36; currently uncommitted in the local working tree): Ryan deleted
+  `Illumo/Source/Rendering/D3D12/` and instructed full removal of D3D12
+  support. Removed `IllumoD3D12Deps.cmake`, vendored
+  `Illumo/thirdparty/spirv-cross-1.4.363/`, `SPIRV-Cross` license staging,
+  `BackendDef::DIRECTX12`, `GuestDisplayState::kGraphicsApiDirectX12` (`3u`,
+  keeping `kGuestDisplayVersion = 8u` with version 6 unused),
+  `TestD3D12Shaders.cpp`, `Illumo.Gpu.D3D12*Parity`, D3D12 paths in
+  `GpuBackendParity`/`GpuInstancing`/`CaptureGpuTests`/`FrameCapture`, and
+  CSim's `DirectX 12` menu option (`CSim/` local working tree). Stale
+  `DIRECTX12`/`d3d12` settings fall back to OpenGL. Shared `Rendering/Gpu/`
+  helpers (`GlslToSpirv`, `GlslProgramCache`, `GpuShaderCache`,
+  `GpuProgramState`, `GpuTexels`) remain for Vulkan.
 - Vulkan backend is complete (plan milestones M0-M8) and implements the
   full IBackend interface with the same observable results as OpenGL.
-- Switching: `GraphicsAPI` setting, `--graphics-api`, or
-  `set GraphicsAPI vulkan` in the console (restart required).
-  A failed Vulkan start falls back to OpenGL.
+- Switching: `GraphicsAPI` setting (`OPENGL` or `VULKAN`), `--graphics-api`
+  (`opengl` or `vulkan`), or `set GraphicsAPI vulkan` in the console
+  (restart required). A failed Vulkan start falls back to OpenGL.
 - Validation: BackendParity renders seven scenes through the OpenGL and
-  Vulkan backends, matching within one pixel. Full Release build passes
-  709 tests, clang-tidy clean. Every package holds 60 FPS on both of
-  those backends on RTX 4080; uncapped Vulkan is at or above OpenGL.
-  D3D12 parity — CORRECTION 2026-10-25 (the 2026-10-24 text said no D3D12
-  parity result is recorded; that was true for `main` only): on
-  `release/v26.10`, BackendParity also covers D3D12
-  (Illumo/Tests/Gpu/GpuBackendParity.cpp creates the D3D12 backend).
-  docs/d3d12-backend-plan.md section 10 (M5) and D-R36 record: all seven
-  scenes match OpenGL within tolerance, D3D12 as closely as Vulkan (the
-  world scene differs in one pixel on both); Illumo.Gpu.D3D12*Parity and
-  `IllumoCaptureGpuTests --api d3d12` pass. These are repo records.
-  Neither jed nor Claude has run them. The plan says non-NVIDIA drivers
-  are not verified.
-- CSim runs through Vulkan: it has a Renderer row in its Video tab, and
-  title-scene tests / package captures run on both backends.
+  Vulkan backends, matching within one pixel. Full Release `IllumoWorkspace`
+  suite passes 785/785 tests (with `CSim/` and `Saturn/` cloned), clang-tidy
+  clean, plus 5/5 `Illumo.Gpu.*` parity tests and `IllumoCaptureGpuTests`
+  (default OpenGL and `--api vulkan`). Every package holds 60 FPS on both
+  backends on RTX 4080; uncapped Vulkan is at or above OpenGL.
+- CSim runs through OpenGL and Vulkan: its Renderer row in the Video tab
+  offers OpenGL and Vulkan, and title-scene tests / package captures run on
+  both backends.
 - Verified on Windows / NVIDIA only. No validation layers on the
   reference machine. Targets Vulkan 1.3. KosmicKrisp / Vulkan 1.4 on
   Apple silicon is plausible in principle, untested — do not claim it works.
@@ -149,6 +139,12 @@ into a reusable library. The Game of Life sim is CSim.
   switching projects, `IllEd.Gpu.Smoke`, play programs that host Saturn's
   scene) committed on `release/v26.10` as 3bf4c0ff. Local only, not pushed
   as of this entry. Plan: docs/illed-editing-wave4-plan.md.
+- 2026-11-05 — Direct3D 12 backend retired on `release/v26.10` (D-R40,
+  superseding D-R36) at Ryan's instruction after he deleted
+  `Illumo/Source/Rendering/D3D12/`. Removed `SPIRV-Cross`, D3D12 CMake/system
+  links, Display wire code 3, D3D12 shader/GPU parity tests, and CSim's
+  `DirectX 12` menu option; OpenGL and Vulkan 1.3 are now the only graphics
+  backends on both `main` and `release/v26.10` (currently uncommitted).
 
 ## Handoff note template (use for each session)
 
@@ -265,3 +261,36 @@ into a reusable library. The Game of Life sim is CSim.
   (`CSIM_READ_TOKEN`).
 - Files changed: build.py, tools/test_build.py, AGENTS.md,
   docs/packages/platform-linux.md, AI_SYNC.md.
+
+### 2026-11-05 — Antigravity — Remove DirectX 12 backend (D-R40)
+- Did: Completed removal of Direct3D 12 across `release/v26.10` and `CSim/`
+  after Ryan deleted `Illumo/Source/Rendering/D3D12/`. Deleted
+  `Illumo/cmake/IllumoD3D12Deps.cmake`, `Illumo/Tests/TestD3D12Shaders.cpp`,
+  and `Illumo/thirdparty/spirv-cross-1.4.363/` (plus stale staged
+  `SPIRV-Cross-LICENSE.txt`). Removed D3D12 targets/links/tests from
+  `Illumo/CMakeLists.txt` and `IllumoRuntime.cmake`; updated
+  `THIRD_PARTY_NOTICES.md`; removed `BackendDef::DIRECTX12` and D3D12
+  branches/comments in `BackendConfig.h`, `Illumo.cpp`, `FrameCapture.*`,
+  `IRenderWindow.h`, `RenderWindow.*`, `Rendering/Gpu/*.h`, and
+  `SysCmdLine.cpp`; removed `GuestDisplayState::kGraphicsApiDirectX12` (`3u`)
+  in `Display.h` and `WasmGameServices.cpp` while keeping
+  `kGuestDisplayVersion = 8u`; updated engine/WASM/GPU tests,
+  `CaptureGpuTests.cpp`, `CSim/` menu/settings/tests/docs, `AGENTS.md` files,
+  `README.md`, and canonical docs (`D-R40` superseding `D-R36`), and rebuilt
+  both LaTeX PDFs.
+- Verified (Windows, VS 2026, Release, `ILLUMO_ENABLE_CLANG_TIDY=ON`,
+  `ILLUMO_BUILD_WASM_RUNTIME=ON`): full workspace build + `IllumoCaptureGpuTests`
+  (0 errors, 0 new warnings); `docs/build.ps1` (exit 0); `IllumoWorkspace`
+  CTest 785/785 passed; `Illumo.Gpu.*` parity CTest 5/5 passed;
+  `IllumoCaptureGpuTests.exe` passed on OpenGL and `--api vulkan` and rejected
+  `--api d3d12` (exit 2). Observed two unrelated pre-existing issues on
+  untouched files: `tools/test_build.py` `test_console_fits_a_default_terminal`
+  (31 lines vs 30) and warnings in `Camera.cpp` / `TestShaderPreprocessor.cpp`.
+- Left open / next: Changes in `.` (`release/v26.10`) and `CSim/` (`main`) are
+  uncommitted per Git ownership rules (`Saturn/` has unrelated pre-existing
+  WIP and was left untouched). `.claude/skills/illumo-visual-capture-check/SKILL.md`
+  still mentions `d3d12` (3 lines; left untouched per no-skill-edit rule).
+- Files changed: 75 paths in `Illumo` repo (including deletions of
+  `Rendering/D3D12/`, `spirv-cross-1.4.363/`, `IllumoD3D12Deps.cmake`,
+  `TestD3D12Shaders.cpp`, plus code/CMake/docs/PDFs/`AI_SYNC.md`) and 6 files
+  in `CSim/`.

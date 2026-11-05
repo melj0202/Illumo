@@ -14,8 +14,7 @@
 #include <iostream>
 #include <vector>
 
-// --api vulkan or --api d3d12 runs the checks that need no OpenGL
-// introspection on that backend.
+// --api vulkan runs the checks that need no OpenGL introspection on Vulkan.
 static std::string g_api = "opengl";
 
 static bool
@@ -516,11 +515,11 @@ main(int argc, char** argv)
     return 0;
   }
   if (argc == 3 && std::string(argv[1]) == "--api" &&
-      (std::string(argv[2]) == "vulkan" || std::string(argv[2]) == "d3d12")) {
+      std::string(argv[2]) == "vulkan") {
     g_api = argv[2];
   } else if (argc != 1) {
     std::cerr << "Usage: IllumoCaptureGpuTests [--profiler-preview "
-                 "output.png | --api vulkan|d3d12]\n";
+                 "output.png | --api vulkan]\n";
     return 2;
   }
   const FrameCaptureOptions options = captureOptions(32, 32);

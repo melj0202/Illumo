@@ -1,6 +1,6 @@
-// Real-GPU parity of the OpenGL backend with Vulkan and (on Windows)
-// Direct3D 12: every scene renders through each in one process and each
-// image is compared with OpenGL's. Scenes cover the
+// Real-GPU parity of the OpenGL backend with Vulkan: every scene renders
+// through each in one process and each image is compared with OpenGL's.
+// Scenes cover the
 // token contract end to end: lit, shadowed and instanced 3D with a sky, 2D
 // shapes, sprites and text through the offscreen panel path, raw tokens
 // (culling, points, lines, wireframe, blending, depth, scissored clears,
@@ -10,7 +10,6 @@
 // passes.
 
 #include "GpuShared.h"
-#include "Rendering/D3D12/CreateD3D12Backend.h"
 #include "Rendering/OpenGL/CreateOpenGLBackend.h"
 #include "Rendering/Vulkan/CreateVulkanBackend.h"
 #include <GLFW/glfw3.h>
@@ -68,7 +67,6 @@ enum class ParityApi
 {
   OpenGl,
   Vulkan,
-  Direct3D12,
 };
 
 struct ParityRig
@@ -105,16 +103,10 @@ makeRig(ParityRig& rig, ParityApi api, GLFWwindow* context)
     rig.name = "OpenGL";
     rig.tag = "gl";
     backend = CreateOpenGLBackend(rig.window.get());
-  } else if (api == ParityApi::Vulkan) {
+  } else {
     rig.name = "Vulkan";
     rig.tag = "vk";
     backend = CreateVulkanBackend(rig.window.get(), false);
-  } else {
-    rig.name = "Direct3D 12";
-    rig.tag = "dx12";
-#ifdef _WIN32
-    backend = CreateD3D12Backend(rig.window.get(), false);
-#endif
   }
   const char* name = rig.name;
   if (!backend || !backend->Initialize()) {
@@ -1122,13 +1114,10 @@ runBackendParity(GLFWwindow* context, const std::string& dumpDirectory)
   if (!makeRig(openGl, ParityApi::OpenGl, context)) {
     return 77;
   }
-  // Every other backend this platform has is compared with OpenGL; one that
-  // cannot start here is skipped.
+  // Every other backend is compared with OpenGL; one that cannot start here is
+  // skipped.
   std::vector<std::unique_ptr<ParityRig>> candidates;
-  std::vector<ParityApi> apis = { ParityApi::Vulkan };
-#ifdef _WIN32
-  apis.push_back(ParityApi::Direct3D12);
-#endif
+  const std::vector<ParityApi> apis = { ParityApi::Vulkan };
   for (ParityApi api : apis) {
     std::unique_ptr<ParityRig> rig = std::make_unique<ParityRig>();
     if (makeRig(*rig, api, context)) {

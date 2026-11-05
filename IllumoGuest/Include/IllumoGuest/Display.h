@@ -10,10 +10,9 @@
 // earlier versions carry a whole factor 1-4. Version 4 appends the MSAA
 // preference (read when the host window is created) and the samples of the
 // window now running. Version 5 appends the rendering backend the host saves
-// for its next launch and the one now running. Version 6 adds the Direct3D 12
-// backend code; a version 5 report names it unknown (0). Version 7 appends
-// the display mode. Version 8 appends motionBlur. Hosts still accept versions
-// 1-7 and answer each request in its own version.
+// for its next launch and the one now running (version 6 is unused). Version 7
+// appends the display mode. Version 8 appends motionBlur. Hosts still accept
+// versions 1-7 and answer each request in its own version.
 inline constexpr std::uint32_t kGuestDisplayVersion = 8u;
 
 struct GuestDisplayState
@@ -47,8 +46,6 @@ struct GuestDisplayState
   static constexpr std::uint32_t kGraphicsApiUnset = 0u;
   static constexpr std::uint32_t kGraphicsApiOpenGl = 1u;
   static constexpr std::uint32_t kGraphicsApiVulkan = 2u;
-  // Version 6.
-  static constexpr std::uint32_t kGraphicsApiDirectX12 = 3u;
   // Version 7.
   static constexpr std::uint32_t kDisplayModeWindow = 0u;
   static constexpr std::uint32_t kDisplayModeFullscreen = 1u;
@@ -56,11 +53,6 @@ struct GuestDisplayState
   std::uint32_t displayMode = kDisplayModeWindow;
   // Version 8.
   bool motionBlur = false;
-  // The largest backend code `version` carries.
-  static std::uint32_t maximumGraphicsApi(std::uint32_t version)
-  {
-    return version >= 6u ? kGraphicsApiDirectX12 : kGraphicsApiVulkan;
-  }
   // The code for a GraphicsAPI setting value in any letter case; unset for
   // anything else.
   static std::uint32_t graphicsApiCode(const std::string& name)
@@ -73,9 +65,6 @@ struct GuestDisplayState
     if (upper == "OPENGL") {
       return kGraphicsApiOpenGl;
     }
-    if (upper == "DIRECTX12" || upper == "D3D12") {
-      return kGraphicsApiDirectX12;
-    }
     return upper == "VULKAN" ? kGraphicsApiVulkan : kGraphicsApiUnset;
   }
   // The GraphicsAPI setting value for a code; empty for unset.
@@ -83,9 +72,6 @@ struct GuestDisplayState
   {
     if (code == kGraphicsApiOpenGl) {
       return "OPENGL";
-    }
-    if (code == kGraphicsApiDirectX12) {
-      return "DIRECTX12";
     }
     return code == kGraphicsApiVulkan ? "VULKAN" : "";
   }
@@ -128,11 +114,10 @@ struct GuestDisplayState
       writer.u32(activeMsaa);
     }
     if (version >= 5u) {
-      // A code the version does not know reads as unknown.
-      const std::uint32_t maximum = maximumGraphicsApi(version);
-      writer.u32(graphicsApi <= maximum ? graphicsApi : kGraphicsApiUnset);
-      writer.u32(activeGraphicsApi <= maximum ? activeGraphicsApi
-                                              : kGraphicsApiUnset);
+      writer.u32(graphicsApi <= kGraphicsApiVulkan ? graphicsApi
+                                                   : kGraphicsApiUnset);
+      writer.u32(activeGraphicsApi <= kGraphicsApiVulkan ? activeGraphicsApi
+                                                         : kGraphicsApiUnset);
     }
     if (version >= 7u) {
       writer.u32(displayMode);
@@ -196,8 +181,8 @@ struct GuestDisplayState
            displayMode <= kDisplayModeExclusive && hideSystemCursor <= 1 &&
            motionBlur <= 1 && fps <= 1000 && scaleValid && validMsaa(msaa) &&
            (activeMsaa == kUnknownMsaa || validMsaa(activeMsaa)) &&
-           graphicsApi <= maximumGraphicsApi(version) &&
-           activeGraphicsApi <= maximumGraphicsApi(version);
+           graphicsApi <= kGraphicsApiVulkan &&
+           activeGraphicsApi <= kGraphicsApiVulkan;
   }
 };
 

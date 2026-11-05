@@ -7,14 +7,12 @@ This file specializes the repository `AGENTS.md` for
 
 Rendering defines backend-neutral command tokens, queueing, handles, assets,
 drawables, camera/style values, and the backend contract. Concrete OpenGL
-execution belongs only in `OpenGL/`, Vulkan execution only in `Vulkan/`
-(D-R33) and Direct3D 12 execution only in `D3D12/` (D-R36, Windows), each
-selected by `GraphicsAPI`; headless semantic execution belongs in `Mock/`.
-`Gpu/` holds what the explicit-API backends share and is free of their types:
-the GLSL to SPIR-V front end with OpenGL program reflection, OpenGL program
-uniform state and attribute layouts, and CPU texel conversions. Game and
-Services consume this boundary without importing GL, Vulkan or Direct3D
-types.
+execution belongs only in `OpenGL/` and Vulkan execution only in `Vulkan/`
+(D-R33), each selected by `GraphicsAPI`; headless semantic execution belongs in
+`Mock/`. `Gpu/` holds device-free explicit-API pieces used by `Vulkan/`: the
+GLSL to SPIR-V front end with OpenGL program reflection, OpenGL program uniform
+state and attribute layouts, shader caching, and CPU texel conversions. Game and
+Services consume this boundary without importing GL or Vulkan types.
 
 ## Required invariants
 
@@ -96,8 +94,8 @@ types.
   tokens built by hand or replayed from the wire may carry a stale key (D-R37).
 - `IBackend::setGpuCacheDirectory` is called before `Initialize`. A cache key
   must cover everything the cached output depends on; bump its format string
-  (`kGlslProgramCacheFormat`, `d3d12-dxbc-N`, `vulkan-pipelines-N`) when the
-  translation or serialized layout changes (D-R38).
+  (`kGlslProgramCacheFormat`, `vulkan-pipelines-N`) when the translation or
+  serialized layout changes (D-R38).
 - `VisualStore` replays a visual's recording while its
   `GameVisual::FrameState` is unchanged, so the recording may depend only on
   that state. Nothing may destroy a store visual between `append` and

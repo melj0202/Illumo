@@ -21,10 +21,10 @@ public headers, guests and products never see it.
 
 - `VulkanContext`: instance, surface, device selection, queue, VMA, optional
   features (line rasterization, sample locations), format mapping.
-- Shared with Direct3D 12 in `Rendering/Gpu/`: `GlslToSpirv` (glslang, GLSL
-  330 to SPIR-V with reflection), `GpuProgramState` (OpenGL program uniform
-  state, attribute layouts) and `GpuTexels` (CPU texel and readback
-  conversions), all headless-tested.
+- Device-free pieces in `Rendering/Gpu/`: `GlslToSpirv` (glslang, GLSL 330 to
+  SPIR-V with reflection), `GlslProgramCache` / `GpuShaderCache`,
+  `GpuProgramState` (OpenGL program uniform state, attribute layouts) and
+  `GpuTexels` (CPU texel and readback conversions), all headless-tested.
 - `VulkanDevice*`: the token executor, resources, submissions, presentation.
 - `VulkanBackend`: the `IBackend` facade (queue, statistics, validation text).
 - Dependencies: `thirdparty/{vulkan-headers,volk,vma,glslang}` built by

@@ -1,5 +1,4 @@
 #include "BackendConfig.h"
-#include "D3D12/CreateD3D12Backend.h"
 #include "OpenGL/CreateOpenGLBackend.h"
 #include "RenderWindow.h"
 #include "Vulkan/CreateVulkanBackend.h"
@@ -38,11 +37,7 @@ FrameCapture::validate(const FrameCaptureOptions& options)
   BackendDef api = BackendDef::OPENGL;
   if (!parseBackendDef(options.graphicsApi, &api) ||
       !isBackendImplemented(api)) {
-#ifdef _WIN32
-    return "Capture graphics API must be opengl, vulkan or directx12";
-#else
     return "Capture graphics API must be opengl or vulkan";
-#endif
   }
   return {};
 }
@@ -79,11 +74,6 @@ renderCapture(const FrameCaptureOptions& options,
   if (api == BackendDef::VULKAN) {
     backend = CreateVulkanBackend(window.get(), false);
     failure = "Unable to initialize Vulkan backend";
-#ifdef _WIN32
-  } else if (api == BackendDef::DIRECTX12) {
-    backend = CreateD3D12Backend(window.get(), false);
-    failure = "Unable to initialize Direct3D 12 backend";
-#endif
   } else {
     backend = CreateOpenGLBackend(window.get());
   }

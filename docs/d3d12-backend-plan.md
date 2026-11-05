@@ -1,6 +1,6 @@
 # Direct3D 12 backend execution plan
 
-Status: complete, M0-M8 (D-R36); see the validation log in section 10.
+Status: retired 2026-11-05 (D-R40 supersedes D-R36; Direct3D 12 support removed). Historical execution and validation record retained as provenance; see section 10.
 Tier 2 plan (`.agent/PLANS.md`: a new backend).
 Owner request (2026-10-01): "let's see if we can get DirectX 12 support on in
 just like we did with Vulkan" — the Vulkan contract of D-R33 applies: a backend

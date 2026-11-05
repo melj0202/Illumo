@@ -45,12 +45,6 @@ testCaptureValidation()
   testTrue(g,
            FrameCapture::validate(options).empty(),
            "Vulkan capture accepted in any letter case");
-  options.graphicsApi = "DirectX12";
-#ifdef _WIN32
-  testTrue(g,
-           FrameCapture::validate(options).empty(),
-           "Direct3D 12 capture accepted on Windows");
-#endif
   options.graphicsApi = "DirectX11";
   testTrue(g,
            !FrameCapture::validate(options).empty(),

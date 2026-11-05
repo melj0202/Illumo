@@ -47,10 +47,8 @@ RenderWindow::RenderWindow(const int width,
                            BackendDef graphicsApi)
   : IRenderWindow(width, height, title, envVars)
   , m_captureOnly(captureOnly)
-  , m_graphicsApi(graphicsApi == BackendDef::VULKAN ||
-                      graphicsApi == BackendDef::DIRECTX12
-                    ? graphicsApi
-                    : BackendDef::OPENGL)
+  , m_graphicsApi(graphicsApi == BackendDef::VULKAN ? BackendDef::VULKAN
+                                                    : BackendDef::OPENGL)
 {
 
   /*Init member variables*/
@@ -88,9 +86,7 @@ RenderWindow::initialize()
   glfwInitialized = true;
   Logger::LogTrace(std::string("GLFW ") + glfwGetVersionString());
   const bool openGl = m_graphicsApi == BackendDef::OPENGL;
-  const char* apiName = openGl                                   ? "OpenGL"
-                        : m_graphicsApi == BackendDef::DIRECTX12 ? "Direct3D 12"
-                                                                 : "Vulkan";
+  const char* apiName = openGl ? "OpenGL" : "Vulkan";
   glfwDefaultWindowHints();
   glfwWindowHint(GLFW_VISIBLE, m_captureOnly ? GLFW_FALSE : GLFW_TRUE);
   if (openGl) {
@@ -112,8 +108,7 @@ RenderWindow::initialize()
   if (m_captureOnly) {
     samples = 0;
   }
-  // Vulkan and Direct3D 12 backends read the count back and build their own
-  // backbuffer.
+  // The Vulkan backend reads the count back and builds its own backbuffer.
   if (openGl) {
     glfwWindowHint(GLFW_SAMPLES, samples);
   }
@@ -225,8 +220,7 @@ RenderWindow::syncPresentationMode()
     return;
   }
 
-  // Vulkan and Direct3D 12 backends read isFramePaced and pick their
-  // present mode.
+  // The Vulkan backend reads isFramePaced and picks its present mode.
   if (m_graphicsApi == BackendDef::OPENGL) {
     glfwSwapInterval(requestedVsync ? 1 : 0);
   }

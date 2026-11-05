@@ -12,8 +12,8 @@
 #include <unordered_map>
 #include <vector>
 
-// OpenGL program and vertex-array semantics the explicit-API backends (Vulkan,
-// Direct3D 12) reproduce on the CPU. No device types; tested headlessly.
+// OpenGL program and vertex-array semantics the Vulkan backend reproduces on
+// the CPU. No device types; tested headlessly.
 
 struct TransparentStringHash
 {
