@@ -274,6 +274,9 @@ WasmGameServices::completeDisplay(GuestServices& results)
           "GraphicsAPI",
           GuestDisplayState::graphicsApiName(request.state.graphicsApi));
       }
+      if (request.version >= 8u) {
+        m_environment->setVar("motionBlurEnabled", request.state.motionBlur);
+      }
     }
     const EnvVar& fps = m_environment->getVar("fps");
     const EnvVar& scale = m_environment->getVar("uiScale");
@@ -326,6 +329,8 @@ WasmGameServices::completeDisplay(GuestServices& results)
       startable ? savedApi : GuestDisplayState::kGraphicsApiOpenGl;
     actual.activeGraphicsApi =
       GuestDisplayState::graphicsApiCode(m_window->graphicsApi());
+    const EnvVar& motionBlur = m_environment->getVar("motionBlurEnabled");
+    actual.motionBlur = !motionBlur.value.empty() && motionBlur.valueAsBool;
     // Each completion is written in its request's version, so a version 1
     // guest never sees the trailing field.
     GuestWireWriter payload;

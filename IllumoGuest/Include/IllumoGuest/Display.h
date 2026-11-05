@@ -12,9 +12,9 @@
 // window now running. Version 5 appends the rendering backend the host saves
 // for its next launch and the one now running. Version 6 adds the Direct3D 12
 // backend code; a version 5 report names it unknown (0). Version 7 appends
-// the display mode. Hosts still accept versions 1-6 and answer each request
-// in its own version.
-inline constexpr std::uint32_t kGuestDisplayVersion = 7u;
+// the display mode. Version 8 appends motionBlur. Hosts still accept versions
+// 1-7 and answer each request in its own version.
+inline constexpr std::uint32_t kGuestDisplayVersion = 8u;
 
 struct GuestDisplayState
 {
@@ -54,6 +54,8 @@ struct GuestDisplayState
   static constexpr std::uint32_t kDisplayModeFullscreen = 1u;
   static constexpr std::uint32_t kDisplayModeExclusive = 2u;
   std::uint32_t displayMode = kDisplayModeWindow;
+  // Version 8.
+  bool motionBlur = false;
   // The largest backend code `version` carries.
   static std::uint32_t maximumGraphicsApi(std::uint32_t version)
   {
@@ -135,6 +137,9 @@ struct GuestDisplayState
     if (version >= 7u) {
       writer.u32(displayMode);
     }
+    if (version >= 8u) {
+      writer.u32(motionBlur ? 1u : 0u);
+    }
   }
   static bool read(GuestWireReader& reader,
                    GuestDisplayState& state,
@@ -165,6 +170,10 @@ struct GuestDisplayState
     if (version >= 7u) {
       displayMode = reader.u32();
     }
+    std::uint32_t motionBlur = 0u;
+    if (version >= 8u) {
+      motionBlur = reader.u32();
+    }
     const bool scaleValid =
       version >= 3u ? scale == 0u || (scale >= kMinimumUiScaleHundredths &&
                                       scale <= kMaximumUiScaleHundredths)
@@ -182,9 +191,10 @@ struct GuestDisplayState
     state.activeGraphicsApi = activeGraphicsApi;
     state.displayMode = displayMode;
     state.fullscreen = displayMode != kDisplayModeWindow;
+    state.motionBlur = motionBlur != 0u;
     return reader.valid() && fullscreen <= 1 && vsync <= 1 &&
            displayMode <= kDisplayModeExclusive && hideSystemCursor <= 1 &&
-           fps <= 1000 && scaleValid && validMsaa(msaa) &&
+           motionBlur <= 1 && fps <= 1000 && scaleValid && validMsaa(msaa) &&
            (activeMsaa == kUnknownMsaa || validMsaa(activeMsaa)) &&
            graphicsApi <= maximumGraphicsApi(version) &&
            activeGraphicsApi <= maximumGraphicsApi(version);

@@ -257,6 +257,8 @@ public:
   bool ownsBackend() const { return _ownedBackend != nullptr; }
   IRenderWindow* getWindow() { return _window; }
   Camera* getCamera() { return _camera; }
+  IEnvVars* getEnvVars() { return envVars; }
+  const IEnvVars* getEnvVars() const { return envVars; }
   const FrameContext& getFrameContext() const { return frameContext; }
   const ShadowFrameContext& getShadowFrameContext() const
   {

@@ -13,6 +13,7 @@
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/RenderPass.h>
+#include <Illumo/Rendering/RenderPipelineConfig.h>
 #include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
@@ -131,6 +132,7 @@ Illumo::applyHostDefaults()
       m_environment->setVar(defaultValue.name, defaultValue.value);
     }
   }
+  RenderPipelineConfig::seedDefaults(m_environment.get());
 }
 
 bool
@@ -373,26 +375,13 @@ Illumo::configureScenePipeline()
     return;
   }
 
-  const EnvVar& mbVar = m_environment->getVar("motionBlurEnabled");
-  const bool motionBlur = !mbVar.value.empty() && mbVar.valueAsBool;
+  const RenderPipelineConfig pipeline =
+    RenderPipelineConfig::fromEnv(m_environment.get());
 
-  if (motionBlur) {
-    float amount = 0.5f;
-    float maxVel = 0.2f;
-    int samples = 8;
-
-    const EnvVar& amountVar = m_environment->getVar("motionBlurAmount");
-    if (!amountVar.value.empty()) {
-      amount = static_cast<float>(amountVar.valueAsDouble);
-    }
-    const EnvVar& maxVar = m_environment->getVar("motionBlurMax");
-    if (!maxVar.value.empty()) {
-      maxVel = static_cast<float>(maxVar.valueAsDouble);
-    }
-    const EnvVar& samplesVar = m_environment->getVar("motionBlurSamples");
-    if (!samplesVar.value.empty()) {
-      samples = static_cast<int>(samplesVar.valueAsLong);
-    }
+  if (pipeline.motionBlurEnabled) {
+    const float amount = pipeline.motionBlurAmount;
+    const float maxVel = pipeline.motionBlurMax;
+    const int samples = pipeline.motionBlurSamples;
 
     if (m_motionBlurPipelineConfigured && m_configuredBlurAmount == amount &&
         m_configuredBlurMax == maxVel && m_configuredBlurSamples == samples) {

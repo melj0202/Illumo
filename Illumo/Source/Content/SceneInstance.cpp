@@ -5,6 +5,7 @@
 #include <Illumo/Rendering/Camera.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
+#include <Illumo/Rendering/Renderer.h>
 #include <Illumo/Services/Logger.h>
 
 #include "ScenePrimitiveMeshes.h"
@@ -224,6 +225,9 @@ SceneInstance::load(const SceneDocument& document,
       ++dropped;
     }
   }
+  if (m_renderer != nullptr && m_renderer->getEnvVars() != nullptr) {
+    m_pipelineConfig = RenderPipelineConfig::fromEnv(m_renderer->getEnvVars());
+  }
   m_lighting = resolveLighting();
   m_lightingDirty = false;
   rebuildEnvironment();
@@ -266,6 +270,10 @@ SceneInstance::setRenderer(Renderer* renderer)
   }
   const bool rebind = m_renderer != nullptr;
   m_renderer = renderer;
+  if (m_renderer != nullptr && m_renderer->getEnvVars() != nullptr) {
+    m_pipelineConfig = RenderPipelineConfig::fromEnv(m_renderer->getEnvVars());
+    m_lightingDirty = true;
+  }
   if (rebind) {
     rebuildAllAttachments();
     rebuildEnvironment();
@@ -429,19 +437,38 @@ SceneInstance::syncWorld()
   }
 }
 
-// The world's light follows the scene's resolved lighting with MeshVisual's
-// default shadow settings, so both paths shade alike.
+void
+SceneInstance::setPipelineConfig(const RenderPipelineConfig& config)
+{
+  if (m_pipelineConfig == config) {
+    return;
+  }
+  m_pipelineConfig = config;
+  m_graph.invalidateSnapshots();
+  for (std::pair<const std::string, std::unique_ptr<Record>>& entry :
+       m_records) {
+    for (size_t index = 0; index < entry.second->visuals.size(); ++index) {
+      applyLightingTo(*entry.second->visuals[index],
+                      entry.second->castShadows[index]);
+    }
+  }
+  applyWorldEnvironment();
+}
+
+// The world's light follows the scene's resolved lighting and the active
+// rendering pipeline configuration, so both paths shade alike.
 void
 SceneInstance::applyWorldEnvironment()
 {
   if (m_world == nullptr) {
     return;
   }
+  const bool lit = m_lighting.lit && m_pipelineConfig.lightingEnabled;
   RenderEnvironment environment;
   environment.lightDirection = { m_lighting.towardLight.x,
                                  m_lighting.towardLight.y,
                                  m_lighting.towardLight.z };
-  if (m_lighting.lit) {
+  if (lit) {
     environment.lightColor = { m_lighting.color.x,
                                m_lighting.color.y,
                                m_lighting.color.z };
@@ -453,14 +480,15 @@ SceneInstance::applyWorldEnvironment()
     environment.lightColor = { 0.0f, 0.0f, 0.0f };
     environment.ambientColor = { 1.0f, 1.0f, 1.0f };
   }
-  environment.shadowsEnabled = m_lighting.lit && m_lighting.shadows;
-  environment.shadowPcf = true;
-  environment.shadowBias = 0.001f;
-  environment.shadowSlopeScale = 0.004f;
-  environment.shadowNormalOffset = 0.015f;
-  environment.shadowMapSize = 1024;
-  environment.shadowMinimumRadius = 2.5f;
-  environment.shadowLightDistance = 8.0f;
+  environment.shadowsEnabled =
+    lit && m_lighting.shadows && m_pipelineConfig.shadowsEnabled;
+  environment.shadowPcf = m_pipelineConfig.shadowPcf;
+  environment.shadowBias = m_pipelineConfig.shadowBias;
+  environment.shadowSlopeScale = m_pipelineConfig.shadowSlopeScale;
+  environment.shadowNormalOffset = m_pipelineConfig.shadowNormalOffset;
+  environment.shadowMapSize = m_pipelineConfig.shadowMapSize;
+  environment.shadowMinimumRadius = m_pipelineConfig.shadowRadius;
+  environment.shadowLightDistance = m_pipelineConfig.lightDistance;
   environment.shadowCasterDistance = 100.0f;
   m_world->setEnvironment(environment);
 }
@@ -471,17 +499,26 @@ SceneInstance::update()
   ILLUMO_PROFILE_ZONE("SceneInstance.update");
   ILLUMO_PROFILE_PLOT("SceneInstance.Records", m_records.size());
   syncWorld();
+  bool pipelineChanged = false;
+  if (m_renderer != nullptr && m_renderer->getEnvVars() != nullptr) {
+    const RenderPipelineConfig nextPipeline =
+      RenderPipelineConfig::fromEnv(m_renderer->getEnvVars());
+    if (nextPipeline != m_pipelineConfig) {
+      m_pipelineConfig = nextPipeline;
+      pipelineChanged = true;
+    }
+  }
   bool anyLight = false;
   for (std::pair<const std::string, std::unique_ptr<Record>>& entry :
        m_records) {
     anyLight = anyLight || entry.second->hasLight;
   }
-  if (!m_lightingDirty && !anyLight) {
+  if (!m_lightingDirty && !anyLight && !pipelineChanged) {
     return;
   }
   const SceneLighting next = resolveLighting();
   m_lightingDirty = false;
-  if (sameLighting(next, m_lighting)) {
+  if (!pipelineChanged && sameLighting(next, m_lighting)) {
     return;
   }
   ILLUMO_PROFILE_ZONE("SceneInstance.applyLighting");
@@ -543,11 +580,22 @@ SceneInstance::resolveLighting() const
 void
 SceneInstance::applyLightingTo(MeshVisual& visual, bool castShadows) const
 {
-  visual.setLightingEnabled(m_lighting.lit);
+  const bool lit = m_lighting.lit && m_pipelineConfig.lightingEnabled;
+  visual.setLightingEnabled(lit);
   visual.setLightDirection(m_lighting.towardLight);
   visual.setLightColor(m_lighting.color);
   visual.setAmbientColor(m_lighting.ambient);
-  visual.setShadowsEnabled(m_lighting.lit && m_lighting.shadows && castShadows);
+  visual.setShadowsEnabled(lit && m_lighting.shadows && castShadows &&
+                           m_pipelineConfig.shadowsEnabled);
+  visual.setShadowPcfEnabled(m_pipelineConfig.shadowPcf);
+  visual.setShadowMapSize(m_pipelineConfig.shadowMapSize);
+  visual.setShadowRadius(m_pipelineConfig.shadowRadius);
+  visual.setLightDistance(m_pipelineConfig.lightDistance);
+  visual.setShadowBias(m_pipelineConfig.shadowBias);
+  visual.setShadowSlopeScale(m_pipelineConfig.shadowSlopeScale);
+  visual.setShadowNormalOffset(m_pipelineConfig.shadowNormalOffset);
+  visual.setMotionBlurAmount(m_pipelineConfig.motionBlurAmount);
+  visual.setMotionBlurMax(m_pipelineConfig.motionBlurMax);
 }
 
 const SceneDocument&

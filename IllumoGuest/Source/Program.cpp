@@ -1,6 +1,7 @@
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Gui/GuiEngineBrand.h>
 #include <Illumo/Rendering/GLString.h>
+#include <Illumo/Rendering/RenderPipelineConfig.h>
 #include <Illumo/Services/Logger.h>
 #include <IllumoGuest/InputProvider.h>
 #include <IllumoGuest/Program.h>
@@ -297,6 +298,7 @@ GuestProgram::update(const GuestInput& input)
       Logger::LogWarning("Settings unavailable: " + m_settings.error());
     }
     applyDefaults(m_settings);
+    RenderPipelineConfig::seedDefaults(&m_settings);
     m_window.bindDisplay(m_display, m_settings);
     m_phase = Phase::Bootstrap;
   }

@@ -2,6 +2,7 @@
 
 #include <Illumo/Content/SceneDocument.h>
 #include <Illumo/Rendering/IRenderWorld.h>
+#include <Illumo/Rendering/RenderPipelineConfig.h>
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <Illumo/Scene/SceneGraph.h>
 #include <Illumo/Scene/SceneGraphDrawable.h>
@@ -103,6 +104,13 @@ public:
   // binding.
   void setRenderWorld(IRenderWorld* world);
   IRenderWorld* renderWorld() const { return m_world; }
+  // Applies rendering pipeline flags and parameters; update() also refreshes
+  // this from the bound renderer's IEnvVars when present.
+  void setPipelineConfig(const RenderPipelineConfig& config);
+  const RenderPipelineConfig& pipelineConfig() const
+  {
+    return m_pipelineConfig;
+  }
   // Resolves lighting (light components can move with their parents) and
   // pushes changes into every visual, and into the render world when bound.
   // Call once per frame.
@@ -235,6 +243,7 @@ private:
   std::unordered_map<std::string, std::unique_ptr<AssetSlot>> m_assetSlots;
   std::unique_ptr<SkyboxVisual> m_skybox;
   SceneLighting m_lighting;
+  RenderPipelineConfig m_pipelineConfig;
   bool m_lightingDirty = true;
   std::vector<std::string> m_warnings;
   std::unordered_set<std::string> m_viewHidden;

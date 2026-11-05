@@ -7,10 +7,11 @@
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Gui/PanelSurfaces.h>
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/IRenderWindow.h>
 #include <Illumo/Rendering/MeshLoader.h>
+#include <Illumo/Rendering/RenderPipelineConfig.h>
 #include <Illumo/Rendering/Renderer.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
 #include <Illumo/Services/IEnvVars.h>
@@ -831,51 +832,16 @@ MeshViewerScene::applyShadowsFromEnv()
     return;
   }
 
-  const EnvVar& shadowsVar = ic->envVars->getVar("shadowsEnabled");
-  if (!shadowsVar.value.empty()) {
-    m_meshVisual->setShadowsEnabled(shadowsVar.valueAsBool);
-  }
-
-  const EnvVar& shadowMapSizeVar = ic->envVars->getVar("shadowMapSize");
-  if (!shadowMapSizeVar.value.empty()) {
-    m_meshVisual->setShadowMapSize(
-      static_cast<int>(shadowMapSizeVar.valueAsLong));
-  }
-
-  const EnvVar& shadowRadiusVar = ic->envVars->getVar("shadowRadius");
-  if (!shadowRadiusVar.value.empty()) {
-    m_meshVisual->setShadowRadius(
-      static_cast<float>(shadowRadiusVar.valueAsDouble));
-  }
-
-  const EnvVar& lightDistanceVar = ic->envVars->getVar("lightDistance");
-  if (!lightDistanceVar.value.empty()) {
-    m_meshVisual->setLightDistance(
-      static_cast<float>(lightDistanceVar.valueAsDouble));
-  }
-
-  const EnvVar& shadowBiasVar = ic->envVars->getVar("shadowBias");
-  if (!shadowBiasVar.value.empty()) {
-    m_meshVisual->setShadowBias(
-      static_cast<float>(shadowBiasVar.valueAsDouble));
-  }
-
-  const EnvVar& shadowSlopeVar = ic->envVars->getVar("shadowSlopeScale");
-  if (!shadowSlopeVar.value.empty()) {
-    m_meshVisual->setShadowSlopeScale(
-      static_cast<float>(shadowSlopeVar.valueAsDouble));
-  }
-
-  const EnvVar& shadowOffsetVar = ic->envVars->getVar("shadowNormalOffset");
-  if (!shadowOffsetVar.value.empty()) {
-    m_meshVisual->setShadowNormalOffset(
-      static_cast<float>(shadowOffsetVar.valueAsDouble));
-  }
-
-  const EnvVar& shadowPcfVar = ic->envVars->getVar("shadowPcf");
-  if (!shadowPcfVar.value.empty()) {
-    m_meshVisual->setShadowPcfEnabled(shadowPcfVar.valueAsBool);
-  }
+  const RenderPipelineConfig pipeline =
+    RenderPipelineConfig::fromEnv(ic->envVars);
+  m_meshVisual->setShadowsEnabled(pipeline.shadowsEnabled);
+  m_meshVisual->setShadowMapSize(pipeline.shadowMapSize);
+  m_meshVisual->setShadowRadius(pipeline.shadowRadius);
+  m_meshVisual->setLightDistance(pipeline.lightDistance);
+  m_meshVisual->setShadowBias(pipeline.shadowBias);
+  m_meshVisual->setShadowSlopeScale(pipeline.shadowSlopeScale);
+  m_meshVisual->setShadowNormalOffset(pipeline.shadowNormalOffset);
+  m_meshVisual->setShadowPcfEnabled(pipeline.shadowPcf);
 }
 
 void
@@ -885,38 +851,20 @@ MeshViewerScene::applyMotionBlurFromEnv()
     return;
   }
 
-  const EnvVar& enabledVar = ic->envVars->getVar("motionBlurEnabled");
-  const bool enabled = !enabledVar.value.empty() && enabledVar.valueAsBool;
+  const RenderPipelineConfig pipeline =
+    RenderPipelineConfig::fromEnv(ic->envVars);
   if (m_meshVisual) {
-    m_meshVisual->setMotionBlurEnabled(enabled);
+    m_meshVisual->setMotionBlurEnabled(pipeline.motionBlurEnabled);
+    m_meshVisual->setMotionBlurAmount(pipeline.motionBlurAmount);
+    m_meshVisual->setMotionBlurMax(pipeline.motionBlurMax);
   }
   if (m_wireframeVisual) {
-    m_wireframeVisual->setMotionBlurEnabled(enabled);
+    m_wireframeVisual->setMotionBlurEnabled(pipeline.motionBlurEnabled);
+    m_wireframeVisual->setMotionBlurAmount(pipeline.motionBlurAmount);
+    m_wireframeVisual->setMotionBlurMax(pipeline.motionBlurMax);
   }
   if (m_gridVisual) {
     m_gridVisual->setMotionBlurEnabled(false);
-  }
-
-  const EnvVar& amountVar = ic->envVars->getVar("motionBlurAmount");
-  if (!amountVar.value.empty()) {
-    const float amount = static_cast<float>(amountVar.valueAsDouble);
-    if (m_meshVisual) {
-      m_meshVisual->setMotionBlurAmount(amount);
-    }
-    if (m_wireframeVisual) {
-      m_wireframeVisual->setMotionBlurAmount(amount);
-    }
-  }
-
-  const EnvVar& maxVar = ic->envVars->getVar("motionBlurMax");
-  if (!maxVar.value.empty()) {
-    const float maxVel = static_cast<float>(maxVar.valueAsDouble);
-    if (m_meshVisual) {
-      m_meshVisual->setMotionBlurMax(maxVel);
-    }
-    if (m_wireframeVisual) {
-      m_wireframeVisual->setMotionBlurMax(maxVel);
-    }
   }
 }
 

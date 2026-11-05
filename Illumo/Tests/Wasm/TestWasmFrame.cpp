@@ -1147,7 +1147,7 @@ run(const std::string& name)
     beyond.u32(kGuestDisplayVersion);
     beyond.u32(1u);
     const std::uint32_t beyondFields[] = {
-      0u, 1u, 60u, 100u, 0u, 4u, GuestDisplayState::kUnknownMsaa, 4u, 0u
+      0u, 1u, 60u, 100u, 0u, 4u, GuestDisplayState::kUnknownMsaa, 4u, 0u, 0u, 0u
     };
     for (std::uint32_t field : beyondFields) {
       beyond.u32(field);
@@ -1240,6 +1240,14 @@ run(const std::string& name)
                exclusiveReply.displayMode ==
                  GuestDisplayState::kDisplayModeExclusive,
              "A version 7 request selects exclusive fullscreen");
+    GuestDisplayState blurState;
+    blurState.motionBlur = true;
+    GuestDisplayState blurReply;
+    testTrue(counters,
+             displayRoundTrip({ true, blurState }, 17, &blurReply) &&
+               env.getVar("motionBlurEnabled").valueAsBool &&
+               blurReply.motionBlur,
+             "A version 8 request applies and reports motion blur");
     GuestDisplayRequest decoded;
     GuestWireWriter future;
     future.u32(kGuestDisplayVersion + 1u);

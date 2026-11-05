@@ -70,6 +70,8 @@ public:
         ? preferredApi
         : GuestDisplayState::kGraphicsApiUnset;
     desired.activeGraphicsApi = m_activeGraphicsApi;
+    const EnvVar& motionBlur = m_environment->getVar("motionBlurEnabled");
+    desired.motionBlur = !motionBlur.value.empty() && motionBlur.valueAsBool;
     if (!m_requestedDisplay || desired != m_desired) {
       m_display->apply(desired);
       m_desired = desired;
@@ -86,6 +88,7 @@ public:
       m_environment->setVar("fps", actual.fps);
       m_environment->setVar("uiScale", UiScale::text(actual.uiScale));
       m_environment->setVar("msaa", static_cast<long>(actual.msaa));
+      m_environment->setVar("motionBlurEnabled", actual.motionBlur);
       m_activeMsaa = actual.activeMsaa;
       m_savedGraphicsApi = actual.graphicsApi;
       m_activeGraphicsApi = actual.activeGraphicsApi;

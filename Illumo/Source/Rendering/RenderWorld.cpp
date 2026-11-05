@@ -452,7 +452,7 @@ RenderWorld::recordColor(Renderer* renderer, Bucket& bucket)
                              environment.shadowNormalOffset);
   renderer->pushUniformInt(WorldLook::kShadowPcfUniform,
                            environment.shadowPcf ? 1 : 0);
-  renderer->pushUniformInt(WorldLook::kMotionBlurEnabledUniform, 0);
+  renderer->pushUniformInt(WorldLook::kMotionBlurEnabledUniform, 1);
   renderer->pushUniformVec4(WorldLook::kTintUniform,
                             material.tint[0],
                             material.tint[1],

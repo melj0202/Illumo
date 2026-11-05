@@ -137,8 +137,11 @@ struct WasmFrameRenderer::State
     std::vector<std::byte> vertices;
     std::shared_ptr<const Texture> texture;
     std::shared_ptr<const RetainedMesh> retained;
-    // Lit meshes: world bounds for host shadow-caster relevance.
+    // Lit meshes: world bounds for host shadow-caster relevance and the
+    // previous frame's MVP for per-pixel velocity output.
     AxisAlignedBounds3 worldBounds;
+    std::array<float, 16> prevMvp{ 1, 0, 0, 0, 0, 1, 0, 0,
+                                   0, 0, 1, 0, 0, 0, 0, 1 };
   };
   struct Mesh
   {
@@ -1333,6 +1336,29 @@ struct WasmFrameRenderer::State
     }
     // Swap rather than move: the replaced live state becomes next frame's
     // scratch and keeps its capacity (its references drop on release).
+    for (std::size_t index = 0; index < proposed.batches.size(); ++index) {
+      const GuestBatch& nextBatch = proposed.batches[index];
+      if (nextBatch.style != GuestBatchStyle::LitMesh) {
+        continue;
+      }
+      prepared[index].prevMvp = nextBatch.mvp;
+      for (std::size_t prev = 0; prev < frame.batches.size(); ++prev) {
+        const GuestBatch& prevBatch = frame.batches[prev];
+        if (prevBatch.style != GuestBatchStyle::LitMesh ||
+            prevBatch.firstIndex != nextBatch.firstIndex) {
+          continue;
+        }
+        const bool sameMesh =
+          prepared[index].retained
+            ? payloads[prev].retained == prepared[index].retained
+            : (!payloads[prev].retained &&
+               batchSlots[prev].index == slots[index].index);
+        if (sameMesh) {
+          prepared[index].prevMvp = prevBatch.mvp;
+          break;
+        }
+      }
+    }
     std::swap(frame, proposed);
     std::swap(payloads, prepared);
     std::swap(batchSlots, slots);
@@ -1545,7 +1571,9 @@ struct WasmFrameRenderer::State
 
   // Mirrors MeshVisual's lit draw; the light space, shadow map and resolved
   // light direction come from the host's shared shadow pass.
-  void appendLitMesh(const GuestBatch& batch, MeshHandle mesh)
+  void appendLitMesh(const GuestBatch& batch,
+                     const PreparedBatch& payload,
+                     MeshHandle mesh)
   {
     const Renderer::ShadowFrameContext& shadow =
       renderer.getShadowFrameContext();
@@ -1582,10 +1610,11 @@ struct WasmFrameRenderer::State
                               lighting.shadowNormalOffset);
     renderer.pushUniformInt(WorldLook::kShadowPcfUniform,
                             lighting.shadowPcf ? 1 : 0);
-    renderer.pushUniformMat4(WorldLook::kPrevMvpUniform, batch.mvp.data());
-    renderer.pushUniformInt(WorldLook::kMotionBlurEnabledUniform, 0);
-    renderer.pushUniformFloat(WorldLook::kMotionBlurAmountUniform, 0.0f);
-    renderer.pushUniformFloat(WorldLook::kMotionBlurMaxUniform, 0.0f);
+    renderer.pushUniformMat4(WorldLook::kPrevMvpUniform,
+                             payload.prevMvp.data());
+    renderer.pushUniformInt(WorldLook::kMotionBlurEnabledUniform, 1);
+    renderer.pushUniformFloat(WorldLook::kMotionBlurAmountUniform, 0.5f);
+    renderer.pushUniformFloat(WorldLook::kMotionBlurMaxUniform, 0.2f);
     renderer.pushUniformVec4(WorldLook::kTintUniform,
                              lighting.tint[0],
                              lighting.tint[1],
@@ -1791,7 +1820,7 @@ struct WasmFrameRenderer::State
       return false;
     }
     if (batch.style == GuestBatchStyle::LitMesh) {
-      appendLitMesh(batch, mesh);
+      appendLitMesh(batch, payload, mesh);
     } else if (batch.style == GuestBatchStyle::Skybox) {
       appendSkybox(batch, payload, mesh);
     } else {
