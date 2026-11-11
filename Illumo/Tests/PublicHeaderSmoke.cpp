@@ -5,7 +5,10 @@
   __has_include(<json/single_include/nlohmann/json.hpp>) || \
   __has_include(<glfw-3.4/include/GLFW/glfw3.h>) || \
   __has_include(<glew-2.1.0/include/GL/glew.h>) || \
-  __has_include(<tracy-0.14.1/public/tracy/Tracy.hpp>)
+  __has_include(<tracy-0.14.1/public/tracy/Tracy.hpp>) || \
+  __has_include(<Jolt/Jolt.h>) || \
+  __has_include(<jolt-5.6.0/Jolt/Jolt.h>) || \
+  __has_include(<Illumo/Physics/PhysicsWorld.h>)
 #error "Illumo exports unrelated vendor headers to public consumers"
 #endif
 

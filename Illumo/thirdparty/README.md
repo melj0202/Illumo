@@ -12,6 +12,7 @@ Do not remove the license files stored beside these source trees.
 | `glfw-3.4/` | GLFW 3.4 | `LICENSE.md` |
 | `glm/` | GLM 1.0.0 | `copying.txt` |
 | `glslang-16.6.0/` | glslang 16.6.0 (Vulkan SDK 1.4.363.0): `glslang/` (GLSL front end, no HLSL), `SPIRV/` (generator, no optimizer) and `LICENSES/`; upstream build files removed, built by `cmake/IllumoVulkanDeps.cmake` | `LICENSE.txt` and `LICENSES/` |
+| `jolt-5.6.0/` | Jolt Physics 5.6.0 (`Jolt/` only, without compute shaders or upstream build files; built by `cmake/IllumoJoltDeps.cmake` and linked privately by `IllumoPhysics` and `IllumoGuestPhysics`) | `LICENSE` |
 | `json/` | JSON for Modern C++ 3.12.0 | `LICENSE.MIT` |
 | `miniaudio-0.11.25/` | miniaudio 0.11.25 (`miniaudio.h` and upstream `README.md`; the implementation is compiled once, by `Source/Audio/AudioDecoder.cpp`) | `LICENSE` |
 | `stb/` | stb headers (`stb_image` is active) | `LICENSE` and the notice at the end of each header |

@@ -295,6 +295,21 @@ target_include_directories(IllumoContent SYSTEM PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/json/single_include")
 illumo_configure_runtime_target(IllumoContent)
 
+# Optional rigid-body and character physics layer above the engine
+# (docs/jolt-physics-plan.md). Headers live in Physics/Include so core Illumo
+# and Illumo::Content never compile, link or expose Jolt or Illumo::Physics.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/IllumoJoltDeps.cmake")
+add_library(IllumoPhysics STATIC
+  Source/Physics/PhysicsWorld.cpp
+)
+add_library(Illumo::Physics ALIAS IllumoPhysics)
+target_include_directories(IllumoPhysics PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Physics/Include>")
+target_link_libraries(IllumoPhysics
+  PUBLIC Illumo::Illumo
+  PRIVATE illumo_jolt)
+illumo_configure_runtime_target(IllumoPhysics)
+
 # Packs a package directory into an .ilpk, or verifies one.
 add_executable(IllumoPack tools/IllumoPack.cpp)
 target_link_libraries(IllumoPack PRIVATE Illumo::Content)
@@ -420,6 +435,17 @@ if(BUILD_TESTING)
     Illumo.Gpu.BackendParity
     PROPERTIES LABELS "IllumoGpu" SKIP_RETURN_CODE 77 TIMEOUT 60)
 
+  add_executable(IllumoPhysicsTests
+    Tests/Physics/TestPhysicsMain.cpp
+    Tests/Physics/TestPhysics.cpp
+  )
+  target_link_libraries(IllumoPhysicsTests PRIVATE
+    Illumo::Physics Illumo::TestSupport)
+  target_compile_definitions(IllumoPhysicsTests PRIVATE ILLUMO_TESTING)
+  illumo_configure_runtime_target(IllumoPhysicsTests)
+  illumo_discover_test_runner(IllumoPhysicsTests IllumoPhysics)
+  illumo_stage_msvc_asan(IllumoPhysicsTests)
+
   add_executable(IllumoPublicHeaderSmoke Tests/PublicHeaderSmoke.cpp)
   target_link_libraries(IllumoPublicHeaderSmoke PRIVATE Illumo::Illumo)
   illumo_configure_runtime_target(IllumoPublicHeaderSmoke)
@@ -433,7 +459,8 @@ if(BUILD_TESTING)
     add_custom_target(IllumoRunTests ${ILLUMO_RUN_TESTS_ALL}
       COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG>
         -L Illumo --output-on-failure
-      DEPENDS IllumoTestsDiscover IllumoPublicHeaderSmoke
+      DEPENDS IllumoTestsDiscover IllumoPhysicsTestsDiscover
+        IllumoPublicHeaderSmoke
       WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
       USES_TERMINAL
       COMMENT "Running the standalone Illumo test suite")

@@ -150,6 +150,20 @@ target_include_directories(IllumoGuestContent SYSTEM PRIVATE
   "${ILLUMO_ROOT}/Illumo/thirdparty")
 target_link_libraries(IllumoGuestContent PUBLIC IllumoGuestEngine)
 
+# Optional guest physics library mirroring Illumo::Physics. Jolt stays private
+# to IllumoGuestPhysics; guests that do not link it carry zero Jolt code.
+include("${ILLUMO_ROOT}/Illumo/cmake/IllumoJoltDeps.cmake")
+add_library(IllumoGuestPhysics STATIC
+  ../Illumo/Source/Physics/PhysicsWorld.cpp)
+target_include_directories(IllumoGuestPhysics PUBLIC
+  "${ILLUMO_ROOT}/Illumo/Physics/Include"
+  "${ILLUMO_ROOT}/Illumo/Include")
+target_include_directories(IllumoGuestPhysics SYSTEM PUBLIC
+  "${_illumo_guest_math}")
+target_link_libraries(IllumoGuestPhysics
+  PUBLIC IllumoGuestOptions
+  PRIVATE illumo_jolt)
+
 # The programs this workspace builds (the products here, or a generated
 # project's own): each directory's GuestTargets.cmake adds its modules with
 # illumo_add_guest. cmake/IllumoWasm.cmake passes their absolute paths.

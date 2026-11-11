@@ -12,8 +12,8 @@ add_subdirectory(Illumo)
 # A plain set(), not a cache entry, so a stale cache cannot keep an old folder.
 set(ILLUMO_GAME_DIR "CSim")
 set(ILLUMO_PROGRAMS IllEd IllMeshViewer Playground)
-set(_illumo_test_runners IllumoTestsDiscover IllEdTestsDiscover
-  IllMeshViewerTestsDiscover IllumoPublicHeaderSmoke)
+set(_illumo_test_runners IllumoTestsDiscover IllumoPhysicsTestsDiscover
+  IllEdTestsDiscover IllMeshViewerTestsDiscover IllumoPublicHeaderSmoke)
 set(ILLUMO_HAS_GAME OFF)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${ILLUMO_GAME_DIR}/CMakeLists.txt")
   set(ILLUMO_HAS_GAME ON)
