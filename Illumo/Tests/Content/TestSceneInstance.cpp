@@ -6,6 +6,7 @@
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <Illumo/Rendering/RenderWorld.h>
 #include <Illumo/Rendering/DrawList.h>
+#include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
@@ -922,11 +923,95 @@ testInstanceRenderWorld()
   return counters.failures;
 }
 
+static int
+testInstanceNonCastingShadowReceiver()
+{
+  TestCounters counters;
+  HeadlessRenderFixture fixture(640, 480);
+  fixture.mock.Initialize();
+  MemoryAssetSource source;
+  source.files["/app/meshes/floor.obj"] =
+    text("v -50 0 -50\nv 50 0 -50\nv 50 0 50\nv -50 0 50\nf 1 2 3\nf 1 3 4\n");
+  AssetManager assets(&fixture.renderer, false, &source);
+  RenderWorld world;
+  SceneDocument document;
+  document.worldMode = SceneWorldMode::World3D;
+  document.environment.hasSun = true;
+  document.environment.sun.shadows = true;
+  SceneAsset floorMesh;
+  floorMesh.id = "floor_mesh";
+  floorMesh.type = SceneAssetType::Mesh;
+  floorMesh.path = "meshes/floor.obj";
+  document.assets.push_back(std::move(floorMesh));
+  document.nodes.push_back(primitiveNode(
+    "caster", "", ScenePrimitiveShape::Cube, Vector3(0.0f, 1.0f, 0.0f)));
+  SceneNode floor;
+  floor.id = "floor";
+  floor.transform = Transform3D::fromPosition(Vector3(0.0f, -1.0f, 0.0f));
+  SceneComponent floorMeshComponent;
+  floorMeshComponent.value =
+    SceneMeshRenderer{ "floor_mesh", ColorRgba{ 200, 200, 200, 255 }, false };
+  floor.components.push_back(floorMeshComponent);
+  document.nodes.push_back(std::move(floor));
+
+  SceneInstance instance(&assets);
+  instance.setRenderer(&fixture.renderer);
+  instance.setRenderWorld(&world);
+  std::string error;
+  testTrue(counters,
+           instance.load(document, "/app", error) &&
+             world.stats().instances == 2,
+           "caster and non-casting floor become render world instances");
+  fixture.camera.setProjectionType(ProjectionType::Perspective);
+  fixture.camera.setPerspective(60.0f, 0.1f, 200.0f);
+  fixture.camera.lookAt(
+    Vector3(0.0f, 5.0f, 10.0f), Vector3(0.0f), Vector3(0.0f, 1.0f, 0.0f));
+
+  size_t ownDraws = 0;
+  size_t drawn = 0;
+  renderWithWorld(fixture, instance, world, &ownDraws, &drawn);
+  testTrue(counters,
+           drawn == 2 && world.stats().buckets == 2 &&
+             world.stats().shadowInstances == 1 &&
+             fixture.renderer.getShadowCasters().size() == 1,
+           "RenderWorld draws non-casting floor with shadows while excluding "
+           "it from shadow casters");
+
+  instance.setRenderWorld(nullptr);
+  renderWithWorld(fixture, instance, world, &ownDraws, &drawn);
+  size_t shadowDraws = 0;
+  size_t shadowTextureBinds = 0;
+  bool insideShadowTarget = false;
+  for (size_t index = 0; index < fixture.mock.getLastNonEmptySubmittedCount();
+       ++index) {
+    const RenderCommand& command = fixture.mock.getLastNonEmptySubmitted(index);
+    if (command.commandType == CommandType::SetFramebuffer) {
+      insideShadowTarget = command.bindFramebuffer.handle.isValid();
+    } else if (insideShadowTarget &&
+               command.commandType == CommandType::DrawIndexed) {
+      shadowDraws += 1;
+    } else if (!insideShadowTarget &&
+               command.commandType == CommandType::SetTexture &&
+               command.bindTexture.slot == WorldLook::kShadowTextureUnit) {
+      shadowTextureBinds += 1;
+    }
+  }
+  testTrue(counters,
+           shadowDraws == 1 && shadowTextureBinds == 2 &&
+             fixture.renderer.getShadowCasters().size() == 1,
+           "MeshVisual fallback also receives shadows on non-casting nodes "
+           "without registering them as shadow casters");
+  world.releaseResources();
+  return counters.failures;
+}
+
 void
 registerSceneInstanceTests(IllumoTestRegistry& registry)
 {
   registry.add("Illumo.Content.InstanceRenderWorld",
                []() { return testInstanceRenderWorld(); });
+  registry.add("Illumo.Content.InstanceNonCastingShadowReceiver",
+               []() { return testInstanceNonCastingShadowReceiver(); });
   registry.add("Illumo.Content.InstancePrimitives",
                []() { return testInstancePrimitives(); });
   registry.add("Illumo.Content.InstanceEnvironmentLight",

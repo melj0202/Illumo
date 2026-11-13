@@ -331,7 +331,7 @@ SceneInstance::setRenderWorld(IRenderWorld* world)
   }
   for (size_t index = 0; index < 2; ++index) {
     RenderMaterialDesc material;
-    material.receivesShadow = index == 0;
+    material.receivesShadow = true;
     material.castsShadow = index == 0;
     m_worldMaterials[index] = nextRenderWorldId();
     m_world->createMaterial(m_worldMaterials[index], material);
@@ -604,7 +604,8 @@ SceneInstance::applyLightingTo(MeshVisual& visual, bool castShadows) const
   visual.setLightColor(m_lighting.color);
   visual.setAmbientColor(m_lighting.ambient);
   visual.setShadowsEnabled(lit && m_lighting.shadows &&
-                           m_pipelineConfig.shadowsEnabled && castShadows);
+                           m_pipelineConfig.shadowsEnabled);
+  visual.setCastsShadows(castShadows);
   visual.setShadowPcfEnabled(m_pipelineConfig.shadowPcf);
   visual.setShadowMapSize(m_pipelineConfig.shadowMapSize);
   visual.setShadowRadius(m_pipelineConfig.shadowRadius);

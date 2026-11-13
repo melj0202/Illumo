@@ -84,10 +84,10 @@ MeshVisual::setAmbientColor(const glm::vec3& color)
 static int
 snapShadowMapSize(int size)
 {
-  const int options[4] = { 256, 512, 1024, 2048 };
+  const int options[5] = { 256, 512, 1024, 2048, 4096 };
   int best = 1024;
   int bestDelta = 100000;
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < 5; ++i) {
     int delta = size - options[i];
     if (delta < 0) {
       delta = -delta;
@@ -995,7 +995,7 @@ void
 MeshVisual::collectShadowCasterWithWorld(Renderer* value,
                                          const glm::mat4& nodeWorld)
 {
-  if (!isVisible() || !lightingEnabled || !shadowsEnabled ||
+  if (!isVisible() || !lightingEnabled || !shadowsEnabled || !castsShadows ||
       !prepareForCommands(value)) {
     return;
   }
@@ -1026,7 +1026,8 @@ void
 MeshVisual::appendShadowCommandsWithWorld(Renderer* value,
                                           const glm::mat4& nodeWorld)
 {
-  if (!isVisible() || !lightingEnabled || !shadowsEnabled || value == nullptr) {
+  if (!isVisible() || !lightingEnabled || !shadowsEnabled || !castsShadows ||
+      value == nullptr) {
     return;
   }
 

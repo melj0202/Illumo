@@ -1450,6 +1450,10 @@ testMeshVisualShadowUniformsFromSetters()
     }
   }
   testTrue(g, visual.getShadowMapSize() == 512, "shadow map size snaps to 512");
+  visual.setShadowMapSize(4096);
+  testTrue(
+    g, visual.getShadowMapSize() == 4096, "shadow map size supports 4096");
+  visual.setShadowMapSize(512);
   testTrue(g, sawShadowViewport, "shadow pass viewport matches map size");
   testTrue(g, sawBias, "shadow bias uniform matches setter");
   testTrue(g, sawSlope, "shadow slope scale uniform matches setter");
@@ -1479,6 +1483,85 @@ testMeshVisualShadowUniformsFromSetters()
            !sawShadowFramebuffer,
            "disabled shadows skip the depth framebuffer pass");
   testTrue(g, sawShadowsOff, "uShadowsEnabled is 0 when shadows are off");
+}
+
+static void
+testMeshVisualNonCastingStillReceivesShadows()
+{
+  testSection("MeshVisual: non-casting receivers keep shadows without bloating "
+              "the shadow frustum");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  camera.setProjectionType(ProjectionType::Perspective);
+  camera.setPerspective(60.0f, 0.1f, 200.0f);
+  camera.lookAt(
+    glm::vec3(0.0f, 5.0f, 10.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  MeshVisual caster;
+  caster.prepare(&renderer);
+  caster.addSolidCube(glm::vec3(0.0f, 1.0f, 0.0f),
+                      glm::vec3(0.5f),
+                      ColorRgba{ 200, 200, 200, 255 });
+
+  MeshVisual floor;
+  floor.prepare(&renderer);
+  floor.addSolidCube(glm::vec3(0.0f, -1.0f, 0.0f),
+                     glm::vec3(60.0f, 0.5f, 60.0f),
+                     ColorRgba{ 160, 160, 160, 255 });
+  floor.setCastsShadows(false);
+
+  DrawList scene(&window, &camera);
+  scene.AddDrawable(&caster, RenderLayerId::World);
+  scene.AddDrawable(&floor, RenderLayerId::World);
+
+  mock.resetCounters();
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+
+  size_t shadowDraws = 0;
+  size_t shadowTextureBinds = 0;
+  bool insideShadowTarget = false;
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& command = mock.getLastNonEmptySubmitted(i);
+    if (command.commandType == CommandType::SetFramebuffer) {
+      insideShadowTarget = command.bindFramebuffer.handle.isValid();
+    } else if (insideShadowTarget &&
+               command.commandType == CommandType::DrawIndexed) {
+      shadowDraws += 1;
+    } else if (!insideShadowTarget &&
+               command.commandType == CommandType::SetTexture &&
+               command.bindTexture.slot == WorldLook::kShadowTextureUnit) {
+      shadowTextureBinds += 1;
+    }
+  }
+  testEqSize(
+    g, shadowDraws, 1u, "non-casting floor is excluded from depth pass");
+  testEqSize(g,
+             shadowTextureBinds,
+             2u,
+             "caster and non-casting floor both bind shadow map");
+
+  const RenderCommand* firstLightMatrix =
+    findSubmittedUniformMat4(mock, WorldLook::kLightSpaceMatrixUniform, 0);
+  testTrue(g, firstLightMatrix != nullptr, "light-space matrix is emitted");
+  if (firstLightMatrix != nullptr) {
+    glm::mat4 lightSpace(1.0f);
+    std::memcpy(glm::value_ptr(lightSpace),
+                firstLightMatrix->uniformMat4.value,
+                16 * sizeof(float));
+    const glm::vec4 farClip = lightSpace * glm::vec4(50.0f, 0.0f, 0.0f, 1.0f);
+    const glm::vec3 farNdc = glm::vec3(farClip) / farClip.w;
+    testTrue(g,
+             std::abs(farNdc.x) > 1.0f,
+             "non-casting 120-unit floor does not bloat the shadow frustum");
+  }
 }
 
 static void
@@ -1640,6 +1723,9 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.MeshVisual.ShadowUniformsFromSetters", []() {
     return runMeshVisualCase(testMeshVisualShadowUniformsFromSetters);
+  });
+  registry.add("Illumo.MeshVisual.NonCastingReceivesShadows", []() {
+    return runMeshVisualCase(testMeshVisualNonCastingStillReceivesShadows);
   });
   registry.add("Illumo.MeshVisual.MotionBlurUniformsFromSetters", []() {
     return runMeshVisualCase(testMeshVisualMotionBlurUniformsFromSetters);

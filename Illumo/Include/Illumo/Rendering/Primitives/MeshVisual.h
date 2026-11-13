@@ -51,6 +51,8 @@ public:
   const glm::vec3& getAmbientColor() const { return ambientColor; }
   void setShadowsEnabled(bool enabled) { shadowsEnabled = enabled; }
   bool isShadowsEnabled() const { return shadowsEnabled; }
+  void setCastsShadows(bool enabled) { castsShadows = enabled; }
+  bool isCastingShadows() const { return castsShadows; }
   void setShadowMapSize(int size);
   int getShadowMapSize() const { return shadowMapSize; }
   void setShadowRadius(float radius);
@@ -221,6 +223,7 @@ private:
   bool spriteUploadPending = false;
   bool lightingEnabled = true;
   bool shadowsEnabled = true;
+  bool castsShadows = true;
   bool shadowPcfEnabled = true;
   bool motionBlurEnabled = true;
   bool hasPreviousMvp = false;
