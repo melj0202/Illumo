@@ -1397,6 +1397,8 @@ kindLabel(const SceneNode& node)
       return "Light";
     case SceneComponentType::Camera:
       return "Camera";
+    case SceneComponentType::GroundPlane:
+      return "Ground Plane";
     case SceneComponentType::Opaque:
       return std::get<SceneOpaqueComponent>(component.value).type;
   }

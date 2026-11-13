@@ -148,6 +148,7 @@ add_library(Illumo STATIC
   Source/Rendering/WindowIcon.cpp
   Source/Rendering/Primitives/MeshVisual.cpp
   Source/Rendering/Primitives/SkyboxVisual.cpp
+  Source/Rendering/Primitives/GroundPlaneVisual.cpp
   Source/Rendering/Primitives/GameVisual.cpp
   Source/Rendering/Primitives/VisualStore.cpp
   Source/Rendering/Primitives/SoftwareCanvas.cpp

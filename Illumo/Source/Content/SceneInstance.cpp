@@ -3,6 +3,7 @@
 #include <Illumo/Foundation/Profile.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/Camera.h>
+#include <Illumo/Rendering/Primitives/GroundPlaneVisual.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <Illumo/Rendering/Renderer.h>
@@ -58,6 +59,7 @@ struct SceneInstance::Record
   std::vector<bool> castShadows;
   // Parallel to visuals; mesh is valid only for lit mesh-asset visuals.
   std::vector<SceneWorldBinding> world;
+  std::vector<std::unique_ptr<GroundPlaneVisual>> groundPlanes;
   std::unique_ptr<PickProxy> proxy;
   bool hasLight = false;
 };
@@ -238,6 +240,10 @@ SceneInstance::load(const SceneDocument& document,
       applyLightingTo(*entry.second->visuals[index],
                       entry.second->castShadows[index]);
     }
+    for (std::unique_ptr<GroundPlaneVisual>& plane :
+         entry.second->groundPlanes) {
+      applyLightingTo(*plane);
+    }
   }
   applyWorldEnvironment();
   touch();
@@ -283,6 +289,10 @@ SceneInstance::setRenderer(Renderer* renderer)
        m_records) {
     for (std::unique_ptr<MeshVisual>& visual : entry.second->visuals) {
       visual->prepare(renderer);
+    }
+    for (std::unique_ptr<GroundPlaneVisual>& plane :
+         entry.second->groundPlanes) {
+      plane->prepare(renderer);
     }
   }
   if (m_skybox) {
@@ -451,6 +461,10 @@ SceneInstance::setPipelineConfig(const RenderPipelineConfig& config)
       applyLightingTo(*entry.second->visuals[index],
                       entry.second->castShadows[index]);
     }
+    for (std::unique_ptr<GroundPlaneVisual>& plane :
+         entry.second->groundPlanes) {
+      applyLightingTo(*plane);
+    }
   }
   applyWorldEnvironment();
 }
@@ -530,6 +544,10 @@ SceneInstance::update()
       applyLightingTo(*entry.second->visuals[index],
                       entry.second->castShadows[index]);
     }
+    for (std::unique_ptr<GroundPlaneVisual>& plane :
+         entry.second->groundPlanes) {
+      applyLightingTo(*plane);
+    }
   }
   applyWorldEnvironment();
 }
@@ -585,8 +603,8 @@ SceneInstance::applyLightingTo(MeshVisual& visual, bool castShadows) const
   visual.setLightDirection(m_lighting.towardLight);
   visual.setLightColor(m_lighting.color);
   visual.setAmbientColor(m_lighting.ambient);
-  visual.setShadowsEnabled(lit && m_lighting.shadows && castShadows &&
-                           m_pipelineConfig.shadowsEnabled);
+  visual.setShadowsEnabled(lit && m_lighting.shadows &&
+                           m_pipelineConfig.shadowsEnabled && castShadows);
   visual.setShadowPcfEnabled(m_pipelineConfig.shadowPcf);
   visual.setShadowMapSize(m_pipelineConfig.shadowMapSize);
   visual.setShadowRadius(m_pipelineConfig.shadowRadius);
@@ -596,6 +614,22 @@ SceneInstance::applyLightingTo(MeshVisual& visual, bool castShadows) const
   visual.setShadowNormalOffset(m_pipelineConfig.shadowNormalOffset);
   visual.setMotionBlurAmount(m_pipelineConfig.motionBlurAmount);
   visual.setMotionBlurMax(m_pipelineConfig.motionBlurMax);
+}
+
+void
+SceneInstance::applyLightingTo(GroundPlaneVisual& visual) const
+{
+  const bool lit = m_lighting.lit && m_pipelineConfig.lightingEnabled;
+  visual.setLightingEnabled(lit);
+  visual.setLightDirection(m_lighting.towardLight);
+  visual.setLightColor(m_lighting.color);
+  visual.setAmbientColor(m_lighting.ambient);
+  visual.setShadowsEnabled(lit && m_lighting.shadows &&
+                           m_pipelineConfig.shadowsEnabled);
+  visual.setShadowPcfEnabled(m_pipelineConfig.shadowPcf);
+  visual.setShadowBias(m_pipelineConfig.shadowBias);
+  visual.setShadowSlopeScale(m_pipelineConfig.shadowSlopeScale);
+  visual.setShadowNormalOffset(m_pipelineConfig.shadowNormalOffset);
 }
 
 const SceneDocument&
@@ -770,7 +804,7 @@ SceneInstance::buildNode(const SceneNode& node,
 void
 SceneInstance::destroyAttachments(Record& entry)
 {
-  if (entry.visuals.empty() && !entry.proxy) {
+  if (entry.visuals.empty() && entry.groundPlanes.empty() && !entry.proxy) {
     return;
   }
   unbindWorld(entry);
@@ -779,11 +813,15 @@ SceneInstance::destroyAttachments(Record& entry)
   for (std::unique_ptr<MeshVisual>& visual : entry.visuals) {
     m_graph.removeAttachment(entry.handle, visual.get());
   }
+  for (std::unique_ptr<GroundPlaneVisual>& plane : entry.groundPlanes) {
+    m_graph.removeAttachment(entry.handle, plane.get());
+  }
   if (entry.proxy) {
     m_graph.removeAttachment(entry.handle, entry.proxy.get());
   }
   entry.visuals.clear();
   entry.castShadows.clear();
+  entry.groundPlanes.clear();
   entry.proxy.reset();
 }
 
@@ -993,6 +1031,24 @@ SceneInstance::buildAttachments(Record& entry)
       entry.hasLight = true;
       m_lightingDirty = true;
     }
+    if (component.type() == SceneComponentType::GroundPlane) {
+      const SceneGroundPlane* plane =
+        std::get_if<SceneGroundPlane>(&component.value);
+      if (plane != nullptr) {
+        std::unique_ptr<GroundPlaneVisual> visual =
+          std::make_unique<GroundPlaneVisual>();
+        visual->setColor0(plane->color0);
+        visual->setColor1(plane->color1);
+        visual->setCheckSize(plane->checkSize);
+        if (m_renderer != nullptr) {
+          visual->prepare(m_renderer);
+        }
+        applyLightingTo(*visual);
+        m_graph.addAttachment(entry.handle, visual.get());
+        entry.groundPlanes.push_back(std::move(visual));
+      }
+      continue;
+    }
     if (!drawsVisual(component)) {
       continue;
     }
@@ -1011,7 +1067,8 @@ SceneInstance::buildAttachments(Record& entry)
     entry.world.push_back(binding);
     bindWorld(entry, entry.visuals.size() - 1);
   }
-  if (entry.visuals.empty() && m_options.pickProxies) {
+  if (entry.visuals.empty() && entry.groundPlanes.empty() &&
+      m_options.pickProxies) {
     entry.proxy = std::make_unique<PickProxy>();
     m_graph.addAttachment(entry.handle, entry.proxy.get());
   }
@@ -1021,6 +1078,16 @@ bool
 SceneInstance::reconfigureAttachments(Record& entry,
                                       const std::vector<SceneComponent>& before)
 {
+  for (const SceneComponent& component : before) {
+    if (component.type() == SceneComponentType::GroundPlane) {
+      return false;
+    }
+  }
+  for (const SceneComponent& component : entry.node.components) {
+    if (component.type() == SceneComponentType::GroundPlane) {
+      return false;
+    }
+  }
   // In place only when the same kinds of visual components appear in the
   // same order, so each existing visual keeps its identity.
   std::vector<const SceneComponent*> visuals;

@@ -158,6 +158,14 @@ struct SceneCamera
   bool primary = false;
 };
 
+// Analytical unbounded implicit ground plane with procedural checkerboard
+struct SceneGroundPlane
+{
+  ColorRgba color0{ 235, 120, 24, 255 };
+  ColorRgba color1{ 35, 38, 46, 255 };
+  float checkSize = 1.0f;
+};
+
 // A namespaced component ("vendor.name") preserved verbatim for the program
 // that understands it. data is canonical compact JSON (an object).
 struct SceneOpaqueComponent
@@ -173,6 +181,7 @@ enum class SceneComponentType
   Sprite,
   Light,
   Camera,
+  GroundPlane,
   Opaque
 };
 
@@ -183,6 +192,7 @@ struct SceneComponent
                SceneSprite,
                SceneLight,
                SceneCamera,
+               SceneGroundPlane,
                SceneOpaqueComponent>
     value;
 

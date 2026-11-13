@@ -15,6 +15,7 @@
 
 class AssetManager;
 class Camera;
+class GroundPlaneVisual;
 class MeshVisual;
 class Renderer;
 class SkyboxVisual;
@@ -277,6 +278,7 @@ private:
                        MeshAssetInfo* worldMesh,
                        ColorRgba* worldTint);
   void applyLightingTo(MeshVisual& visual, bool castShadows) const;
+  void applyLightingTo(GroundPlaneVisual& visual) const;
   // Render world binding of one visual, and of every visual.
   void bindWorld(Record& entry, size_t index);
   void unbindWorld(Record& entry);

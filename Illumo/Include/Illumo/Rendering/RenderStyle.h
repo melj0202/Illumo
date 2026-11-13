@@ -26,6 +26,8 @@ enum class RenderStyleId : unsigned char
   // Resolves a two-texel-per-cell canvas fade texture to one colour per cell
   // (Renderer::pushCanvasFadeResolve, D-R32).
   CanvasFade = 11,
+  // Analytical unbounded implicit ground plane with procedural checkerboard
+  GroundPlane = 12,
   Count
 };
 

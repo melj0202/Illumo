@@ -873,6 +873,8 @@ componentGroup(const SceneComponent& component,
       return "light";
     case SceneComponentType::Camera:
       return "camera";
+    case SceneComponentType::GroundPlane:
+      return "ground_plane";
     default:
       break;
   }

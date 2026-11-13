@@ -204,6 +204,132 @@ void main() {
 }
 )";
 
+static const char* kGroundPlaneVertexShader = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+
+out vec3 vWorldDir;
+
+uniform mat4 uViewProjection;
+
+void main() {
+    vWorldDir = aPos;
+    vec4 pos = uViewProjection * vec4(aPos, 1.0);
+    gl_Position = pos.xyww;
+}
+)";
+
+static const char* kGroundPlaneFragmentShader = R"(
+#version 330 core
+in vec3 vWorldDir;
+
+layout (location = 0) out vec4 FragColor;
+layout (location = 1) out vec2 FragVelocity;
+
+uniform mat4 uFullViewProjection;
+uniform vec3 uCameraPos;
+uniform float uPlaneY;
+uniform float uCheckSize;
+uniform vec4 uColor0;
+uniform vec4 uColor1;
+
+uniform vec3 uLightDir;
+uniform vec3 uLightColor;
+uniform vec3 uAmbientColor;
+uniform sampler2D uShadowMap;
+uniform mat4 uLightSpaceMatrix;
+uniform int uShadowsEnabled;
+uniform float uShadowBias;
+uniform float uShadowSlopeScale;
+uniform float uShadowNormalOffset;
+uniform int uShadowPcf;
+
+float calculateShadow(vec3 fragPos, vec3 normal, vec3 lightDir)
+{
+    if (uShadowsEnabled == 0) {
+        return 0.0;
+    }
+
+    float nDotL = dot(normal, lightDir);
+    if (nDotL <= 0.0) {
+        return 1.0;
+    }
+
+    vec3 offsetPos = fragPos + normal * uShadowNormalOffset;
+    vec4 lightClip = uLightSpaceMatrix * vec4(offsetPos, 1.0);
+    vec3 projCoords = lightClip.xyz / lightClip.w;
+    projCoords = projCoords * 0.5 + 0.5;
+
+    if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0) {
+        return 0.0;
+    }
+
+    float currentDepth = projCoords.z;
+    float bias = uShadowBias + uShadowSlopeScale * (1.0 - nDotL);
+
+    int radius = uShadowPcf > 0 ? 1 : 0;
+    float shadow = 0.0;
+    float samples = 0.0;
+    vec2 texelSize = 1.0 / vec2(textureSize(uShadowMap, 0));
+    for (int x = -1; x <= 1; ++x) {
+        for (int y = -1; y <= 1; ++y) {
+            if (abs(x) > radius || abs(y) > radius) {
+                continue;
+            }
+            float pcfDepth =
+                texture(uShadowMap, projCoords.xy + vec2(x, y) * texelSize).r;
+            shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;
+            samples += 1.0;
+        }
+    }
+    return shadow / max(samples, 1.0);
+}
+
+void main() {
+    vec3 dir = normalize(vWorldDir);
+    float dy = dir.y;
+    float deltaY = uPlaneY - uCameraPos.y;
+
+    if (abs(dy) < 1e-6) {
+        discard;
+    }
+    float t = deltaY / dy;
+    if (t <= 0.0) {
+        discard;
+    }
+
+    vec3 fragPos = uCameraPos + t * dir;
+
+    vec4 clipPos = uFullViewProjection * vec4(fragPos, 1.0);
+    if (clipPos.w <= 0.0) {
+        discard;
+    }
+    float ndcZ = clipPos.z / clipPos.w;
+    if (ndcZ < -1.0 || ndcZ > 1.0) {
+        discard;
+    }
+    gl_FragDepth = ndcZ * 0.5 + 0.5;
+
+    vec2 p = fragPos.xz / max(uCheckSize, 0.0001);
+    vec2 w = fwidth(p);
+    vec2 i = 2.0 * (abs(fract((p - 0.5 * w) * 0.5) - 0.5) -
+                    abs(fract((p + 0.5 * w) * 0.5) - 0.5)) / max(w, 0.00001);
+    float check = clamp(0.5 - 0.5 * i.x * i.y, 0.0, 1.0);
+    vec4 baseColor = mix(uColor0, uColor1, check);
+
+    vec3 norm = (deltaY < 0.0) ? vec3(0.0, 1.0, 0.0) : vec3(0.0, -1.0, 0.0);
+    vec3 lightDir = normalize(uLightDir);
+    float diff = max(dot(norm, lightDir), 0.0);
+    vec3 diffuse = diff * uLightColor;
+    float shadow = calculateShadow(fragPos, norm, lightDir);
+
+    vec3 lighting = uAmbientColor + (1.0 - shadow) * diffuse;
+    FragColor = vec4(lighting * baseColor.rgb, baseColor.a);
+    FragVelocity = vec2(0.0);
+}
+)";
+
 // One fragment per cell of a canvas fade texture (frame schema v9, D-R31):
 // the fade's start colour at 2x, its target at 2x + 1, their alpha bytes the
 // start time in 1/512 s ticks wrapping every 128 s. Mirrors canvas_frag.glsl.
@@ -426,6 +552,22 @@ Renderer::ensureBuiltinStyles()
     style.shaderHandle = enrollShader(paths);
     style.ready = style.shaderHandle.isValid();
     builtinStyleHandles[renderStyleIndex(RenderStyleId::ShadowDepthInstanced)] =
+      createStyle(style);
+  }
+
+  // Analytical Ground Plane.
+  {
+    RenderStyle style;
+    style.pipeline.depthTestEnabled = true;
+    style.pipeline.blendEnabled = false;
+    style.pipeline.faceCullingEnabled = false;
+    style.pipeline.primitives = Primitives::Triangles;
+    ShaderSources sources;
+    sources.vertexSource = kGroundPlaneVertexShader;
+    sources.fragmentSource = kGroundPlaneFragmentShader;
+    style.shaderHandle = enrollShader(sources);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::GroundPlane)] =
       createStyle(style);
   }
 

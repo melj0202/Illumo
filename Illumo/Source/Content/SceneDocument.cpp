@@ -121,6 +121,13 @@ sceneComponentsEqual(const SceneComponent& a, const SceneComponent& b)
            left->farPlane == right.farPlane && left->zoom == right.zoom &&
            left->primary == right.primary;
   }
+  if (const SceneGroundPlane* left =
+        std::get_if<SceneGroundPlane>(&a.value)) {
+    const SceneGroundPlane& right = std::get<SceneGroundPlane>(b.value);
+    return sameColor(left->color0, right.color0) &&
+           sameColor(left->color1, right.color1) &&
+           left->checkSize == right.checkSize;
+  }
   const SceneOpaqueComponent& left = std::get<SceneOpaqueComponent>(a.value);
   const SceneOpaqueComponent& right = std::get<SceneOpaqueComponent>(b.value);
   return left.type == right.type && left.data == right.data;
@@ -430,6 +437,13 @@ validateComponent(const SceneDocument& document,
         camera->farPlane <= camera->nearPlane ||
         !inRange(camera->zoom, 0.01f, 1.0e5f)) {
       return fail(error, "camera projection values are out of range");
+    }
+    return true;
+  }
+  if (const SceneGroundPlane* plane =
+        std::get_if<SceneGroundPlane>(&component.value)) {
+    if (!inRange(plane->checkSize, 1.0e-4f, 1.0e6f)) {
+      return fail(error, "ground_plane check_size must be in [1e-4, 1e6]");
     }
     return true;
   }

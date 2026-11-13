@@ -517,6 +517,23 @@ readComponent(const Json& entry,
     component.value = camera;
     return true;
   }
+  if (type == "ground_plane") {
+    SceneGroundPlane plane;
+    if (!onlyKeys(entry,
+                  { "type", "color0", "color1", "check_size" },
+                  "ground_plane component",
+                  error)) {
+      return false;
+    }
+    if ((entry.contains("color0") && !readColor(entry["color0"], plane.color0)) ||
+        (entry.contains("color1") && !readColor(entry["color1"], plane.color1)) ||
+        (entry.contains("check_size") && !readFloat(entry["check_size"], plane.checkSize))) {
+      return fail(error,
+                  "ground_plane component needs valid color0 [4], color1 [4] and numeric check_size");
+    }
+    component.value = plane;
+    return true;
+  }
   newerFormat = true;
   return fail(error, "unknown component type \"" + type + "\"");
 }
@@ -962,6 +979,12 @@ writeComponent(const SceneComponent& component)
     out["far"] = number(camera->farPlane);
     out["zoom"] = number(camera->zoom);
     out["primary"] = camera->primary;
+  } else if (const SceneGroundPlane* plane =
+               std::get_if<SceneGroundPlane>(&component.value)) {
+    out["type"] = "ground_plane";
+    out["color0"] = color(plane->color0);
+    out["color1"] = color(plane->color1);
+    out["check_size"] = number(plane->checkSize);
   } else {
     const SceneOpaqueComponent& opaque =
       std::get<SceneOpaqueComponent>(component.value);
