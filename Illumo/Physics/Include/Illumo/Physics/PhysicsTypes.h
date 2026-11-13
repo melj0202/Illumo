@@ -115,11 +115,18 @@ struct PhysicsBodyDesc
   uint64_t userData = 0;
 };
 
+enum class PhysicsCharacterShape : uint8_t
+{
+  Capsule = 0,
+  Cylinder = 1
+};
+
 struct PhysicsCharacterDesc
 {
+  PhysicsCharacterShape shape = PhysicsCharacterShape::Capsule;
   float radius = 0.125f;
-  // Total capsule height along +Y, including both hemispherical caps.
-  // The character's position is the geometric center of this capsule.
+  // Total character height along +Y (including caps when shape == Capsule).
+  // The character's position is the geometric center of this volume.
   float height = 0.5f;
   Vector3 position{ 0.0f, 0.0f, 0.0f };
   Quaternion rotation{ 1.0f, 0.0f, 0.0f, 0.0f };

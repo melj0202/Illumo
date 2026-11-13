@@ -10,6 +10,7 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
@@ -20,6 +21,7 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/PlaneShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -313,8 +315,19 @@ struct PhysicsCharacterSlot
 {
   JPH::Ref<JPH::CharacterVirtual> character{};
   JPH::CharacterVirtual::ExtendedUpdateSettings extendedSettings{};
+  PhysicsCharacterShape shape = PhysicsCharacterShape::Capsule;
+  float radius = 0.25f;
+  float halfHeight = 0.90f;
+  float halfCylinderHeight = 0.65f;
+  float characterPadding = 0.02f;
+  float supportPlaneConstant = 0.65f;
+  float stickToFloorStepDown = 0.25f;
+  float cosMaxSlope = 0.6427876f;
+  float lastStepDt = 1.0f / 60.0f;
   uint32_t generation = 1;
   uint64_t userData = 0;
+  bool steppedUpLastStep = false;
+  bool supported = false;
   bool alive = false;
 };
 
@@ -546,6 +559,463 @@ struct PhysicsWorld::Impl
       sensorOverlaps.push_back(pair);
     }
   }
+
+  const PhysicsCharacterSlot* findCharacterSlot(
+    const JPH::CharacterVirtual* character) const noexcept
+  {
+    if (character == nullptr) {
+      return nullptr;
+    }
+    for (const PhysicsCharacterSlot& slot : characterSlots) {
+      if (slot.alive && slot.character.GetPtr() == character) {
+        return &slot;
+      }
+    }
+    return nullptr;
+  }
+
+  bool hasWalkableFloorBelowCenter(const PhysicsCharacterSlot& slot,
+                                   JPH::RVec3Arg position,
+                                   float maxExtraDrop) const noexcept
+  {
+    if (!initialized || !system || slot.character == nullptr) {
+      return false;
+    }
+
+    const JPH::Vec3 up = slot.character->GetUp();
+    const float minCosSlope = std::max(slot.cosMaxSlope, 0.1f);
+    const float maxVerticalReach =
+      (slot.halfCylinderHeight - slot.characterPadding) +
+      (slot.radius + slot.characterPadding) / minCosSlope +
+      std::max(maxExtraDrop, 0.0f) + 0.03f;
+    if (maxVerticalReach <= 0.0f) {
+      return false;
+    }
+
+    const JPH::RRayCast ray(position, -up * maxVerticalReach);
+    JPH::RayCastResult hit;
+    const JPH::IgnoreSingleBodyFilter ignoreSelf(
+      slot.character->GetInnerBodyID());
+    if (!system->GetNarrowPhaseQuery().CastRay(
+          ray, hit, defaultBroadPhaseFilter, solidObjectFilter, ignoreSelf)) {
+      return false;
+    }
+
+    JPH::Vec3 hitNormal = up;
+    {
+      const JPH::BodyLockRead lock(system->GetBodyLockInterface(), hit.mBodyID);
+      if (!lock.Succeeded()) {
+        return false;
+      }
+      const JPH::RVec3 hitPoint = ray.GetPointOnRay(hit.mFraction);
+      hitNormal =
+        lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, hitPoint);
+    }
+
+    if (slot.character->IsSlopeTooSteep(hitNormal)) {
+      return false;
+    }
+
+    const float hitCos = hitNormal.Dot(up);
+    if (hitCos <= 0.05f) {
+      return false;
+    }
+
+    const float expectedRestDist =
+      (slot.halfCylinderHeight - slot.characterPadding) +
+      (slot.radius + slot.characterPadding) / hitCos;
+    const float actualDist = hit.mFraction * maxVerticalReach;
+    const float extraDrop = actualDist - expectedRestDist;
+    return extraDrop <= std::max(maxExtraDrop, 0.0f) + 0.025f;
+  }
+
+  bool isWalkableSupportingContact(const PhysicsCharacterSlot& slot,
+                                   JPH::BodyID bodyId,
+                                   JPH::SubShapeID subShapeId,
+                                   JPH::RVec3Arg contactPosition,
+                                   JPH::Vec3Arg contactNormal,
+                                   float maxCapsuleExtraDrop) const noexcept
+  {
+    if (!initialized || !system || slot.character == nullptr) {
+      return false;
+    }
+    const JPH::CharacterVirtual* character = slot.character.GetPtr();
+    if (character->IsSlopeTooSteep(contactNormal)) {
+      return false;
+    }
+
+    const JPH::RMat44 invTransform = JPH::RMat44::sInverseRotationTranslation(
+      character->GetRotation(), character->GetPosition());
+    const JPH::Vec3 localPos = JPH::Vec3(invTransform * contactPosition);
+    const JPH::Plane supportPlane(JPH::Vec3::sAxisY(),
+                                  slot.supportPlaneConstant);
+    if (supportPlane.SignedDistance(localPos) > 0.0f) {
+      return false;
+    }
+
+    JPH::Vec3 rawSurfaceNormal = contactNormal;
+    if (!bodyId.IsInvalid()) {
+      const JPH::BodyLockRead lock(system->GetBodyLockInterface(), bodyId);
+      if (!lock.Succeeded()) {
+        return false;
+      }
+      rawSurfaceNormal =
+        lock.GetBody().GetWorldSpaceSurfaceNormal(subShapeId, contactPosition);
+      if (contactNormal.Dot(rawSurfaceNormal) < -0.0174524f) {
+        rawSurfaceNormal = -rawSurfaceNormal;
+      }
+    }
+
+    if (slot.shape == PhysicsCharacterShape::Cylinder) {
+      const bool alignedWalkableFace =
+        !character->IsSlopeTooSteep(rawSurfaceNormal) &&
+        contactNormal.Dot(rawSurfaceNormal) >= 0.98f;
+      const float flatFootRadius = std::max(slot.radius - 0.002f, 0.0f);
+      const float radialDistSq =
+        localPos.GetX() * localPos.GetX() + localPos.GetZ() * localPos.GetZ();
+      const bool underFlatBase =
+        radialDistSq <= flatFootRadius * flatFootRadius;
+      return alignedWalkableFace || underFlatBase;
+    }
+
+    if (character->IsSlopeTooSteep(rawSurfaceNormal) ||
+        contactNormal.Dot(rawSurfaceNormal) < 0.90f) {
+      return false;
+    }
+    return hasWalkableFloorBelowCenter(
+      slot, character->GetPosition(), maxCapsuleExtraDrop);
+  }
+
+  bool hasCylinderSupportingContact(
+    const PhysicsCharacterSlot& slot) const noexcept
+  {
+    if (!initialized || slot.character == nullptr) {
+      return false;
+    }
+    const JPH::CharacterVirtual* character = slot.character.GetPtr();
+    if (character->GetGroundState() !=
+        JPH::CharacterBase::EGroundState::OnGround) {
+      return false;
+    }
+
+    const JPH::CharacterVirtual::ContactList& activeContacts =
+      character->GetActiveContacts();
+    for (const JPH::CharacterContact& c : activeContacts) {
+      if (!c.mHadCollision || c.mWasDiscarded || c.mIsSensorB) {
+        continue;
+      }
+      if (isWalkableSupportingContact(slot,
+                                      c.mBodyB,
+                                      c.mSubShapeIDB,
+                                      c.mPosition,
+                                      c.mContactNormal,
+                                      0.0f)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool isCharacterSupported(const PhysicsCharacterSlot& slot) const noexcept
+  {
+    if (!initialized || slot.character == nullptr) {
+      return false;
+    }
+    if (slot.character->GetGroundState() !=
+        JPH::CharacterBase::EGroundState::OnGround) {
+      return false;
+    }
+    if (slot.shape == PhysicsCharacterShape::Cylinder) {
+      return hasCylinderSupportingContact(slot);
+    }
+    return hasWalkableFloorBelowCenter(
+      slot, slot.character->GetPosition(), 0.0f);
+  }
+
+  void solveCharacterSupportContact(
+    const JPH::CharacterVirtual* inCharacter,
+    JPH::BodyID inBodyID2,
+    JPH::SubShapeID inSubShapeID2,
+    JPH::RVec3Arg inContactPosition,
+    JPH::Vec3Arg inContactNormal,
+    JPH::Vec3Arg inContactVelocity,
+    JPH::Vec3Arg inCharacterVelocity,
+    JPH::Vec3& ioNewCharacterVelocity) const noexcept
+  {
+    if (!initialized || inCharacter == nullptr) {
+      return;
+    }
+    const PhysicsCharacterSlot* slot = findCharacterSlot(inCharacter);
+    if (slot == nullptr) {
+      return;
+    }
+
+    const JPH::Vec3 up = inCharacter->GetUp();
+    const JPH::Vec3 relVel = inCharacterVelocity - inContactVelocity;
+    const float relVy = relVel.Dot(up);
+    if (relVy > 1.0e-5f) {
+      return;
+    }
+
+    const float normalPush = std::max(
+      0.0f, (ioNewCharacterVelocity - inContactVelocity).Dot(inContactNormal));
+    if (relVy >= -1.0e-5f && normalPush <= 1.0e-6f) {
+      return;
+    }
+
+    const float cosSlope = inContactNormal.Dot(up);
+    if (cosSlope <= 0.1f) {
+      return;
+    }
+
+    const float maxCapsuleExtraDrop =
+      std::max(0.11f, -relVy * slot->lastStepDt);
+    if (!isWalkableSupportingContact(*slot,
+                                     inBodyID2,
+                                     inSubShapeID2,
+                                     inContactPosition,
+                                     inContactNormal,
+                                     maxCapsuleExtraDrop)) {
+      return;
+    }
+
+    // Cancel downhill slide injected when downward fall velocity projects onto
+    // an inclined walkable floor, while preserving caller horizontal velocity.
+    const JPH::Vec3 singlePlaneExpected =
+      inCharacterVelocity - relVel.Dot(inContactNormal) * inContactNormal +
+      normalPush * inContactNormal;
+    const JPH::Vec3 relHoriz = relVel - relVy * up;
+    const JPH::Vec3 horizSlide =
+      relHoriz - relHoriz.Dot(inContactNormal) * inContactNormal;
+
+    if ((ioNewCharacterVelocity - singlePlaneExpected).LengthSq() <= 1.0e-6f) {
+      ioNewCharacterVelocity =
+        inContactVelocity + horizSlide + (normalPush / cosSlope) * up;
+    } else if (normalPush <= 1.0e-5f) {
+      const JPH::Vec3 relNew = ioNewCharacterVelocity - inContactVelocity;
+      const float relNewLenSq = relNew.LengthSq();
+      if (relHoriz.LengthSq() <= 1.0e-8f) {
+        if (relNew.Dot(up) < 0.0f) {
+          ioNewCharacterVelocity = inContactVelocity;
+        }
+      } else if (relNewLenSq > 1.0e-8f) {
+        const JPH::Vec3 creaseDir = relNew / std::sqrt(relNewLenSq);
+        ioNewCharacterVelocity =
+          inContactVelocity + horizSlide.Dot(creaseDir) * creaseDir;
+      }
+    }
+  }
+
+  class CharacterContactListenerImpl final
+    : public JPH::CharacterContactListener
+  {
+  public:
+    explicit CharacterContactListenerImpl(PhysicsWorld::Impl* owner) noexcept
+      : m_owner(owner)
+    {
+    }
+
+    void OnContactSolve(const JPH::CharacterVirtual* inCharacter,
+                        const JPH::BodyID& inBodyID2,
+                        const JPH::SubShapeID& inSubShapeID2,
+                        JPH::RVec3Arg inContactPosition,
+                        JPH::Vec3Arg inContactNormal,
+                        JPH::Vec3Arg inContactVelocity,
+                        const JPH::PhysicsMaterial* inContactMaterial,
+                        JPH::Vec3Arg inCharacterVelocity,
+                        JPH::Vec3& ioNewCharacterVelocity) override
+    {
+      (void)inContactMaterial;
+      m_owner->solveCharacterSupportContact(inCharacter,
+                                            inBodyID2,
+                                            inSubShapeID2,
+                                            inContactPosition,
+                                            inContactNormal,
+                                            inContactVelocity,
+                                            inCharacterVelocity,
+                                            ioNewCharacterVelocity);
+    }
+
+    void OnCharacterContactSolve(const JPH::CharacterVirtual* inCharacter,
+                                 const JPH::CharacterVirtual* inOtherCharacter,
+                                 const JPH::SubShapeID& inSubShapeID2,
+                                 JPH::RVec3Arg inContactPosition,
+                                 JPH::Vec3Arg inContactNormal,
+                                 JPH::Vec3Arg inContactVelocity,
+                                 const JPH::PhysicsMaterial* inContactMaterial,
+                                 JPH::Vec3Arg inCharacterVelocity,
+                                 JPH::Vec3& ioNewCharacterVelocity) override
+    {
+      (void)inOtherCharacter;
+      (void)inContactMaterial;
+      m_owner->solveCharacterSupportContact(inCharacter,
+                                            JPH::BodyID(),
+                                            inSubShapeID2,
+                                            inContactPosition,
+                                            inContactNormal,
+                                            inContactVelocity,
+                                            inCharacterVelocity,
+                                            ioNewCharacterVelocity);
+    }
+
+  private:
+    PhysicsWorld::Impl* m_owner = nullptr;
+  };
+
+  CharacterContactListenerImpl characterListener{ this };
+
+  void stepCharacter(PhysicsCharacterSlot& slot,
+                     float deltaSeconds,
+                     JPH::Vec3Arg worldGravity)
+  {
+    JPH::CharacterVirtual* character = slot.character.GetPtr();
+    const JPH::Vec3 up = character->GetUp();
+    const JPH::CharacterVirtual::ExtendedUpdateSettings& settings =
+      slot.extendedSettings;
+    slot.lastStepDt = deltaSeconds;
+
+    const bool wasGrounded = character->GetGroundState() ==
+                               JPH::CharacterBase::EGroundState::OnGround &&
+                             (slot.supported || slot.steppedUpLastStep);
+
+    character->StartTrackingContactChanges();
+
+    const JPH::Vec3 desiredVelocity = character->GetLinearVelocity();
+    character->SetLinearVelocity(
+      character->CancelVelocityTowardsSteepSlopes(desiredVelocity));
+
+    const JPH::RVec3 startPosition = character->GetPosition();
+    character->Update(deltaSeconds,
+                      worldGravity,
+                      defaultBroadPhaseFilter,
+                      solidObjectFilter,
+                      defaultBodyFilter,
+                      defaultShapeFilter,
+                      *tempAllocator);
+
+    bool nowSupported = isCharacterSupported(slot);
+
+    if (wasGrounded && !nowSupported &&
+        !settings.mStickToFloorStepDown.IsNearZero()) {
+      const float verticalVelocity =
+        JPH::Vec3(character->GetPosition() - startPosition).Dot(up) /
+        deltaSeconds;
+      const bool allowStickAttempt =
+        (slot.shape == PhysicsCharacterShape::Cylinder) ||
+        hasWalkableFloorBelowCenter(
+          slot, character->GetPosition(), slot.stickToFloorStepDown);
+      if (verticalVelocity <= 1.0e-6f && allowStickAttempt) {
+        const JPH::RVec3 preStickPosition = character->GetPosition();
+        if (character->StickToFloor(settings.mStickToFloorStepDown,
+                                    defaultBroadPhaseFilter,
+                                    solidObjectFilter,
+                                    defaultBodyFilter,
+                                    defaultShapeFilter,
+                                    *tempAllocator)) {
+          nowSupported = isCharacterSupported(slot);
+          if (!nowSupported) {
+            character->SetPosition(preStickPosition);
+            character->RefreshContacts(defaultBroadPhaseFilter,
+                                       solidObjectFilter,
+                                       defaultBodyFilter,
+                                       defaultShapeFilter,
+                                       *tempAllocator);
+          }
+        }
+      }
+    }
+
+    bool steppedUp = false;
+    if (!settings.mWalkStairsStepUp.IsNearZero()) {
+      JPH::Vec3 desiredHorizontalStep = desiredVelocity * deltaSeconds;
+      desiredHorizontalStep -= desiredHorizontalStep.Dot(up) * up;
+      const float desiredHorizontalStepLen = desiredHorizontalStep.Length();
+      if (desiredHorizontalStepLen > 0.0f) {
+        JPH::Vec3 achievedHorizontalStep =
+          JPH::Vec3(character->GetPosition() - startPosition);
+        achievedHorizontalStep -= achievedHorizontalStep.Dot(up) * up;
+
+        const JPH::Vec3 stepForwardNormalized =
+          desiredHorizontalStep / desiredHorizontalStepLen;
+        achievedHorizontalStep =
+          std::max(0.0f, achievedHorizontalStep.Dot(stepForwardNormalized)) *
+          stepForwardNormalized;
+        const float achievedHorizontalStepLen = achievedHorizontalStep.Length();
+
+        if (achievedHorizontalStepLen + 1.0e-4f < desiredHorizontalStepLen &&
+            character->CanWalkStairs(desiredVelocity)) {
+          JPH::Vec3 walkStairsDirection = stepForwardNormalized;
+          float maxDot = settings.mWalkStairsCosAngleForwardContact;
+          const JPH::CharacterVirtual::ContactList& activeContacts =
+            character->GetActiveContacts();
+          for (const JPH::CharacterContact& c : activeContacts) {
+            if (c.mHadCollision && !c.mWasDiscarded &&
+                c.mSurfaceNormal.Dot(desiredVelocity - c.mLinearVelocity) <
+                  0.0f &&
+                character->IsSlopeTooSteep(c.mSurfaceNormal)) {
+              JPH::Vec3 test = c.mSurfaceNormal.Dot(up) * up - c.mSurfaceNormal;
+              const float testLen = test.Length();
+              if (testLen > 1.0e-6f) {
+                test /= testLen;
+                const float dot = test.Dot(stepForwardNormalized);
+                if (dot > maxDot) {
+                  walkStairsDirection = test;
+                  maxDot = dot;
+                }
+              }
+            }
+          }
+
+          const JPH::Vec3 stepForward =
+            walkStairsDirection *
+            std::max(settings.mWalkStairsMinStepForward,
+                     desiredHorizontalStepLen - achievedHorizontalStepLen);
+          const JPH::Vec3 stepForwardTest =
+            walkStairsDirection * settings.mWalkStairsStepForwardTest;
+
+          steppedUp = character->WalkStairs(deltaSeconds,
+                                            settings.mWalkStairsStepUp,
+                                            stepForward,
+                                            stepForwardTest,
+                                            settings.mWalkStairsStepDownExtra,
+                                            defaultBroadPhaseFilter,
+                                            solidObjectFilter,
+                                            defaultBodyFilter,
+                                            defaultShapeFilter,
+                                            *tempAllocator);
+          if (steppedUp) {
+            nowSupported = isCharacterSupported(slot);
+          }
+        }
+      }
+    }
+
+    character->FinishTrackingContactChanges();
+
+    slot.steppedUpLastStep = steppedUp;
+    slot.supported = nowSupported;
+
+    const JPH::Vec3 totalDisplacement =
+      JPH::Vec3(character->GetPosition() - startPosition);
+    const float desiredVy = desiredVelocity.Dot(up);
+    const float actualVy = totalDisplacement.Dot(up) / deltaSeconds;
+    float postVy = desiredVy;
+    if (desiredVy > 0.0f) {
+      postVy = steppedUp ? 0.0f : std::clamp(actualVy, 0.0f, desiredVy);
+    } else if (nowSupported || steppedUp) {
+      postVy = 0.0f;
+    } else {
+      const float minMotion = 1.0e-4f * deltaSeconds;
+      if (totalDisplacement.LengthSq() <= minMotion * minMotion) {
+        postVy = std::max(desiredVy, -1.0f);
+      } else {
+        postVy = std::max(desiredVy, -25.0f);
+      }
+    }
+
+    const JPH::Vec3 horizontalDesired = desiredVelocity - desiredVy * up;
+    character->SetLinearVelocity(horizontalDesired + postVy * up);
+  }
 };
 
 PhysicsWorld::PhysicsWorld()
@@ -636,6 +1106,7 @@ PhysicsWorld::shutdown() noexcept
     m_impl->characterCollision.mCharacters.clear();
     for (PhysicsCharacterSlot& slot : m_impl->characterSlots) {
       if (slot.alive && slot.character != nullptr) {
+        slot.character->SetListener(nullptr);
         m_impl->unregisterReverseBody(slot.character->GetInnerBodyID());
         slot.character = nullptr;
         slot.alive = false;
@@ -967,31 +1438,66 @@ PhysicsWorld::createCharacter(const PhysicsCharacterDesc& desc,
   }
 
   const float radius = std::max(desc.radius, kMinExtent);
-  const float minHeight = 2.0f * radius;
+  const float minHeight = (desc.shape == PhysicsCharacterShape::Cylinder)
+                            ? (2.0f * kMinExtent)
+                            : (2.0f * radius);
   const float totalHeight = std::max(desc.height, minHeight);
-  const float halfCylinderHeight = 0.5f * (totalHeight - minHeight);
+  const float halfHeight = 0.5f * totalHeight;
+  const float halfCylinderHeight =
+    (desc.shape == PhysicsCharacterShape::Cylinder)
+      ? halfHeight
+      : (0.5f * (totalHeight - 2.0f * radius));
 
-  PhysicsShapeDesc shapeDesc = PhysicsShapeDesc::capsule(radius, totalHeight);
-  const JPH::RefConst<JPH::Shape> shape = buildJoltShape(shapeDesc, error);
-  if (shape == nullptr) {
-    return PhysicsCharacterHandle{};
+  JPH::RefConst<JPH::Shape> shape;
+  float cylinderConvexRadius = 0.0f;
+  if (desc.shape == PhysicsCharacterShape::Cylinder) {
+    cylinderConvexRadius =
+      std::min({ halfHeight * 0.25f, radius * 0.25f, 0.005f });
+    const JPH::CylinderShapeSettings cylinderSettings(
+      halfHeight, radius, cylinderConvexRadius);
+    const JPH::ShapeSettings::ShapeResult shapeResult =
+      cylinderSettings.Create();
+    if (shapeResult.HasError()) {
+      error = shapeResult.GetError().c_str();
+      return PhysicsCharacterHandle{};
+    }
+    shape = shapeResult.Get();
+  } else {
+    const PhysicsShapeDesc shapeDesc =
+      PhysicsShapeDesc::capsule(radius, totalHeight);
+    shape = buildJoltShape(shapeDesc, error);
+    if (shape == nullptr) {
+      return PhysicsCharacterHandle{};
+    }
   }
+
+  const float maxSlopeRadians =
+    JPH::DegreesToRadians(std::clamp(desc.maxSlopeDegrees, 0.0f, 89.0f));
+  const float cosMaxSlope = std::cos(maxSlopeRadians);
+  const float characterPadding = std::max(desc.characterPadding, 0.001f);
+  const float supportPlaneConstant =
+    (desc.shape == PhysicsCharacterShape::Cylinder)
+      ? std::max(0.0f,
+                 (halfHeight - characterPadding - cylinderConvexRadius) +
+                   (cylinderConvexRadius + characterPadding) * cosMaxSlope -
+                   0.005f)
+      : std::max(halfCylinderHeight,
+                 (halfCylinderHeight - characterPadding) +
+                   (radius + characterPadding) * cosMaxSlope - 0.005f);
 
   JPH::CharacterVirtualSettings settings;
   settings.mID = JPH::CharacterID(m_impl->nextCharacterId++);
   settings.mUp = JPH::Vec3::sAxisY();
-  // In character-local space (centered at the capsule's midpoint), contacts on
-  // or below the lower hemisphere center (-halfCylinderHeight) can support the
-  // character; side-wall and ceiling contacts remain non-supporting.
+  // Restrict Jolt's supporting volume to the base cone/disc within the
+  // walkable slope angle, excluding side-wall and upper-rim grazes.
   settings.mSupportingVolume =
-    JPH::Plane(JPH::Vec3::sAxisY(), halfCylinderHeight);
-  settings.mMaxSlopeAngle =
-    JPH::DegreesToRadians(std::clamp(desc.maxSlopeDegrees, 0.0f, 89.0f));
+    JPH::Plane(JPH::Vec3::sAxisY(), supportPlaneConstant);
+  settings.mMaxSlopeAngle = maxSlopeRadians;
   settings.mEnhancedInternalEdgeRemoval = true;
   settings.mShape = shape;
   settings.mMass = std::max(desc.mass, 0.0f);
   settings.mMaxStrength = std::max(desc.maxStrength, 0.0f);
-  settings.mCharacterPadding = std::max(desc.characterPadding, 0.001f);
+  settings.mCharacterPadding = characterPadding;
   settings.mInnerBodyShape = shape;
   settings.mInnerBodyLayer = kLayerMoving;
 
@@ -1004,12 +1510,6 @@ PhysicsWorld::createCharacter(const PhysicsCharacterDesc& desc,
   character->SetCharacterVsCharacterCollision(&m_impl->characterCollision);
   m_impl->characterCollision.Add(character.GetPtr());
 
-  character->RefreshContacts(m_impl->defaultBroadPhaseFilter,
-                             m_impl->solidObjectFilter,
-                             m_impl->defaultBodyFilter,
-                             m_impl->defaultShapeFilter,
-                             *m_impl->tempAllocator);
-
   uint32_t slotIndex = 0;
   if (!m_impl->freeCharacterSlots.empty()) {
     slotIndex = m_impl->freeCharacterSlots.back();
@@ -1021,12 +1521,30 @@ PhysicsWorld::createCharacter(const PhysicsCharacterDesc& desc,
 
   PhysicsCharacterSlot& slot = m_impl->characterSlots[slotIndex];
   slot.character = character;
+  slot.shape = desc.shape;
+  slot.radius = radius;
+  slot.halfHeight = halfHeight;
+  slot.halfCylinderHeight = halfCylinderHeight;
+  slot.characterPadding = characterPadding;
+  slot.supportPlaneConstant = supportPlaneConstant;
+  slot.stickToFloorStepDown = std::max(desc.stickToFloorStepDown, 0.0f);
+  slot.cosMaxSlope = cosMaxSlope;
+  slot.lastStepDt = 1.0f / 60.0f;
   slot.extendedSettings.mStickToFloorStepDown =
-    JPH::Vec3(0.0f, -std::max(desc.stickToFloorStepDown, 0.0f), 0.0f);
+    JPH::Vec3(0.0f, -slot.stickToFloorStepDown, 0.0f);
   slot.extendedSettings.mWalkStairsStepUp =
     JPH::Vec3(0.0f, std::max(desc.stepUpHeight, 0.0f), 0.0f);
   slot.userData = desc.userData;
+  slot.steppedUpLastStep = false;
   slot.alive = true;
+
+  character->SetListener(&m_impl->characterListener);
+  character->RefreshContacts(m_impl->defaultBroadPhaseFilter,
+                             m_impl->solidObjectFilter,
+                             m_impl->defaultBodyFilter,
+                             m_impl->defaultShapeFilter,
+                             *m_impl->tempAllocator);
+  slot.supported = m_impl->isCharacterSupported(slot);
 
   const PhysicsCharacterHandle handle{ slotIndex, slot.generation };
   m_impl->registerReverseBody(
@@ -1047,6 +1565,7 @@ PhysicsWorld::destroyCharacter(PhysicsCharacterHandle handle) noexcept
 
   if (slot->character != nullptr) {
     const JPH::BodyID innerBodyId = slot->character->GetInnerBodyID();
+    slot->character->SetListener(nullptr);
     m_impl->sensorListener.removeBody(innerBodyId);
     m_impl->unregisterReverseBody(innerBodyId);
     m_impl->rebuildSensorOverlaps();
@@ -1055,6 +1574,8 @@ PhysicsWorld::destroyCharacter(PhysicsCharacterHandle handle) noexcept
   }
 
   slot->userData = 0;
+  slot->steppedUpLastStep = false;
+  slot->supported = false;
   slot->alive = false;
   ++slot->generation;
   if (slot->generation == 0) {
@@ -1095,6 +1616,8 @@ PhysicsWorld::setCharacterPosition(PhysicsCharacterHandle handle,
                                    m_impl->defaultBodyFilter,
                                    m_impl->defaultShapeFilter,
                                    *m_impl->tempAllocator);
+  slot->steppedUpLastStep = false;
+  slot->supported = m_impl->isCharacterSupported(*slot);
 }
 
 Quaternion
@@ -1169,7 +1692,9 @@ PhysicsWorld::getCharacterGroundState(
   }
   switch (slot->character->GetGroundState()) {
     case JPH::CharacterBase::EGroundState::OnGround:
-      return PhysicsCharacterGroundState::Grounded;
+      return (slot->supported || slot->steppedUpLastStep)
+               ? PhysicsCharacterGroundState::Grounded
+               : PhysicsCharacterGroundState::NotSupported;
     case JPH::CharacterBase::EGroundState::OnSteepGround:
       return PhysicsCharacterGroundState::OnSteepGround;
     case JPH::CharacterBase::EGroundState::NotSupported:
@@ -1200,6 +1725,8 @@ PhysicsWorld::refreshCharacterContacts(PhysicsCharacterHandle handle) noexcept
                                    m_impl->defaultBodyFilter,
                                    m_impl->defaultShapeFilter,
                                    *m_impl->tempAllocator);
+  slot->steppedUpLastStep = false;
+  slot->supported = m_impl->isCharacterSupported(*slot);
 }
 
 Vector3
@@ -1241,14 +1768,7 @@ PhysicsWorld::step(float deltaSeconds, int collisionSteps)
     if (!slot.alive || slot.character == nullptr) {
       continue;
     }
-    slot.character->ExtendedUpdate(deltaSeconds,
-                                   worldGravity,
-                                   slot.extendedSettings,
-                                   m_impl->defaultBroadPhaseFilter,
-                                   m_impl->solidObjectFilter,
-                                   m_impl->defaultBodyFilter,
-                                   m_impl->defaultShapeFilter,
-                                   *m_impl->tempAllocator);
+    m_impl->stepCharacter(slot, deltaSeconds, worldGravity);
   }
 
   m_impl->system->Update(deltaSeconds,

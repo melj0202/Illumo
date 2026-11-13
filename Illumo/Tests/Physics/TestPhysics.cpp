@@ -6,6 +6,7 @@
 #include <Illumo/Physics/PhysicsWorld.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
+#include <algorithm>
 #include <cmath>
 #include <string>
 
@@ -297,6 +298,250 @@ testCharacterGroundSlideStairsAndPush()
   testTrue(g, world.getBodyPosition(crate).x > 0.9f, "character pushes crate");
 }
 
+static void
+testCharacterSlopesLedgesAndCeiling()
+{
+  testSection(
+    "Physics: slope standstill, ledge overhang drop and ceiling clamp");
+  PhysicsWorld world;
+  std::string error;
+  testTrue(g, world.initialize(error), "world initializes");
+
+  PhysicsBodyDesc groundDesc;
+  groundDesc.shape = PhysicsShapeDesc::plane();
+  groundDesc.motion = PhysicsMotionKind::Static;
+  groundDesc.position = Vector3(0.0f, 0.06f, 0.0f);
+  testTrue(g, world.createBody(groundDesc, error).isValid(), "ground created");
+
+  // 1. Walkable 22-degree slope standstill.
+  PhysicsBodyDesc rampDesc;
+  rampDesc.shape = PhysicsShapeDesc::box(Vector3(1.0f, 0.06f, 1.0f));
+  rampDesc.motion = PhysicsMotionKind::Static;
+  rampDesc.position = Vector3(-4.0f, 0.50f, 0.0f);
+  rampDesc.rotation = glm::angleAxis(0.3839724f, Vector3(1.0f, 0.0f, 0.0f));
+  testTrue(g, world.createBody(rampDesc, error).isValid(), "ramp created");
+
+  PhysicsCharacterDesc playerDesc;
+  playerDesc.radius = 0.125f;
+  playerDesc.height = 0.5f;
+  playerDesc.position = Vector3(-4.0f, 1.00f, 0.0f);
+  playerDesc.stepUpHeight = 0.15f;
+  playerDesc.stickToFloorStepDown = 0.15f;
+  const PhysicsCharacterHandle player =
+    world.createCharacter(playerDesc, error);
+  testTrue(g, player.isValid(), "character created");
+
+  const float dt = 1.0f / 60.0f;
+  for (int i = 0; i < 45; ++i) {
+    const float vy =
+      world.isCharacterGrounded(player)
+        ? 0.0f
+        : world.getCharacterLinearVelocity(player).y + world.gravity().y * dt;
+    world.setCharacterLinearVelocity(player, Vector3(0.0f, vy, 0.0f));
+    world.step(dt);
+  }
+  testTrue(
+    g, world.isCharacterGrounded(player), "lands grounded on 22 deg slope");
+
+  const Vector3 slopeStart = world.getCharacterPosition(player);
+  testTrue(g,
+           std::fabs(slopeStart.x - (-4.0f)) < 0.002f &&
+             std::fabs(slopeStart.z) < 0.002f,
+           "capsule drop onto 22 deg slope has no downhill XZ drift");
+  for (int i = 0; i < 120; ++i) {
+    const float vy =
+      world.isCharacterGrounded(player)
+        ? 0.0f
+        : world.getCharacterLinearVelocity(player).y + world.gravity().y * dt;
+    world.setCharacterLinearVelocity(player, Vector3(0.0f, vy, 0.0f));
+    world.step(dt);
+  }
+  const Vector3 slopeEnd = world.getCharacterPosition(player);
+  testTrue(g,
+           world.isCharacterGrounded(player) &&
+             glm::length(slopeEnd - slopeStart) < 0.001f,
+           "idle character does not slide down walkable slope");
+
+  float capsuleJumpPeakY = slopeEnd.y;
+  for (int jump = 0; jump < 3; ++jump) {
+    testTrue(g,
+             world.isCharacterGrounded(player),
+             "capsule is grounded before ramp jump");
+    world.setCharacterLinearVelocity(player, Vector3(0.0f, 4.5f, 0.0f));
+    world.step(dt);
+    for (int i = 0; i < 60; ++i) {
+      capsuleJumpPeakY =
+        std::max(capsuleJumpPeakY, world.getCharacterPosition(player).y);
+      const float vy =
+        world.isCharacterGrounded(player)
+          ? 0.0f
+          : world.getCharacterLinearVelocity(player).y + world.gravity().y * dt;
+      world.setCharacterLinearVelocity(player, Vector3(0.0f, vy, 0.0f));
+      world.step(dt);
+    }
+  }
+  const Vector3 capsuleAfterJump = world.getCharacterPosition(player);
+  testTrue(g,
+           world.isCharacterGrounded(player) &&
+             capsuleJumpPeakY > slopeEnd.y + 0.20f &&
+             std::hypot(capsuleAfterJump.x - slopeEnd.x,
+                        capsuleAfterJump.z - slopeEnd.z) < 0.002f,
+           "jumping in place on 22 deg slope produces no capsule XZ drift");
+
+  // 2. Overhanging box corner drops promptly under gravity instead of creeping.
+  PhysicsBodyDesc boxDesc;
+  boxDesc.shape = PhysicsShapeDesc::box(Vector3(0.18f, 0.18f, 0.18f));
+  boxDesc.motion = PhysicsMotionKind::Static;
+  boxDesc.position = Vector3(1.25f, 0.24f, 0.0f);
+  testTrue(
+    g, world.createBody(boxDesc, error).isValid(), "elevated box created");
+
+  world.setCharacterPosition(player, Vector3(1.03f, 0.64f, 0.0f));
+  world.setCharacterLinearVelocity(player, Vector3(0.0f, 0.0f, 0.0f));
+  testTrue(g,
+           !world.isCharacterGrounded(player) &&
+             world.getCharacterGroundState(player) ==
+               PhysicsCharacterGroundState::NotSupported,
+           "overhanging corner contact is not falsely reported as grounded");
+
+  int fallTicks = 0;
+  for (int i = 0; i < 30; ++i) {
+    const float vy =
+      world.isCharacterGrounded(player)
+        ? 0.0f
+        : world.getCharacterLinearVelocity(player).y + world.gravity().y * dt;
+    world.setCharacterLinearVelocity(player, Vector3(0.0f, vy, 0.0f));
+    world.step(dt);
+    ++fallTicks;
+    if (world.isCharacterGrounded(player) &&
+        world.getCharacterPosition(player).y <= 0.33f) {
+      break;
+    }
+  }
+  testTrue(g,
+           world.isCharacterGrounded(player) &&
+             world.getCharacterPosition(player).y <= 0.33f && fallTicks <= 25,
+           "overhanging corner falls promptly onto ground plane");
+
+  // 3. Ceiling head-bonk zeroes residual upward velocity.
+  world.setCharacterPosition(player, Vector3(3.0f, 0.31f, 0.0f));
+  PhysicsBodyDesc ceilingDesc;
+  ceilingDesc.shape = PhysicsShapeDesc::box(Vector3(1.0f, 0.1f, 1.0f));
+  ceilingDesc.motion = PhysicsMotionKind::Static;
+  // Character top at y = 0.56; ceiling bottom at y = 0.68 -> 0.12 m clearance.
+  ceilingDesc.position = Vector3(3.0f, 0.78f, 0.0f);
+  testTrue(
+    g, world.createBody(ceilingDesc, error).isValid(), "ceiling created");
+
+  world.setCharacterLinearVelocity(player, Vector3(0.0f, 6.2f, 0.0f));
+  for (int i = 0; i < 3; ++i) {
+    world.step(dt);
+    if (i < 2) {
+      const float vy =
+        world.getCharacterLinearVelocity(player).y + world.gravity().y * dt;
+      world.setCharacterLinearVelocity(player, Vector3(0.0f, vy, 0.0f));
+    }
+  }
+  testTrue(g,
+           world.getCharacterLinearVelocity(player).y <= 0.01f,
+           "ceiling impact clears upward jump velocity immediately");
+
+  // 4. Flat-bottom cylinder character: toe-on-ledge standing vs outer graze
+  // drop.
+  PhysicsCharacterDesc cylDesc;
+  cylDesc.shape = PhysicsCharacterShape::Cylinder;
+  cylDesc.radius = 0.125f;
+  cylDesc.height = 0.5f;
+  cylDesc.position = Vector3(1.01f, 0.67f, 0.0f);
+  cylDesc.stepUpHeight = 0.15f;
+  cylDesc.stickToFloorStepDown = 0.15f;
+  const PhysicsCharacterHandle cyl = world.createCharacter(cylDesc, error);
+  testTrue(g, cyl.isValid(), "cylinder character created");
+
+  for (int i = 0; i < 60; ++i) {
+    const float vy =
+      world.isCharacterGrounded(cyl)
+        ? 0.0f
+        : world.getCharacterLinearVelocity(cyl).y + world.gravity().y * dt;
+    world.setCharacterLinearVelocity(cyl, Vector3(0.0f, vy, 0.0f));
+    world.step(dt);
+  }
+  testTrue(g,
+           world.isCharacterGrounded(cyl) &&
+             nearValue(world.getCharacterPosition(cyl).y, 0.67f, 0.02f),
+           "cylinder character stands flat-footed on partial ledge overlap");
+
+  // Outside visual edge [1.07, 1.43] (right edge at 0.93 + 0.125 = 1.055):
+  // padding graze does not support or slant; cylinder falls onto ground plane.
+  world.setCharacterPosition(cyl, Vector3(0.93f, 0.65f, 0.0f));
+  world.setCharacterLinearVelocity(cyl, Vector3(0.0f, 0.0f, 0.0f));
+  testTrue(g,
+           !world.isCharacterGrounded(cyl),
+           "cylinder outside ledge edge is not falsely grounded");
+
+  int cylFallTicks = 0;
+  for (int i = 0; i < 30; ++i) {
+    const float vy =
+      world.isCharacterGrounded(cyl)
+        ? 0.0f
+        : world.getCharacterLinearVelocity(cyl).y + world.gravity().y * dt;
+    world.setCharacterLinearVelocity(cyl, Vector3(0.0f, vy, 0.0f));
+    world.step(dt);
+    ++cylFallTicks;
+    if (world.isCharacterGrounded(cyl) &&
+        world.getCharacterPosition(cyl).y <= 0.33f) {
+      break;
+    }
+  }
+  testTrue(g,
+           world.isCharacterGrounded(cyl) &&
+             world.getCharacterPosition(cyl).y <= 0.33f && cylFallTicks <= 25,
+           "cylinder outside ledge edge drops straight onto ground plane");
+
+  // 5. Flat-bottom cylinder character: drop & repeated vertical jumps on 22 deg
+  // slope produce no downhill XZ slide.
+  world.setCharacterPosition(cyl, Vector3(-4.0f, 1.00f, 0.0f));
+  world.setCharacterLinearVelocity(cyl, Vector3(0.0f, 0.0f, 0.0f));
+  for (int i = 0; i < 45; ++i) {
+    const float vy =
+      world.isCharacterGrounded(cyl)
+        ? 0.0f
+        : world.getCharacterLinearVelocity(cyl).y + world.gravity().y * dt;
+    world.setCharacterLinearVelocity(cyl, Vector3(0.0f, vy, 0.0f));
+    world.step(dt);
+  }
+  const Vector3 cylSlopeStart = world.getCharacterPosition(cyl);
+  testTrue(g,
+           world.isCharacterGrounded(cyl) &&
+             std::hypot(cylSlopeStart.x - (-4.0f), cylSlopeStart.z) < 0.002f,
+           "cylinder drop onto 22 deg slope has no downhill XZ drift");
+
+  float cylJumpPeakY = cylSlopeStart.y;
+  for (int jump = 0; jump < 3; ++jump) {
+    testTrue(g,
+             world.isCharacterGrounded(cyl),
+             "cylinder is grounded before ramp jump");
+    world.setCharacterLinearVelocity(cyl, Vector3(0.0f, 4.5f, 0.0f));
+    world.step(dt);
+    for (int i = 0; i < 60; ++i) {
+      cylJumpPeakY = std::max(cylJumpPeakY, world.getCharacterPosition(cyl).y);
+      const float vy =
+        world.isCharacterGrounded(cyl)
+          ? 0.0f
+          : world.getCharacterLinearVelocity(cyl).y + world.gravity().y * dt;
+      world.setCharacterLinearVelocity(cyl, Vector3(0.0f, vy, 0.0f));
+      world.step(dt);
+    }
+  }
+  const Vector3 cylAfterJump = world.getCharacterPosition(cyl);
+  testTrue(g,
+           world.isCharacterGrounded(cyl) &&
+             cylJumpPeakY > cylSlopeStart.y + 0.20f &&
+             std::hypot(cylAfterJump.x - cylSlopeStart.x,
+                        cylAfterJump.z - cylSlopeStart.z) < 0.002f,
+           "jumping in place on 22 deg slope produces no cylinder XZ drift");
+}
+
 void
 registerPhysicsTests(IllumoTestRegistry& registry)
 {
@@ -318,6 +563,11 @@ registerPhysicsTests(IllumoTestRegistry& registry)
   registry.add("Illumo.Physics.CharacterGroundSlideStairsAndPush", []() {
     g = {};
     testCharacterGroundSlideStairsAndPush();
+    return g.failures;
+  });
+  registry.add("Illumo.Physics.CharacterSlopesLedgesAndCeiling", []() {
+    g = {};
+    testCharacterSlopesLedgesAndCeiling();
     return g.failures;
   });
 }
