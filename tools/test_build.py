@@ -120,7 +120,18 @@ class BuildTests(unittest.TestCase):
         self.assertIn("--config=RelWithDebInfo", dev)
         no_asan = build.profile_arguments(build.BUILTIN_PROFILES["debug-noasan"])
         self.assertIn("--config=Debug", no_asan)
-        self.assertIn("--cmake-arg=-DILLUMO_ENABLE_ASAN=OFF", no_asan)
+        self.assertIn("--sanitizer=off", no_asan)
+        parser = build.create_parser()
+        parsed = parser.parse_args(["configure", *no_asan])
+        build.apply_compiler_selection(parsed)
+        self.assertEqual(parsed.sanitizer, "off")
+        self.assertIn("-DILLUMO_ENABLE_ASAN=OFF", build.compiler_cmake_arguments(parsed))
+        # Explicit --sanitizer overrides the profile instead of being shadowed by cmake_arg.
+        overridden = parser.parse_args(["configure", *no_asan, "--sanitizer", "address"])
+        build.apply_compiler_selection(overridden)
+        self.assertEqual(overridden.sanitizer, "address")
+        self.assertIn("-DILLUMO_ENABLE_ASAN=ON", build.compiler_cmake_arguments(overridden))
+        self.assertNotIn("-DILLUMO_ENABLE_ASAN=OFF", build.compiler_cmake_arguments(overridden))
         self.assertNotEqual(build.BUILTIN_PROFILES["debug-noasan"]["build_dir"],
                             build.BUILTIN_PROFILES["debug"]["build_dir"])
         # "tracy" profiles optimized code with host and guest zones.
@@ -1987,6 +1998,385 @@ class VersionTests(unittest.TestCase):
                 continue
             manifest = json.loads((directory / "illumo.json").read_text(encoding="utf-8"))
             self.assertNotIn("version", manifest, directory.name)
+
+
+class OrchestratorAuditRegressionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def invoke(self, *args):
+        output, errors = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            code = build.main(list(args))
+        return code, output.getvalue(), errors.getvalue()
+
+    def test_multi_runner_project_discovery_and_resolution(self):
+        (self.root / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.25)\n", encoding="utf-8")
+        illumo = self.root / "Illumo"
+        illumo.mkdir()
+        (illumo / "CMakeLists.txt").write_text(
+            "add_executable(IllumoTests Tests/Main.cpp)\n"
+            "illumo_discover_test_runner(IllumoTests)\n"
+            "add_executable(IllumoPhysicsTests Tests/Physics/Main.cpp)\n"
+            "illumo_discover_test_runner(IllumoPhysicsTests)\n"
+            "add_executable(IllumoGpuTests EXCLUDE_FROM_ALL Tests/Gpu/Main.cpp)\n"
+            "add_executable(IllumoCaptureGpuTests tools/CaptureGpuTests.cpp)\n"
+            "add_executable(IllumoPublicHeaderSmoke Tests/PublicHeaderSmoke.cpp)\n",
+            encoding="utf-8",
+        )
+        workspace = build.discover_workspace_projects(self.root)
+        project = workspace.projects[0]
+        self.assertEqual(project.test_runners, ("IllumoTests", "IllumoPhysicsTests"))
+        self.assertEqual(project.smoke_targets, ("IllumoPublicHeaderSmoke",))
+        self.assertEqual(project.applications, ())
+        self.assertEqual(workspace.resolve_test_target("Illumo.Physics.LifecycleAndHandles"), "IllumoPhysicsTests")
+        self.assertEqual(workspace.resolve_test_target("Illumo.Renderer.Tokens"), "IllumoTests")
+        self.assertEqual(workspace.resolve_test_target(build.PUBLIC_HEADER_SMOKE_TEST), "IllumoPublicHeaderSmoke")
+
+        # Exact --test keeps CTest's runner target directly, and --list-tests builds all targets once.
+        build_dir = self.root / "out"
+        (build_dir / "Illumo" / "Release").mkdir(parents=True)
+        physics_exe = build_dir / "Illumo" / "Release" / ("IllumoPhysicsTests.exe" if build.os.name == "nt" else "IllumoPhysicsTests")
+        physics_exe.write_bytes(b"")
+        tests_exe = build_dir / "Illumo" / "Release" / ("IllumoTests.exe" if build.os.name == "nt" else "IllumoTests")
+        tests_exe.write_bytes(b"")
+
+        listing = [{"name": "Illumo.Physics.LifecycleAndHandles", "command": [str(physics_exe), "--run", "Illumo.Physics.LifecycleAndHandles"]}]
+        commands = []
+        parser = build.create_parser(workspace)
+        args = parser.parse_args(["test", "--build-dir", str(build_dir), "--test", "Illumo.Physics.LifecycleAndHandles"])
+        with patch.object(build, "discover_workspace_projects", return_value=workspace), \
+             patch.object(build, "configure", return_value="cmake"), \
+             patch.object(build, "existing_tool", side_effect=lambda name, _dry=False: name), \
+             patch.object(build, "ctest_listing", return_value=listing), \
+             patch.object(build.CommandRunner, "run", side_effect=lambda cmd, *_a, **_k: commands.append(list(cmd))):
+            build.run_tests(args)
+        self.assertEqual(commands[0][commands[0].index("--target") + 1], "IllumoPhysicsTests")
+        self.assertEqual(commands[1], [str(physics_exe), "--run", "Illumo.Physics.LifecycleAndHandles"])
+
+        list_commands = []
+        list_args = parser.parse_args(["test", "--build-dir", str(build_dir), "--list-tests"])
+        with patch.object(build, "discover_workspace_projects", return_value=workspace), \
+             patch.object(build, "configure", return_value="cmake"), \
+             patch.object(build, "existing_tool", side_effect=lambda name, _dry=False: name), \
+             patch.object(build, "ctest_listing", return_value=[]), \
+             patch.object(build.CommandRunner, "run", side_effect=lambda cmd, *_a, **_k: list_commands.append(list(cmd))), \
+             contextlib.redirect_stdout(io.StringIO()):
+            build.run_tests(list_args)
+        build_calls = [cmd for cmd in list_commands if "--build" in cmd]
+        self.assertEqual(len(build_calls), 1)
+        idx = build_calls[0].index("--target")
+        self.assertEqual(build_calls[0][idx + 1:idx + 4], ["IllumoTests", "IllumoPhysicsTests", "IllumoPublicHeaderSmoke"])
+
+    def test_documentation_auto_detection_in_generated_workspace(self):
+        self.assertFalse(build.documentation_available(self.root))
+        with patch.object(build, "REPOSITORY_ROOT", self.root):
+            parsed = build.create_parser(build.WorkspaceProjects(self.root, ())).parse_args(["configure"])
+            self.assertTrue(parsed.no_docs)
+            state = build.DashboardState()
+            self.assertFalse(state.documentation_enabled)
+            build.apply_dashboard_profile(state, "release", build.BUILTIN_PROFILES["release"])
+            self.assertFalse(state.documentation_enabled)
+            self.assertEqual(build.dashboard_value(state, "documentation"), "No docs tree")
+            state.selected = next(i for i, item in enumerate(build.DASHBOARD_ITEMS) if item[2] == "documentation")
+            build.adjust_dashboard_setting(state, 1)
+            self.assertFalse(state.documentation_enabled)
+            keys = [entry[0] for entry in build.palette_entries(state)]
+            self.assertNotIn("documentation", keys)
+            with self.assertRaisesRegex(build.BuildError, "Documentation script not found"):
+                build.run_docs(build.create_parser(build.WorkspaceProjects(self.root, ())).parse_args(["docs", "--dry-run"]))
+
+    def test_clean_flag_only_on_first_build_in_tests_dist_and_watch(self):
+        project = build.ProjectInfo(
+            "App", self.root / "App", (), ("AppTests",), ("AppTestsDiscover",), ("AppSmoke",), ("App.",),
+        )
+        workspace = build.WorkspaceProjects(self.root, (project,))
+        parser = build.create_parser(workspace)
+        args = parser.parse_args(["test", "--build-dir", str(self.root / "b"), "--clean"])
+        seen = []
+        listing = [{"name": "App.Wasm", "command": [str(self.root / "b" / "Release" / "AppWasmTests.exe")]}]
+        with patch.object(build, "existing_tool", side_effect=lambda name, _dry=False: name), \
+             patch.object(build, "ctest_listing", return_value=listing), \
+             patch.object(build.CommandRunner, "run", side_effect=lambda cmd, *_a, **_k: seen.append(list(cmd))):
+            build.build_test_executables(args, "cmake", build.CommandRunner(False), workspace)
+        self.assertEqual(len(seen), 2)
+        self.assertIn("--clean-first", seen[0])
+        self.assertIn("AppTestsDiscover", seen[0])
+        self.assertIn("AppSmoke", seen[0])
+        self.assertNotIn("--clean-first", seen[1])
+        self.assertIn("AppWasmTests", seen[1])
+
+        # run_distribution rejects --no-wasm up front and runs one IllumoDistribution build with env_overrides.
+        no_wasm_args = parser.parse_args(["dist", "--no-wasm"])
+        with self.assertRaisesRegex(build.BuildError, "WASM runtime"):
+            build.run_distribution(no_wasm_args)
+
+        dist_calls = []
+        dist_args = parser.parse_args(["dist", "--wasm", "--clean", "--apps", "illed"])
+        before_env = build.os.environ.get(build.DISTRIBUTION_APPS_VARIABLE)
+        with patch.object(build, "app_names", return_value=("illed", "meshviewer")), \
+             patch.object(build, "configure", return_value="cmake"), \
+             patch.object(build.CommandRunner, "run", side_effect=lambda cmd, *_a, **kw: dist_calls.append((list(cmd), kw.get("env_overrides")))), \
+             contextlib.redirect_stdout(io.StringIO()):
+            build.run_distribution(dist_args)
+        self.assertEqual(len(dist_calls), 1)
+        self.assertIn("IllumoDistribution", dist_calls[0][0])
+        self.assertIn("--clean-first", dist_calls[0][0])
+        self.assertEqual(dist_calls[0][1], {build.DISTRIBUTION_APPS_VARIABLE: "illed"})
+        self.assertEqual(build.os.environ.get(build.DISTRIBUTION_APPS_VARIABLE), before_env)
+
+        # run_watch rejects --test with --no-tests, and only cleans on cycle 1.
+        with self.assertRaisesRegex(build.BuildError, "--no-tests"):
+            build.run_watch(parser.parse_args(["watch", "--test", "Illumo.A", "--no-tests"]))
+
+        watch_cmds = []
+        snapshots = iter([{"a.cpp": 1}, {"a.cpp": 2}, {"a.cpp": 2}])
+        sleeps = [None, None, KeyboardInterrupt()]
+        def fake_sleep(_):
+            item = sleeps.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+        watch_args = parser.parse_args(["watch", "--clean", "--build-dir", str(self.root / "w")])
+        with patch.object(build, "configure", return_value="cmake"), \
+             patch.object(build, "watch_snapshot", side_effect=lambda _r: next(snapshots)), \
+             patch.object(build.time, "sleep", side_effect=fake_sleep), \
+             patch.object(build.CommandRunner, "run", side_effect=lambda cmd, *_a, **_k: watch_cmds.append(list(cmd))), \
+             contextlib.redirect_stdout(io.StringIO()):
+            build.run_watch(watch_args)
+        self.assertEqual(len(watch_cmds), 2)
+        self.assertIn("--clean-first", watch_cmds[0])
+        self.assertNotIn("--clean-first", watch_cmds[1])
+
+    def test_oneapi_env_preserves_parentheses_and_dry_run_skips_setvars(self):
+        parsed = build.parse_windows_set_output(
+            "ProgramFiles(x86)=C:\\Program Files (x86)\n"
+            "CommonProgramFiles(x86)=C:\\Program Files (x86)\\Common Files\n"
+            "PATH=C:\\oneapi\\bin;C:\\Windows\n"
+            "=C:=C:\\ignore-drive-var\n"
+        )
+        self.assertEqual(parsed["PROGRAMFILES(X86)"], "C:\\Program Files (x86)")
+        self.assertEqual(parsed["COMMONPROGRAMFILES(X86)"], "C:\\Program Files (x86)\\Common Files")
+        self.assertEqual(parsed["PATH"], "C:\\oneapi\\bin;C:\\Windows")
+        self.assertNotIn("", parsed)
+
+        with patch.object(build, "compiler_subprocess_environment", side_effect=AssertionError("must not run on dry-run")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            build.CommandRunner(dry_run=True).run(["cmake", "--version"])
+
+        captured_env = {}
+        def fake_run(_cmd, **kwargs):
+            captured_env.update(kwargs["env"])
+            return subprocess.CompletedProcess([], 0)
+
+        with patch.object(build, "compiler_subprocess_environment", return_value={"LIB": "intel.lib", "DROP": "1"}), \
+             patch.object(build.subprocess, "run", side_effect=fake_run), \
+             contextlib.redirect_stdout(io.StringIO()):
+            build.CommandRunner(dry_run=False).run(
+                ["cmake", "--build", "out"],
+                env_overrides={"ILLUMO_DIST_APPS": "illed", "DROP": None},
+            )
+        self.assertEqual(captured_env["LIB"], "intel.lib")
+        self.assertEqual(captured_env["ILLUMO_DIST_APPS"], "illed")
+        self.assertNotIn("DROP", captured_env)
+
+        # intel_compiler_path matches only -DCMAKE_(C|CXX)_COMPILER= and resolves bare names via which.
+        self.assertIsNone(build.intel_compiler_path(["cmake", "-DFOO=icx"]))
+        fake_icx = str(self.root / "icx.exe")
+        with patch.object(build.shutil, "which", return_value=fake_icx):
+            self.assertEqual(build.intel_compiler_path(["cmake", "-DCMAKE_CXX_COMPILER=icx"]), Path(fake_icx))
+
+        # Windows SDK directories sort numerically so 10.0.26100.0 beats 10.0.9999.0.
+        self.assertGreater(build._version_sort_key(Path("10.0.26100.0")), build._version_sort_key(Path("10.0.9999.0")))
+        ordered = sorted([self.root / "10.0.9999.0", self.root / "10.0.26100.0"],
+                         key=build._version_sort_key, reverse=True)
+        self.assertEqual(ordered[0].name, "10.0.26100.0")
+
+    def test_doctor_reads_minimum_cmake_version_from_root_cmake(self):
+        self.assertGreaterEqual(build.minimum_cmake_version(), (3, 25))
+        (self.root / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.25)\n", encoding="utf-8")
+        self.assertEqual(build.minimum_cmake_version(self.root), (3, 25))
+
+        def fake_subprocess(cmd, **_kwargs):
+            text = "cmake version 3.22.1\n" if "cmake" in str(cmd[0]) else "ctest version 3.22.1\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout=text, stderr="")
+
+        with patch.object(build, "REPOSITORY_ROOT", self.root), \
+             patch.object(build.shutil, "which", side_effect=lambda name: f"/bin/{name}"), \
+             patch.object(build.subprocess, "run", side_effect=fake_subprocess):
+            code, output, _ = self.invoke("doctor", "--json", "--no-wasm", "--no-docs", "--no-tidy",
+                                          "--build-dir", str(self.root / "b"))
+        self.assertEqual(code, 1)
+        report = json.loads(output)
+        cmake_check = next(item for item in report["checks"] if item["name"] == "cmake")
+        self.assertEqual(cmake_check["status"], "error")
+        self.assertIn("3.25", cmake_check["detail"])
+
+    def test_parse_diagnostics_filters_noise_and_caches_source_reads(self):
+        source = self.root / "sample.cpp"
+        source.write_text("line1\nint broken = ;\nline3\n", encoding="utf-8")
+        lines = [
+            "> ctest --test-dir build --no-tests=error",
+            "    0 Warning(s)",
+            "    0 Error(s)",
+            "  1/10 Test #1: Illumo.ErrorHandling .....................   Passed    0.01 sec",
+            f"{source}(2): error C2059: syntax error: ';'",
+            "fatal error without location",
+        ]
+        diagnostics = build.parse_diagnostics(lines, self.root)
+        self.assertEqual(len(diagnostics), 2)
+        self.assertEqual(diagnostics[0]["line"], 2)
+        self.assertEqual(diagnostics[0]["severity"], "error")
+        self.assertEqual(diagnostics[1]["message"], "fatal error without location")
+
+        # CMake relative paths resolve against REPOSITORY_ROOT when missing in build dir.
+        cmake_diag = build.parse_diagnostics(
+            ["CMake Error at CMakeLists.txt:10 (project): bad"], self.root / "missing-build"
+        )
+        self.assertEqual(Path(cmake_diag[0]["source"]), build.REPOSITORY_ROOT / "CMakeLists.txt")
+
+        # Source cache prevents re-reading the same file across details and preview.
+        cache: dict[str, list[str] | str] = {}
+        reads = 0
+        real_read_text = Path.read_text
+        def counting_read(p, *a, **k):
+            nonlocal reads
+            if p == source:
+                reads += 1
+            return real_read_text(p, *a, **k)
+
+        with patch.object(Path, "read_text", counting_read):
+            details = build._diagnostic_row_details(diagnostics[0], lines, cache)
+            preview = build.diagnostic_preview(diagnostics[0], lines, cache)
+        self.assertEqual(reads, 1)
+        self.assertTrue(any("int broken = ;" in line for line in details))
+        self.assertTrue(any("int broken = ;" in line for line in preview))
+
+    def test_executable_path_fallback_case_insensitive_and_prunes_junk(self):
+        build_dir = self.root / "build"
+        exe_name = "Tool.exe" if build.os.name == "nt" else "Tool"
+        for rel in ("dist/Release", "Testing/Release", "CustomSub/Release"):
+            d = build_dir / rel
+            d.mkdir(parents=True)
+            (d / exe_name).write_bytes(b"")
+        found = build.executable_path(build_dir, "release", "Tool", False, build.WorkspaceProjects(self.root, ()))
+        self.assertEqual(found, build_dir / "CustomSub" / "Release" / exe_name)
+
+    def test_cli_flags_stats_watch_ctest_version_logs_and_app_titles(self):
+        parser = build.create_parser()
+        # --no-parallel overrides a profile's parallel setting through main()'s profile expansion.
+        profiles = self.root / "profiles.json"
+        profiles.write_text(json.dumps({"version": 1, "profiles": {"fast": {"parallel": 8}}}), encoding="utf-8")
+        captured_args = []
+        with patch.object(build, "run_build", side_effect=lambda a: captured_args.append(a)):
+            code, _, err = self.invoke("build", "--profiles-file", str(profiles), "--profile", "fast", "--no-parallel")
+        self.assertEqual(code, 0, err)
+        self.assertIsNone(captured_args[0].parallel)
+
+        # run_compiler_options does not cycle or mark sanitizer overridden when ASAN is unsupported (Intel).
+        state = build.DashboardState(compiler="intel", sanitizer="default")
+        keys = iter(["down", "down", "down", "down", "right", "escape"])
+        class FakeTerminal:
+            def read_event(self, _timeout=None, **_kw):
+                return next(keys)
+        with patch.object(build, "dashboard_terminal_size", return_value=build.os.terminal_size((100, 30))), \
+             contextlib.redirect_stdout(io.StringIO()):
+            build.run_compiler_options(state, FakeTerminal())
+        self.assertEqual(state.sanitizer, "default")
+        self.assertNotIn("sanitizer", state.overrides)
+
+        # positive_count rejects 0 and non-integers on file-stats -n.
+        for bad in ("0", "auto"):
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    parser.parse_args(["file-stats", "-n", bad])
+
+        # file-stats accepts build, docs, and config categories.
+        for cat in ("build", "docs", "config"):
+            parsed = parser.parse_args(["file-stats", "--category", cat])
+            self.assertEqual(parsed.category, cat)
+
+        # stats --by-file scans the repository only once.
+        (self.root / "main.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+        with patch.object(build, "REPOSITORY_ROOT", self.root), \
+             patch.object(build, "collect_repository_statistics", wraps=build.collect_repository_statistics) as collect, \
+             contextlib.redirect_stdout(io.StringIO()):
+            build.run_repository_statistics(parser.parse_args(["stats", "--by-file"]))
+        self.assertEqual(collect.call_count, 1)
+
+        # parse_ctest_results recognizes Skipped status.
+        xml = (
+            b"<Site><Testing><Test Status='Skipped'><Name>Illumo.Gpu</Name>"
+            b"<Results><NamedMeasurement name='Execution Time'><Value>0.02</Value></NamedMeasurement></Results>"
+            b"</Test></Testing></Site>"
+        )
+        parsed_tests = build.parse_ctest_results(xml, ["Illumo.Gpu"])
+        self.assertEqual(parsed_tests[0]["status"], "skipped")
+
+        # watch_snapshot includes .ilsc files and skips cmake-build-debug/.
+        (self.root / "scene.ilsc").write_text("scene", encoding="utf-8")
+        (self.root / "cmake-build-debug").mkdir()
+        (self.root / "cmake-build-debug" / "gen.cpp").write_text("int x;", encoding="utf-8")
+        snap = build.watch_snapshot(self.root)
+        self.assertIn("scene.ilsc", snap)
+        self.assertNotIn("cmake-build-debug/gen.cpp", snap)
+
+        # version --set --dry-run does not modify VERSION.txt.
+        (self.root / "VERSION.txt").write_text("26.09\n", encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()):
+            build.set_release("26.10", self.root, commit=False, dry_run=True)
+        self.assertEqual((self.root / "VERSION.txt").read_text(encoding="utf-8"), "26.09\n")
+
+        # prune_orchestrator_logs removes stale runs + sidecars and preserves newest N.
+        log_dir = self.root / "logs"
+        log_dir.mkdir()
+        for idx, ts in enumerate((1000.0, 2000.0, 3000.0), start=1):
+            stem = f"tests-{idx}"
+            (log_dir / f"{stem}.log").write_text("log", encoding="utf-8")
+            (log_dir / f"{stem}.json").write_text(json.dumps({"version": 1, "started": ts}), encoding="utf-8")
+            (log_dir / f"{stem}.request.json").write_text("{}", encoding="utf-8")
+            (log_dir / f"{stem}.tests.json").write_text("{}", encoding="utf-8")
+            (log_dir / f"{stem}.tests.batch-1.xml").write_text("<Site/>", encoding="utf-8")
+        dry = build.prune_orchestrator_logs(2, log_dir, dry_run=True)
+        self.assertEqual(dry["removed_runs"], 1)
+        self.assertEqual(len(dry["removed_files"]), 5)
+        self.assertTrue((log_dir / "tests-1.log").exists())
+        real = build.prune_orchestrator_logs(2, log_dir, dry_run=False)
+        self.assertEqual(real["removed_runs"], 1)
+        self.assertFalse((log_dir / "tests-1.log").exists())
+        self.assertFalse((log_dir / "tests-1.tests.batch-1.xml").exists())
+        self.assertTrue((log_dir / "tests-2.log").exists())
+        self.assertTrue((log_dir / "tests-3.log").exists())
+
+        # installed_apps falls back to illumo.json "title" for custom apps.
+        (self.root / "CMakeLists.txt").write_text("set(ILLUMO_PROGRAMS Saturn)\n", encoding="utf-8")
+        saturn = self.root / "Saturn"
+        saturn.mkdir()
+        (saturn / "CMakeLists.txt").write_text("", encoding="utf-8")
+        (saturn / "PackageTargets.cmake").write_text(
+            "illumo_stage_app(SaturnPackage saturn MODULE Saturn.wasm)\n",
+            encoding="utf-8",
+        )
+        (saturn / "illumo.json").write_text(json.dumps({"id": "saturn", "title": "Saturn World"}), encoding="utf-8")
+        apps = build.installed_apps(self.root)
+        self.assertEqual(len(apps), 1)
+        self.assertEqual(apps[0].label, "Saturn World")
+
+        # run_coverage fails fast if ninja/clang/llvm-cov are missing; accepts --fresh in dry-run.
+        with patch.object(build.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(build.BuildError, "Required tool"):
+                build.run_coverage(parser.parse_args(["coverage"]))
+        cov_cmds = []
+        with patch.object(build.CommandRunner, "run", side_effect=lambda cmd, *_a, **_k: cov_cmds.append(list(cmd))):
+            build.run_coverage(parser.parse_args(["coverage", "--fresh", "--dry-run"]))
+        self.assertIn("--fresh", cov_cmds[0])
+
+        # render_dashboard_progress preserves footer even on a very short terminal.
+        progress = build.DashboardProgress("Build everything", "Release", Path("out.log"))
+        progress.lines.extend(f"line {i}" for i in range(20))
+        rendered = build.render_dashboard_progress(progress, 80, 6, ansi=False)
+        self.assertIn("Ctrl+C", rendered.splitlines()[-1])
 
 
 if __name__ == "__main__":

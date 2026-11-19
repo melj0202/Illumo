@@ -44,7 +44,7 @@ BUILTIN_PROFILES = {
     "release": {"config": "Release", "build_dir": "build-workspace-release"},
     "dev": {"config": "RelWithDebInfo", "build_dir": "build-workspace-dev"},
     "debug-noasan": {"config": "Debug", "build_dir": "build-workspace-debug-noasan",
-                     "cmake_arg": ["-DILLUMO_ENABLE_ASAN=OFF"]},
+                     "sanitizer": "off"},
     "tracy": {"config": "Release", "build_dir": "build-workspace-tracy",
               "tracy": True, "no_docs": True, "no_tidy": True},
 }
@@ -154,21 +154,48 @@ RETIRED_DIRECTORIES = ("game",)
 class AppPackage:
     name: str
     module: str
+    title: str = ""
 
     @property
     def label(self) -> str:
-        return APP_LABELS.get(self.name, self.name)
+        return APP_LABELS.get(self.name) or self.title or self.name
+
+
+def documentation_available(root: Path | None = None) -> bool:
+    """Whether the engine LaTeX documentation sources are present (mirrors Illumo/CMakeLists.txt)."""
+    base = root or REPOSITORY_ROOT
+    return (
+        (base / "docs" / "build.ps1").is_file()
+        and (base / "docs" / "latex" / "illumo.tex").is_file()
+        and (base / "docs" / "latex" / "architecture-map.tex").is_file()
+    )
+
+
+def minimum_cmake_version(root: Path | None = None) -> tuple[int, int]:
+    """Minimum CMake version declared by the root CMakeLists.txt."""
+    text = _read_root_cmake(root)
+    match = re.search(r"cmake_minimum_required\s*\(\s*VERSION\s+(\d+)\.(\d+)", text, re.I)
+    if match:
+        return int(match[1]), int(match[2])
+    return 3, 25
+
+
+def _read_root_cmake(root: Path | None = None) -> str:
+    base = root or REPOSITORY_ROOT
+    try:
+        return (base / "CMakeLists.txt").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _game_directory_name_from_text(text: str) -> str | None:
+    match = re.search(r"set\(\s*ILLUMO_GAME_DIR\s+\"?([^\")\s]+)\"?\s*\)", text)
+    return match[1] if match else None
 
 
 def game_directory_name(root: Path | None = None) -> str | None:
     """The root CMakeLists.txt's ILLUMO_GAME_DIR: where the optional game repository goes."""
-    base = root or REPOSITORY_ROOT
-    try:
-        text = (base / "CMakeLists.txt").read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    match = re.search(r"set\(\s*ILLUMO_GAME_DIR\s+\"?([^\")\s]+)\"?\s*\)", text)
-    return match[1] if match else None
+    return _game_directory_name_from_text(_read_root_cmake(root))
 
 
 def game_directory(root: Path | None = None) -> Path | None:
@@ -184,11 +211,30 @@ def game_missing_message(root: Path | None = None) -> str | None:
     """Why the game is not in this workspace, or None when it is (or has no slot)."""
     base = root or REPOSITORY_ROOT
     name = game_directory_name(base)
-    if name is None or game_directory(base) is not None:
+    if name is None or (base / name / "CMakeLists.txt").is_file():
         return None
     return (f"The game is not in this workspace: clone its repository into "
             f"{name}/ at the engine root (see README.md). The engine and its "
             f"other applications build without it.")
+
+
+def _nested_program_directories_from_text(base: Path, text: str) -> tuple[Path, ...]:
+    match = re.search(r"set\(\s*ILLUMO_NESTED_PROGRAMS\s+([^)]*)\)", text)
+    if match is None:
+        return ()
+    names = (name.strip('"') for name in match[1].split())
+    return tuple(base / name for name in names
+                 if (base / name / "CMakeLists.txt").is_file())
+
+
+def nested_program_directories(root: Path | None = None) -> tuple[Path, ...]:
+    """The root CMakeLists.txt's ILLUMO_NESTED_PROGRAMS that hold a CMakeLists.txt.
+
+    Like the game, each is an optional folder at the engine root, and the root
+    CMakeLists.txt appends the present ones after it.
+    """
+    base = root or REPOSITORY_ROOT
+    return _nested_program_directories_from_text(base, _read_root_cmake(base))
 
 
 def program_directories(root: Path | None = None) -> tuple[Path, ...]:
@@ -199,40 +245,39 @@ def program_directories(root: Path | None = None) -> tuple[Path, ...]:
     them, and only when their folders hold a CMakeLists.txt.
     """
     base = root or REPOSITORY_ROOT
-    try:
-        text = (base / "CMakeLists.txt").read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ()
+    text = _read_root_cmake(base)
     match = re.search(r"set\(\s*ILLUMO_PROGRAMS\s+([^)]*)\)", text)
     if match is None:
         return ()
     programs = [base / name.strip('"') for name in match[1].split()]
-    game = game_directory(base)
-    if game is not None and game not in programs:
-        programs.append(game)
-    for nested in nested_program_directories(base):
-        if nested not in programs:
-            programs.append(nested)
+    game_name = _game_directory_name_from_text(text)
+    if game_name is not None and (base / game_name / "CMakeLists.txt").is_file():
+        game = base / game_name
+        if game not in programs:
+            programs.append(game)
+    # Honor patches on nested_program_directories (e.g. in tests) when root is default.
+    nested = (
+        nested_program_directories(base)
+        if nested_program_directories is not _ORIGINAL_NESTED_PROGRAM_DIRECTORIES
+        else _nested_program_directories_from_text(base, text)
+    )
+    for directory in nested:
+        if directory not in programs:
+            programs.append(directory)
     return tuple(programs)
 
 
-def nested_program_directories(root: Path | None = None) -> tuple[Path, ...]:
-    """The root CMakeLists.txt's ILLUMO_NESTED_PROGRAMS that hold a CMakeLists.txt.
+_ORIGINAL_NESTED_PROGRAM_DIRECTORIES = nested_program_directories
 
-    Like the game, each is an optional folder at the engine root, and the root
-    CMakeLists.txt appends the present ones after it.
-    """
-    base = root or REPOSITORY_ROOT
+
+def _manifest_title(directory: Path) -> str:
+    manifest = directory / "illumo.json"
     try:
-        text = (base / "CMakeLists.txt").read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ()
-    match = re.search(r"set\(\s*ILLUMO_NESTED_PROGRAMS\s+([^)]*)\)", text)
-    if match is None:
-        return ()
-    names = (name.strip('"') for name in match[1].split())
-    return tuple(base / name for name in names
-                 if (base / name / "CMakeLists.txt").is_file())
+        data = json.loads(manifest.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return ""
+    title = data.get("title") if isinstance(data, dict) else ""
+    return title.strip() if isinstance(title, str) else ""
 
 
 def installed_apps(root: Path | None = None) -> tuple[AppPackage, ...]:
@@ -245,11 +290,22 @@ def installed_apps(root: Path | None = None) -> tuple[AppPackage, ...]:
             )
         except OSError:
             continue
+        title = _manifest_title(directory)
         for match in re.finditer(
             r"illumo_stage_app\(\s*\w+\s+([a-z0-9._-]+)\s+MODULE\s+([A-Za-z0-9._-]+)", text
         ):
-            apps.append(AppPackage(match[1], match[2]))
+            apps.append(AppPackage(match[1], match[2], title))
     return tuple(apps)
+
+
+def app_label(name: str, packages: Sequence[AppPackage] | None = None) -> str:
+    if name in APP_LABELS:
+        return APP_LABELS[name]
+    if packages is not None:
+        for package in packages:
+            if package.name == name:
+                return package.label
+    return name
 
 
 def app_names(root: Path | None = None) -> tuple[str, ...]:
@@ -308,7 +364,7 @@ UNICODE_GLYPHS = {
     "sparks": ("▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"),
     "up_down": "↑↓", "left_right": "←→", "refresh": "⟳",
     # Thin-line progress bars: filled, half-filled tip, and track.
-    "bar_fill": "━", "bar_half": "╸", "bar_track": "━",
+    "bar_fill": "━", "bar_half": "╸", "bar_track": "━", "caret": "▏",
 }
 ASCII_GLYPHS = {
     "ok": "+", "bad": "x", "warn": "!", "info": "-", "bullet": "*", "hollow": "o",
@@ -320,7 +376,7 @@ ASCII_GLYPHS = {
     "spinner": ("|", "/", "-", "\\"),
     "sparks": ("_", ".", ":", "-", "=", "+", "*", "#"),
     "up_down": "Up/Down", "left_right": "Left/Right", "refresh": "@",
-    "bar_fill": "#", "bar_half": "#", "bar_track": "-",
+    "bar_fill": "#", "bar_half": "#", "bar_track": "-", "caret": "_",
 }
 # Block-letter wordmark for terminals with room to spare (CP437 glyphs).
 BANNER_ROWS = (
@@ -471,6 +527,7 @@ class ProjectInfo:
     discovery_targets: tuple[str, ...] = ()
     smoke_targets: tuple[str, ...] = ()
     test_prefixes: tuple[str, ...] = ()
+    runner_prefixes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -516,21 +573,24 @@ class WorkspaceProjects:
     def resolve_test_target(self, test_name: str) -> str:
         if test_name == PUBLIC_HEADER_SMOKE_TEST:
             return "IllumoPublicHeaderSmoke"
+        candidates: list[tuple[str, str]] = []
         for project in self.projects:
-            for prefix in project.test_prefixes:
-                if test_name.startswith(prefix):
-                    if project.test_runners:
-                        return project.test_runners[0]
-            if test_name.startswith(f"{project.name}."):
-                if project.test_runners:
-                    return project.test_runners[0]
+            candidates.extend(project.runner_prefixes)
+            if project.test_runners:
+                for prefix in project.test_prefixes:
+                    candidates.append((prefix, project.test_runners[0]))
+                candidates.append((f"{project.name}.", project.test_runners[0]))
         for runner in self.test_runners:
-            prefix = runner.removesuffix("Tests") + "."
+            candidates.append((runner.removesuffix("Tests") + ".", runner))
+        best: tuple[int, str] | None = None
+        for prefix, runner in candidates:
             if test_name.startswith(prefix):
-                return runner
+                if best is None or len(prefix) > best[0]:
+                    best = (len(prefix), runner)
+        if best is not None:
+            return best[1]
         valid_prefixes = sorted(
-            {f"{p.name}." for p in self.projects if p.test_runners}
-            | {f"{runner.removesuffix('Tests')}." for runner in self.test_runners}
+            {prefix for prefix, _runner in candidates}
             | {PUBLIC_HEADER_SMOKE_TEST}
         )
         rendered = ", ".join(f"'{p}'" for p in valid_prefixes)
@@ -564,8 +624,21 @@ def discover_workspace_projects(root: Path = REPOSITORY_ROOT) -> WorkspaceProjec
                 if not (
                     name_lower in ("cmake", "thirdparty", "docs", "archive")
                     or name_lower.startswith("build")
+                    or name_lower.startswith("cmake-build")
                 ):
                     ordered_names.append(item.name)
+
+    wasm_cmake = root / "cmake" / "IllumoWasm.cmake"
+    programs = program_directories(root)
+    wasm_runtime_defined = False
+    if programs and wasm_cmake.is_file():
+        try:
+            wasm_text = wasm_cmake.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            wasm_text = ""
+        wasm_runtime_defined = bool(
+            re.search(rf"add_executable\s*\(\s*{WASM_RUNTIME_APPLICATION}\b", wasm_text)
+        )
 
     project_list: list[ProjectInfo] = []
     for name in ordered_names:
@@ -582,7 +655,18 @@ def discover_workspace_projects(root: Path = REPOSITORY_ROOT) -> WorkspaceProjec
         if re.search(r'CMAKE_SYSTEM_NAME\s+STREQUAL\s+"WASI"', cmake_text):
             continue
 
-        executables = re.findall(r"add_executable\s*\(\s*([A-Za-z0-9_]+)", cmake_text)
+        executables: list[str] = []
+        excluded_executables: set[str] = set()
+        for match in re.finditer(
+            r"add_executable\s*\(\s*([A-Za-z0-9_]+)(?:\s+([A-Za-z0-9_]+))?",
+            cmake_text,
+        ):
+            exe = match.group(1)
+            if exe not in executables:
+                executables.append(exe)
+            if match.group(2) == "EXCLUDE_FROM_ALL":
+                excluded_executables.add(exe)
+
         discover_matches = re.findall(
             r"illumo_discover_test_runner\s*\(\s*([A-Za-z0-9_]+)(?:\s+([A-Za-z0-9_]+))?\)",
             cmake_text,
@@ -590,42 +674,55 @@ def discover_workspace_projects(root: Path = REPOSITORY_ROOT) -> WorkspaceProjec
         test_runners: list[str] = []
         discovery_targets: list[str] = []
         test_prefixes: list[str] = []
+        runner_prefixes: list[tuple[str, str]] = []
         for runner_target, label in discover_matches:
             if runner_target not in test_runners:
                 test_runners.append(runner_target)
                 discovery_targets.append(f"{runner_target}Discover")
-                if label:
-                    test_prefixes.append(f"{label}.")
-                else:
-                    test_prefixes.append(f"{name}.")
+                prefix = f"{label}." if label else f"{name}."
+                test_prefixes.append(prefix)
+                runner_prefixes.append((prefix, runner_target))
+                stem = runner_target.removesuffix("Tests")
+                if f"{stem}." != prefix:
+                    runner_prefixes.append((f"{stem}.", runner_target))
+                # Sub-runners like IllumoPhysicsTests under project Illumo register
+                # dotted cases such as Illumo.Physics.*; map that prefix too.
+                if stem.startswith(name) and len(stem) > len(name):
+                    sub = stem[len(name):]
+                    runner_prefixes.append((f"{name}.{sub}.", runner_target))
 
-        for exe in executables:
-            if exe.endswith("Tests") and exe not in test_runners:
-                test_runners.append(exe)
-                test_prefixes.append(f"{exe.removesuffix('Tests')}.")
+        # Only fall back to *Tests executables when a project declares no
+        # illumo_discover_test_runner(); real-GPU and EXCLUDE_FROM_ALL targets
+        # (IllumoGpuTests, IllumoCaptureGpuTests, IllEdCloseWindowTests) do not
+        # implement --list/--run and must not be swept into test_runners.
+        if not discover_matches:
+            for exe in executables:
+                if exe.endswith("Tests") and exe not in excluded_executables and exe not in test_runners:
+                    test_runners.append(exe)
+                    prefix = f"{exe.removesuffix('Tests')}."
+                    test_prefixes.append(prefix)
+                    runner_prefixes.append((prefix, exe))
 
         smoke_targets: list[str] = []
         for exe in executables:
-            if "Smoke" in exe and exe not in test_runners:
+            if "Smoke" in exe and exe not in test_runners and exe not in excluded_executables:
                 smoke_targets.append(exe)
 
         applications: list[str] = []
         for exe in executables:
-            if exe not in test_runners and exe not in smoke_targets:
+            if (
+                exe not in test_runners
+                and exe not in smoke_targets
+                and exe not in excluded_executables
+                and not exe.endswith("Tests")
+            ):
                 applications.append(exe)
 
         # Programs ship as WASM packages; IllumoRuntime (defined by the root
         # WASM CMake module) is the executable that plays them, offered with
         # the first program.
-        wasm_cmake = root / "cmake" / "IllumoWasm.cmake"
-        programs = program_directories(root)
-        if programs and programs[0].name == name and wasm_cmake.is_file():
-            try:
-                wasm_text = wasm_cmake.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                wasm_text = ""
-            if re.search(rf"add_executable\s*\(\s*{WASM_RUNTIME_APPLICATION}\b", wasm_text):
-                applications.insert(0, WASM_RUNTIME_APPLICATION)
+        if programs and programs[0].name == name and wasm_runtime_defined:
+            applications.insert(0, WASM_RUNTIME_APPLICATION)
 
         project_list.append(
             ProjectInfo(
@@ -636,6 +733,7 @@ def discover_workspace_projects(root: Path = REPOSITORY_ROOT) -> WorkspaceProjec
                 discovery_targets=tuple(discovery_targets),
                 smoke_targets=tuple(smoke_targets),
                 test_prefixes=tuple(test_prefixes),
+                runner_prefixes=tuple(runner_prefixes),
             )
         )
 
@@ -702,7 +800,7 @@ class DashboardState:
     configuration_index: int = 0
     application_index: int = 0
     testing_enabled: bool = True
-    documentation_enabled: bool = True
+    documentation_enabled: bool = field(default_factory=documentation_available)
     tracy_enabled: bool = False
     wasm_enabled: bool = WASM_HOST_SUPPORTED
     parallel_index: int = 0
@@ -714,6 +812,8 @@ class DashboardState:
     status: str = "Ready"
     status_kind: str = "normal"
     applications: tuple[str, ...] = field(default_factory=tuple)
+    # Cached AppPackage list populated by refresh_dashboard_context (None in tests/isolated state).
+    installed_packages: tuple[AppPackage, ...] | None = None
     # The apps "Assemble distribution" ships; None means every installed one.
     distribution_apps: tuple[str, ...] | None = None
     profile_name: str | None = None
@@ -751,7 +851,7 @@ class DashboardState:
 
     @property
     def application_label(self) -> str:
-        return APP_LABELS.get(self.application, self.application)
+        return app_label(self.application, self.installed_packages)
 
     @property
     def parallel_value(self) -> int | None:
@@ -788,6 +888,8 @@ def refresh_dashboard_context(state: DashboardState) -> None:
         state.history = run_history()
     except OSError:
         state.history = []
+    state.installed_packages = installed_apps()
+    state.workspace_cache = None
 
 
 class DashboardTerminal:
@@ -966,6 +1068,10 @@ class WindowsDashboardInput:
                 continue
             if record.kind == 1 and record.event.key.down:
                 key = record.event.key
+                # Ignore bare modifier presses (Shift, Ctrl, Alt, Win, locks)
+                # so holding Shift never interrupts animations or re-filters views.
+                if key.character == "\x00" and key.key in (0x10, 0x11, 0x12, 0x14, 0x5B, 0x5C, 0x90, 0x91):
+                    continue
                 if key.character == "\x03":
                     raise KeyboardInterrupt
                 if text_mode and key.character.isprintable():
@@ -1046,17 +1152,26 @@ def enable_virtual_terminal_processing() -> None:
         return
     try:
         import ctypes
+        from ctypes import wintypes
 
-        kernel32 = ctypes.windll.kernel32
-        output_handle = kernel32.GetStdHandle(-11)
-        mode = ctypes.c_ulong()
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
+        kernel32.GetStdHandle.restype = wintypes.HANDLE
+        kernel32.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetConsoleMode.restype = wintypes.BOOL
+        kernel32.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.SetConsoleMode.restype = wintypes.BOOL
+        output_handle = kernel32.GetStdHandle(0xFFFFFFF5)
+        if not output_handle or output_handle == wintypes.HANDLE(-1).value:
+            return
+        mode = wintypes.DWORD()
         if kernel32.GetConsoleMode(output_handle, ctypes.byref(mode)):
             kernel32.SetConsoleMode(output_handle, mode.value | 0x0004)
     except (AttributeError, OSError):
         return
 
 
-def dashboard_terminal_size() -> os.terminal_size:
+def dashboard_terminal_size(fallback: tuple[int, int] = (80, 24)) -> os.terminal_size:
     """Prefer a live TTY ioctl. Zero-sized answers fall back instead of
     rendering a 94-column menu into a narrow Ubuntu/Alacritty window."""
     for stream in (sys.stdout, sys.stdin, sys.stderr):
@@ -1066,12 +1181,14 @@ def dashboard_terminal_size() -> os.terminal_size:
             continue
         if size.columns > 0 and size.lines > 0:
             return size
-    return shutil.get_terminal_size((80, 24))
+    return shutil.get_terminal_size(fallback)
 
 
 def dashboard_visible_width(text: str) -> int:
-    """Terminal cells used by text. ANSI is ignored. Wide and ambiguous
-    glyphs count as two cells so a boxed row cannot wrap on Ubuntu."""
+    """Terminal cells used by text. ANSI is ignored. Wide and fullwidth
+    glyphs count as two cells so a boxed row cannot wrap."""
+    if text.isascii() and "\x1b" not in text:
+        return len(text)
     width = 0
     for char in _ANSI_SEQUENCE.sub("", text):
         if unicodedata.combining(char):
@@ -1083,29 +1200,13 @@ def dashboard_visible_width(text: str) -> int:
     return width
 
 
-def dashboard_pad(text: str, width: int, align: str = "left") -> str:
-    if width < 1:
-        return ""
-    ellipsis = "..."
-    if dashboard_visible_width(text) > width:
-        trimmed: list[str] = []
-        used = 0
-        limit = width - dashboard_visible_width(ellipsis)
-        if limit < 1:
-            text = ellipsis[:width]
-        else:
-            for char in text:
-                cell = dashboard_visible_width(char)
-                if used + cell > limit:
-                    break
-                trimmed.append(char)
-                used += cell
-            text = "".join(trimmed) + ellipsis
-    pad = max(0, width - dashboard_visible_width(text))
-    if align == "center":
-        left = pad // 2
-        return (" " * left) + text + (" " * (pad - left))
-    return text + (" " * pad)
+def write_in_place_frame(frame: str, suffix: str = "") -> None:
+    """Overwrite the alternate screen from row 1 without clearing (no flicker)."""
+    sys.stdout.write(
+        ANSI_HOME + tui_newlines(frame.replace("\n", ANSI_ERASE_LINE + "\n"))
+        + ANSI_ERASE_LINE + ANSI_ERASE_BELOW + suffix
+    )
+    sys.stdout.flush()
 
 
 def tui_newlines(text: str) -> str:
@@ -1129,6 +1230,8 @@ def dashboard_value(state: DashboardState, key: str) -> str:
     if key == "testing":
         return "On" if state.testing_enabled else "Off"
     if key == "documentation":
+        if not documentation_available() and not state.documentation_enabled:
+            return "No docs tree"
         return "On" if state.documentation_enabled else "Off"
     if key == "tracy":
         return "On" if state.tracy_enabled else "Off"
@@ -1254,7 +1357,7 @@ def centered_segments(
 def dashboard_value_style(key: str, value: str, state: DashboardState) -> str:
     if value == "On":
         return ANSI_GREEN
-    if value in ("Off", "Windows x64 only"):
+    if value in ("Off", "Windows x64 only", "No docs tree"):
         return ANSI_DIM
     if key == "profile":
         return ANSI_BOLD + (ANSI_YELLOW if state.overrides else ANSI_CYAN)
@@ -1298,18 +1401,22 @@ def format_age(seconds: float) -> str:
 
 def dashboard_run_badge(
     state: DashboardState, action: str, glyphs: dict, now: float | None = None,
+    identity: dict | None = None,
 ) -> tuple[str, str] | None:
     """The latest recorded outcome of an action, for its menu row."""
     if not state.history or action not in PROGRESS_ACTIONS:
         return None
-    identity = None
+    target_identity = None
     if action in ("build", "build_app", "dist", "test"):
-        try:
-            identity = build_identity(dashboard_settings(state))
-        except (BuildError, OSError):
-            return None
+        if identity is not None:
+            target_identity = identity
+        else:
+            try:
+                target_identity = build_identity(dashboard_settings(state))
+            except (BuildError, OSError):
+                return None
     run = next((run for run in state.history if run.get("action") == action
-                and (identity is None or run.get("identity") == identity)), None)
+                and (target_identity is None or run.get("identity") == target_identity)), None)
     if run is None:
         return None
     started = run.get("started", run.get("recorded_at"))
@@ -1326,9 +1433,10 @@ def dashboard_run_badge(
     return None
 
 
-def dashboard_selection_hint(state: DashboardState) -> str:
-    """What the selected row does: a setting's meaning, an action's command."""
-    kind, _label, key = DASHBOARD_ITEMS[state.selected % len(DASHBOARD_ITEMS)]
+def dashboard_selection_hint(state: DashboardState, index: int | None = None) -> str:
+    """What a menu row does: a setting's meaning, an action's command."""
+    target = state.selected if index is None else index
+    kind, _label, key = DASHBOARD_ITEMS[target % len(DASHBOARD_ITEMS)]
     if kind == "setting":
         return DASHBOARD_SETTING_HINTS.get(key, "")
     if key == "tools":
@@ -1367,17 +1475,8 @@ def render_dashboard(
     def border(left: str, right: str, title: str = "", title_style: str = "") -> None:
         # Section titles sit in the rule itself, so the whole console still
         # fits a default 30-row terminal (taller output disables the mouse).
-        fill = glyphs["horizontal"]
-        label = ""
-        if title and inner_width >= 12:
-            label = f" {dashboard_pad(title, inner_width - 6).rstrip()} "
-        lead = fill if label else ""
-        remaining = max(0, inner_width - dashboard_visible_width(lead + label))
-        lines.append(
-            dashboard_style(left + lead, ANSI_FRAME, ansi)
-            + dashboard_style(label, title_style, ansi)
-            + dashboard_style(fill * remaining + right, ANSI_FRAME, ansi)
-        )
+        label = [(title, title_style)] if title and inner_width >= 12 else ()
+        lines.append(frame_rule(left, right, label, width, glyphs, ansi))
 
     def row(segments: Sequence[tuple[str, str]], base: str = "") -> None:
         lines.append(vertical + render_segments(segments, inner_width, ansi, base, ellipsis) + vertical)
@@ -1398,6 +1497,10 @@ def render_dashboard(
             wordmark.append((subtitle, ANSI_DIM))
         row(centered_segments(wordmark, inner_width))
     settings = dashboard_settings(state)
+    try:
+        current_identity = build_identity(settings) if state.history else None
+    except (BuildError, OSError):
+        current_identity = None
     compiler_name = (
         "default compiler" if settings.get("compiler", "default") == "default"
         else choice_label(COMPILER_CHOICES, settings.get("compiler", "default"))
@@ -1455,7 +1558,7 @@ def render_dashboard(
                 description = f"run the built {state.application_label}"
             else:
                 description = DASHBOARD_DESCRIPTIONS[key]
-            badge = dashboard_run_badge(state, key, glyphs)
+            badge = dashboard_run_badge(state, key, glyphs, identity=current_identity)
             choices = []
             if badge is not None:
                 choices.append([(description, ANSI_DIM), (f"  {badge[0]} ", badge[1])])
@@ -1565,6 +1668,10 @@ def read_dashboard_key(
                 "P": "down",
                 "K": "left",
                 "M": "right",
+                "G": "home",
+                "O": "end",
+                "I": "page_up",
+                "Q": "page_down",
             }.get(msvcrt.getwch(), "unknown")
         if character == "\x03":
             raise KeyboardInterrupt
@@ -1647,16 +1754,26 @@ def adjust_dashboard_setting(state: DashboardState, direction: int) -> None:
         state.application_index = (state.application_index + direction) % len(apps)
     elif key == "testing":
         state.testing_enabled = not state.testing_enabled
-    elif key == "documentation":
+    elif key == "documentation" and (documentation_available() or state.documentation_enabled):
         state.documentation_enabled = not state.documentation_enabled
     elif key == "tracy":
         state.tracy_enabled = not state.tracy_enabled
     elif key == "wasm" and WASM_HOST_SUPPORTED:
         state.wasm_enabled = not state.wasm_enabled
     elif key == "parallel":
-        state.parallel_index = (state.parallel_index + direction) % len(
-            DASHBOARD_PARALLEL_OPTIONS
-        )
+        current_parallel = state.parallel_value
+        known = [value for _label, value in DASHBOARD_PARALLEL_OPTIONS]
+        if current_parallel in known:
+            state.parallel_index = (known.index(current_parallel) + direction) % len(known)
+        elif isinstance(current_parallel, int) and current_parallel > 0:
+            # Step from a custom profile job count to the adjacent preset instead of Off.
+            numeric = [(index, value) for index, value in enumerate(known) if isinstance(value, int) and value > 0]
+            if direction > 0:
+                state.parallel_index = next((i for i, v in numeric if v > current_parallel), 0)
+            else:
+                state.parallel_index = next((i for i, v in reversed(numeric) if v < current_parallel), 1)
+        else:
+            state.parallel_index = (state.parallel_index + direction) % len(known)
     mapped = {
         "configuration": ("config", state.configuration),
         "testing": ("no_tests", not state.testing_enabled),
@@ -1710,7 +1827,7 @@ def apply_dashboard_profile(state: DashboardState, name: str | None, settings: d
     state.overrides.clear()
     state.configuration_index = DASHBOARD_CONFIGURATIONS.index(settings.get("config", "Release"))
     state.testing_enabled = not settings.get("no_tests", False)
-    state.documentation_enabled = not settings.get("no_docs", False)
+    state.documentation_enabled = not settings.get("no_docs", not documentation_available())
     state.tracy_enabled = settings.get("tracy", False)
     state.wasm_enabled = not settings.get("no_wasm", not WASM_HOST_SUPPORTED)
     state.parallel_index = next((i for i, item in enumerate(DASHBOARD_PARALLEL_OPTIONS)
@@ -1740,7 +1857,8 @@ def dashboard_action_arguments(
 ) -> list[str]:
     if action == "build":
         return ["build", *dashboard_common_arguments(state)]
-    packaged = state.application in {app.name for app in installed_apps()}
+    packages = state.installed_packages if state.installed_packages is not None else installed_apps()
+    packaged = state.application in {app.name for app in packages}
     if action in ("play", "launch") and not packaged:
         # A native application in a workspace without runtime packages.
         return ["run", "--app", state.application, *dashboard_common_arguments(state),
@@ -2106,7 +2224,7 @@ def render_dashboard_progress(
             tool_line = [*progress_bar(1.0 if succeeded else reached, bar_width, glyphs,
                                        ANSI_GREEN if succeeded else ANSI_RED, shine=sweep),
                          (" ", ""), *tool_line]
-        if succeeded and progress.previous_elapsed:
+        if succeeded and progress.previous_elapsed is not None and progress.previous_elapsed > 0:
             tool_line.append((f"  {compare_with_last_run(elapsed, progress.previous_elapsed)}", ANSI_DIM))
     elif progress.total > 0:
         fraction = min(1.0, max(0.0, progress.completed / progress.total))
@@ -2117,7 +2235,7 @@ def render_dashboard_progress(
                      (f" {count} (tool-reported)", "")]
         if eta:
             tool_line.append((f"  {eta}", ANSI_DIM))
-    elif running and progress.previous_elapsed:
+    elif running and progress.previous_elapsed is not None and progress.previous_elapsed > 0:
         fraction = min(0.99, elapsed / progress.previous_elapsed)
         tool_line = [
             *progress_bar(fraction, bar_width, glyphs, ANSI_BLUE),
@@ -2146,7 +2264,8 @@ def render_dashboard_progress(
                 mark, style = (glyphs["info"], ANSI_YELLOW) if progress.cancelled else (glyphs["bad"], ANSI_RED)
             else:
                 mark, style = glyphs["ok"], ANSI_GREEN
-            chips.append((f"{mark} {name} {format_duration((ended or end) - started)}", style))
+            phase_end = end if ended is None else ended
+            chips.append((f"{mark} {name} {format_duration(phase_end - started)}", style))
         joint = f" {glyphs['chevron']} "
         available = content_width - dashboard_visible_width("Phases: ")
         dropped = False
@@ -2170,7 +2289,7 @@ def render_dashboard_progress(
         badge = PROGRESS_BADGE_FLASHES.get(status, badge)
     status_line = [(f" {status} ", badge),
                    (f"  Elapsed {elapsed:.1f}s   Phase {phase_elapsed:.1f}s", "")]
-    if progress.previous_elapsed:
+    if progress.previous_elapsed is not None and progress.previous_elapsed > 0:
         status_line.append((f"   Last run {format_duration(progress.previous_elapsed)}", ANSI_DIM))
     counts = [
         (f"{glyphs['warn']} Warning lines: {progress.warnings}",
@@ -2205,6 +2324,7 @@ def render_dashboard_progress(
     ellipsis = glyphs["ellipsis"]
 
     if framed:
+        # Keep the footer visible even on short terminals by trimming body rows first.
         chrome = 1 + len(info) + (1 + len(errors) if errors else 0) + 2
         tail_count = max(0, height - chrome)
         tail = list(progress.lines)[-tail_count:] if tail_count else []
@@ -2217,7 +2337,10 @@ def render_dashboard_progress(
         lines.append(frame_rule(glyphs["middle_left"], glyphs["middle_right"],
                                 [("Output", ANSI_BOLD + ANSI_BLUE)], width, glyphs, ansi))
         lines += [frame_line([(line, progress_line_style(line))], width, glyphs, ansi) for line in tail]
-        lines.append(frame_rule(glyphs["bottom_left"], glyphs["bottom_right"], footer, width, glyphs, ansi))
+        footer_line = frame_rule(glyphs["bottom_left"], glyphs["bottom_right"], footer, width, glyphs, ansi)
+        if len(lines) + 1 > height:
+            lines = lines[:max(0, height - 1)]
+        lines.append(footer_line)
         return "\n".join(lines[:height])
 
     rule = [(glyphs["horizontal"] * width, ANSI_FRAME)]
@@ -2226,7 +2349,12 @@ def render_dashboard_progress(
         heading += [[("First errors", ANSI_BOLD + ANSI_RED)], *errors, rule]
     tail_count = max(0, height - len(heading) - 2)
     tail = list(progress.lines)[-tail_count:] if tail_count else []
-    body = heading + [[(line, progress_line_style(line))] for line in tail] + [rule, footer]
+    body = heading + [[(line, progress_line_style(line))] for line in tail]
+    if len(body) + 2 <= height:
+        body.extend((rule, footer))
+    else:
+        body = body[:max(0, height - 1)]
+        body.append(footer)
     return "\n".join(
         render_segments(segments, width, ansi, ellipsis=ellipsis) for segments in body[:height]
     )
@@ -2275,13 +2403,9 @@ def play_progress_finale(progress: DashboardProgress) -> None:
 
 def paint_dashboard_progress(progress: DashboardProgress) -> None:
     # Home and overwrite instead of clearing, so 10 Hz repaints never flicker.
-    size = shutil.get_terminal_size((96, 30))
+    size = dashboard_terminal_size((96, 30))
     frame = render_dashboard_progress(progress, size.columns, size.lines)
-    sys.stdout.write(
-        ANSI_HOME + tui_newlines(frame.replace("\n", ANSI_ERASE_LINE + "\n"))
-        + ANSI_ERASE_LINE + ANSI_ERASE_BELOW + terminal_progress_signals(progress)
-    )
-    sys.stdout.flush()
+    write_in_place_frame(frame, terminal_progress_signals(progress))
 
 
 class WindowsProgressJob:
@@ -2472,7 +2596,8 @@ def run_dashboard_progress(
                     code = process.poll()
                     text = decoder.decode(chunk, final=not chunk and code is not None)
                     parts = re.split(r"[\r\n]", pending + text)
-                    pending = parts.pop()[-8192:]
+                    # Keep the start of an overlong line so paths and "error:" survive truncation.
+                    pending = parts.pop()[:8192]
                     for line in parts:
                         progress.consume(line, time.monotonic())
                     if not chunk and code is not None:
@@ -2490,19 +2615,36 @@ def run_dashboard_progress(
                         time.sleep(0.05)
                 except KeyboardInterrupt:
                     progress.cancelled = True
-                    stop_dashboard_process(process, job)
+                    try:
+                        stop_dashboard_process(process, job)
+                    except KeyboardInterrupt:
+                        pass
+    except KeyboardInterrupt:
+        progress.cancelled = True
+        progress.returncode = 130
+        if process is not None and process.poll() is None:
+            try:
+                stop_dashboard_process(process, job)
+            except (OSError, BuildError, subprocess.SubprocessError, KeyboardInterrupt):
+                pass
     except (OSError, BuildError, subprocess.SubprocessError) as error:
         progress.consume(f"error: {error}", time.monotonic())
-        progress.returncode = 1
+        progress.returncode = 130 if progress.cancelled else 1
     finally:
         if job is not None:
-            job.close()
+            try:
+                job.close()
+            except (OSError, BuildError, KeyboardInterrupt):
+                pass
         if process is not None and process.poll() is None:
-            if os.name == "nt":
-                process.terminate()  # Only an unassigned bootstrap can remain.
-                process.wait(timeout=5)
-            else:
-                stop_dashboard_process(process)
+            try:
+                if os.name == "nt":
+                    process.terminate()  # Only an unassigned bootstrap can remain.
+                    process.wait(timeout=5)
+                else:
+                    stop_dashboard_process(process)
+            except (OSError, BuildError, subprocess.SubprocessError, KeyboardInterrupt):
+                pass
         progress.finish(time.monotonic())
     paint_dashboard_progress(progress)
 
@@ -2558,7 +2700,8 @@ def previous_success_elapsed(action: str, identity: dict) -> float | None:
 
 def ring_completion_bell(progress: DashboardProgress) -> None:
     """Long actions ring the bell; Windows Terminal flashes the taskbar."""
-    if (progress.finished or progress.started) - progress.started >= 10 and sys.stdout.isatty():
+    finished = progress.started if progress.finished is None else progress.finished
+    if finished - progress.started >= 10 and sys.stdout.isatty():
         sys.stdout.write("\a")
 
 
@@ -2578,66 +2721,94 @@ def dashboard_follow_up(
         state.status_kind = "failure"
 
 
+def run_progress_session(
+    state: DashboardState,
+    terminal: DashboardTerminal,
+    *,
+    action: str,
+    title: str,
+    log_prefix: str,
+    command: list[str],
+    context_extra: str | None = None,
+    log_path: Path | None = None,
+) -> None:
+    """Run one command inside the full-screen live progress view and record its run."""
+    choice, record, progress = "", None, None
+    terminal.leave()
+    try:
+        if log_path is None:
+            log_directory = REPOSITORY_ROOT / "build-orchestrator-logs"
+            log_directory.mkdir(exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                prefix=f"{log_prefix}-", suffix=".log", dir=log_directory, delete=False,
+            ) as log:
+                log_path = Path(log.name)
+        record = new_run_record(state, action, command)
+        identity = record["identity"]
+        extra = context_extra if context_extra is not None else f"Parallel: {dashboard_parallel_label(state)}"
+        progress = DashboardProgress(
+            title,
+            f"{identity['configuration']} | {identity['build_directory']} | {extra}",
+            log_path,
+        )
+        progress.previous_elapsed = previous_success_elapsed(action, identity)
+        write_json_atomic(log_path.with_suffix(".json"), record)
+        sys.stdout.write(ANSI_ENTER_SCREEN + ANSI_HIDE_CURSOR)
+        sys.stdout.flush()
+        try:
+            run_dashboard_progress(command, progress)
+            finish_run_record(progress, record)
+            finished = time.monotonic() if progress.finished is None else progress.finished
+            elapsed = finished - progress.started
+            outcome = "cancelled" if progress.cancelled else "succeeded" if progress.returncode == 0 else "failed"
+            state.status = f"{progress.title} {outcome} ({elapsed:.1f}s)"
+            state.status_kind = "success" if progress.returncode == 0 else "failure"
+            ring_completion_bell(progress)
+            play_progress_finale(progress)
+            choice = read_action_choice()
+        finally:
+            sys.stdout.write(
+                ANSI_RESET + ANSI_SHOW_CURSOR + ANSI_LEAVE_SCREEN
+                + terminal_progress_signals(None)
+            )
+            sys.stdout.flush()
+    except OSError as error:
+        state.status = f"Could not start progress display: {error}"
+        state.status_kind = "failure"
+    finally:
+        terminal.enter()
+    if record is not None and progress is not None:
+        dashboard_follow_up(choice, progress.log_path, record, state, terminal)
+
+
 def execute_dashboard_action(
     state: DashboardState,
     action: str,
     terminal: DashboardTerminal,
-) -> None:
+) -> bool:
+    """Execute one dashboard action. Returns False when a submenu or picker cancelled."""
     if action == "tools":
         run_development_tools(state, terminal)
-        return
+        return False
+    if action in ("build_app", "dist") and not state.wasm_enabled:
+        raise BuildError(
+            "This action requires the WASM runtime setting; turn 'WASM runtime + apps' On first."
+        )
     if action == "dist" and not run_distribution_picker(state, terminal):
-        return
+        return False
     if action == "test":
         execute_toolbox_run(state, terminal, None, True)
-        return
+        return True
     title = ACTION_TITLES.get(action, action)
     arguments = dashboard_action_arguments(state, action)
     command = [sys.executable, str(Path(__file__).resolve()), *arguments]
-    terminal.leave()
     if action in PROGRESS_ACTIONS:
-        choice, record, progress = "", None, None
-        log_directory = REPOSITORY_ROOT / "build-orchestrator-logs"
-        try:
-            log_directory.mkdir(exist_ok=True)
-            with tempfile.NamedTemporaryFile(
-                prefix=f"{action}-", suffix=".log", dir=log_directory, delete=False,
-            ) as log:
-                progress = DashboardProgress(
-                    title,
-                    f"{state.configuration} | {state.application} | Parallel: {dashboard_parallel_label(state)}",
-                    Path(log.name),
-                )
-            sys.stdout.write(ANSI_ENTER_SCREEN + ANSI_HIDE_CURSOR)
-            sys.stdout.flush()
-            try:
-                record = new_run_record(state, action, command)
-                identity = record["identity"]
-                progress.context = f"{identity['configuration']} | {identity['build_directory']} | Parallel: {dashboard_parallel_label(state)}"
-                progress.previous_elapsed = previous_success_elapsed(action, identity)
-                write_json_atomic(progress.log_path.with_suffix(".json"), record)
-                run_dashboard_progress(command, progress)
-                finish_run_record(progress, record)
-                elapsed = (progress.finished or time.monotonic()) - progress.started
-                outcome = "cancelled" if progress.cancelled else "succeeded" if progress.returncode == 0 else "failed"
-                state.status = f"{progress.title} {outcome} ({elapsed:.1f}s)"
-                state.status_kind = "success" if progress.returncode == 0 else "failure"
-                ring_completion_bell(progress)
-                play_progress_finale(progress)
-                choice = read_action_choice()
-            finally:
-                sys.stdout.write(
-                    ANSI_RESET + ANSI_SHOW_CURSOR + ANSI_LEAVE_SCREEN
-                    + terminal_progress_signals(None)
-                )
-                sys.stdout.flush()
-        except OSError as error:
-            state.status = f"Could not start progress display: {error}"
-            state.status_kind = "failure"
-        terminal.enter()
-        if record is not None and progress is not None:
-            dashboard_follow_up(choice, progress.log_path, record, state, terminal)
-        return
+        run_progress_session(
+            state, terminal, action=action, title=title,
+            log_prefix=action, command=command,
+        )
+        return True
+    terminal.leave()
     glyphs = terminal_glyphs()
     ansi = sys.stdout.isatty()
     heavy = glyphs["heavy"]
@@ -2673,12 +2844,23 @@ def execute_dashboard_action(
           end="", flush=True)
     read_action_choice()
     terminal.enter()
+    return True
 
 
 def write_json_atomic(path: Path, value: dict) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=path.name + ".", suffix=".tmp", delete=False,
+        ) as output:
+            temporary = output.name
+            json.dump(value, output, indent=2, ensure_ascii=True)
+            output.write("\n")
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def build_identity(settings: dict) -> dict:
@@ -2702,10 +2884,11 @@ def new_run_record(state: DashboardState, action: str, command: list[str]) -> di
 
 
 def finish_run_record(progress: DashboardProgress, record: dict) -> None:
+    finished = time.monotonic() if progress.finished is None else progress.finished
     record.update(status="cancelled" if progress.cancelled else
                   "succeeded" if progress.returncode == 0 else "failed",
                   exit_code=progress.returncode,
-                  elapsed=(progress.finished or time.monotonic()) - progress.started)
+                  elapsed=finished - progress.started)
     context_path = progress.log_path.with_suffix(".commands.jsonl")
     record["commands"] = []
     if context_path.is_file():
@@ -2777,6 +2960,7 @@ def require_discovery(build_directory: Path, configuration: str, workspace: Work
 
 def read_test_inventory(settings: dict) -> list[dict]:
     arguments = create_parser().parse_args(["configure", *profile_arguments(settings)])
+    apply_compiler_selection(arguments)
     validate_build_settings(arguments)
     directory = resolve_build_directory(arguments.build_dir)
     require_discovery(directory, arguments.config, discover_workspace_projects(REPOSITORY_ROOT))
@@ -2835,8 +3019,10 @@ def build_test_executables(
     stages the app packages the distribution and pack scripts read.
     """
     built = [*workspace.discovery_targets, *workspace.smoke_targets]
-    for target in built:
-        runner.run(build_command(arguments, cmake, target))
+    # Build discovery/smoke targets in one invocation so --clean-first runs at most once
+    # and never wipes earlier test binaries before later ones compile.
+    if built:
+        runner.run(build_command(arguments, cmake, built))
     if runner.dry_run:
         return
     build_directory = resolve_build_directory(arguments.build_dir)
@@ -2844,13 +3030,13 @@ def build_test_executables(
     extra: list[str] = []
     for test in ctest_listing(existing_tool("ctest", False), build_directory, arguments.config):
         if not test.get("command"):
-            runner.run(build_command(arguments, cmake, []))
+            runner.run(build_command(arguments, cmake, [], clean=False if built else None))
             return
         target = ctest_executable_target(test, build_directory)
         if target and target not in built_names and target not in extra:
             extra.append(target)
     if extra:
-        runner.run(build_command(arguments, cmake, extra))
+        runner.run(build_command(arguments, cmake, extra, clean=False if built else None))
 
 
 def matching_tests(inventory: list[dict], search: str, label: str = "All") -> list[dict]:
@@ -2892,23 +3078,27 @@ def ctest_report(directory: Path) -> tuple[Path | None, tuple | None]:
 
 def parse_ctest_results(xml: bytes, names: list[str]) -> list[dict]:
     root = ET.fromstring(xml)
+    wanted = set(names)
     found = {}
     for node in root.findall(".//Testing/Test"):
         name = node.findtext("Name")
-        if name not in names:
+        if name not in wanted:
             continue
         measurements = {item.get("name"): item.findtext("Value", "")
                         for item in node.findall("Results/NamedMeasurement")}
         raw = node.get("Status", "notrun")
         status = {"passed": "passed", "failed": "failed"}.get(raw, "incomplete")
-        if measurements.get("Completion Status") == "Disabled":
+        completion = measurements.get("Completion Status", raw)
+        if completion == "Disabled":
             status = "disabled"
+        elif completion == "Skipped":
+            status = "skipped"
         try:
             duration = float(measurements.get("Execution Time", "0"))
         except ValueError:
             duration = None
         found[name] = {"name": name, "status": status, "duration": duration,
-                       "completion": measurements.get("Completion Status", raw)}
+                       "completion": completion}
     return [found.get(name, {"name": name, "status": "incomplete", "duration": None,
                              "completion": "Missing from fresh CTest report"}) for name in names]
 
@@ -2929,9 +3119,8 @@ def run_toolbox_request(arguments: argparse.Namespace) -> None:
         raise BuildError("Invalid toolbox request fields.")
     validate_profile("toolbox", request.get("settings"))
     settings, names = request["settings"], request["names"]
-    if names == [] and request["mode"] != "refresh":
-        raise BuildError("No tests selected; nothing was run.")
     parsed = create_parser().parse_args(["configure", *profile_arguments(settings)])
+    apply_compiler_selection(parsed)
     if parsed.no_tests:
         raise BuildError("Tests are disabled in this profile. Enable tests before preparation or execution.")
     result_path = Path(request["result"])
@@ -2979,7 +3168,7 @@ def run_toolbox_request(arguments: argparse.Namespace) -> None:
         by_name = {test["name"]: test for test in completed}
         result["tests"] = [by_name.get(test["name"], test) for test in result["tests"]]
         write_json_atomic(result_path, result)
-    result["complete"] = all(test["status"] in ("passed", "failed", "disabled") for test in result["tests"])
+    result["complete"] = all(test["status"] in ("passed", "failed", "disabled", "skipped") for test in result["tests"])
     write_json_atomic(result_path, result)
     if any(codes) or not result["complete"]:
         raise BuildError("Test run failed or has incomplete results. Inspect the recorded log and test results.")
@@ -2990,36 +3179,28 @@ def execute_toolbox_run(state: DashboardState, terminal: DashboardTerminal,
     if names == [] and not refresh:
         raise BuildError("No tests selected; nothing was run.")
     directory = REPOSITORY_ROOT / "build-orchestrator-logs"
-    directory.mkdir(exist_ok=True)
-    with tempfile.NamedTemporaryFile(prefix="tests-", suffix=".log", dir=directory, delete=False) as log:
-        path = Path(log.name)
-    request = path.with_suffix(".request.json")
-    write_json_atomic(request, {"version": 1, "settings": dashboard_settings(state), "names": names,
-                               "build_first": build_first, "mode": "refresh" if refresh else "run",
-                               "result": str(path.with_suffix(".tests.json"))})
-    command = [sys.executable, str(Path(__file__).resolve()), "_toolbox", str(request)]
-    record = new_run_record(state, "inventory" if refresh else "test", command)
-    write_json_atomic(path.with_suffix(".json"), record)
-    progress = DashboardProgress("Refresh Inventory" if refresh else "Run tests",
-                                 f"{state.configuration} | {'Prepare and run' if build_first else 'Run Existing'}", path)
-    progress.previous_elapsed = previous_success_elapsed(record["action"], record["identity"])
-    choice = ""
-    terminal.leave()
     try:
-        sys.stdout.write(ANSI_ENTER_SCREEN + ANSI_HIDE_CURSOR)
-        run_dashboard_progress(command, progress)
-        finish_run_record(progress, record)
-        state.status = f"{progress.title}: {record['status']} | {path.name}"
-        state.status_kind = "success" if progress.returncode == 0 else "failure"
-        ring_completion_bell(progress)
-        play_progress_finale(progress)
-        choice = read_action_choice()
-    finally:
-        sys.stdout.write(
-            ANSI_RESET + ANSI_SHOW_CURSOR + ANSI_LEAVE_SCREEN + terminal_progress_signals(None)
-        )
-        terminal.enter()
-    dashboard_follow_up(choice, path, record, state, terminal)
+        directory.mkdir(exist_ok=True)
+        with tempfile.NamedTemporaryFile(prefix="tests-", suffix=".log", dir=directory, delete=False) as log:
+            path = Path(log.name)
+        request = path.with_suffix(".request.json")
+        write_json_atomic(request, {"version": 1, "settings": dashboard_settings(state), "names": names,
+                                   "build_first": build_first, "mode": "refresh" if refresh else "run",
+                                   "result": str(path.with_suffix(".tests.json"))})
+    except OSError as error:
+        state.status = f"Could not start test run: {error}"
+        state.status_kind = "failure"
+        return
+    command = [sys.executable, str(Path(__file__).resolve()), "_toolbox", str(request)]
+    run_progress_session(
+        state, terminal,
+        action="inventory" if refresh else "test",
+        title="Refresh Inventory" if refresh else "Run tests",
+        log_prefix="tests",
+        command=command,
+        context_extra="Prepare and run" if build_first else "Run Existing",
+        log_path=path,
+    )
 
 
 @dataclass
@@ -3096,7 +3277,8 @@ def toolbox_event(view: ToolboxView, rows: list[ToolboxRow], event: object,
 def render_toolbox(title: str, rows: list[ToolboxRow], view: ToolboxView,
                    width: int, height: int, status: str = "",
                    ansi: bool = False, help_text: str | None = None,
-                   prompt: str | None = None, caret: str = "") -> tuple[str, list[DashboardHitRegion], int]:
+                   prompt: str | None = None, caret: str = "",
+                   detail_provider=None) -> tuple[str, list[DashboardHitRegion], int]:
     width = max(1, width - 1)
     page = max(1, height - 13)
     view.selected = max(0, min(view.selected, len(rows) - 1))
@@ -3180,7 +3362,10 @@ def render_toolbox(title: str, rows: list[ToolboxRow], view: ToolboxView,
             regions.append(DashboardHitRegion(index, len(lines), width, 1))
     counter = f"Rows {view.top + 1 if rows else 0}-{min(len(rows), view.top + page)} of {len(rows)}"
     lines.append(rule(glyphs["middle_left"], glyphs["middle_right"], [(counter, ANSI_DIM)]))
-    details = selected.details if selected else ("Select an item to inspect its details.",)
+    if selected:
+        details = detail_provider(selected) if detail_provider is not None else selected.details
+    else:
+        details = ("Select an item to inspect its details.",)
     for number, detail in enumerate(list(details[:6]) + [""] * max(0, 6 - len(details))):
         lines.append(line([(progress_text(detail), ANSI_BOLD if number == 0 else ANSI_DIM)]))
     lines.append(rule(glyphs["bottom_left"], glyphs["bottom_right"],
@@ -3190,21 +3375,23 @@ def render_toolbox(title: str, rows: list[ToolboxRow], view: ToolboxView,
 
 
 def choose_toolbox(title: str, rows: list[ToolboxRow], view: ToolboxView,
-                   terminal: DashboardTerminal, status: str = "") -> str:
+                   terminal: DashboardTerminal, status: str = "",
+                   detail_provider=None) -> str:
     if not any(row.key == view.focused and not row.action for row in rows):
         view.focused = None
     last = None
     while True:
-        size = shutil.get_terminal_size((100, 32))
+        size = dashboard_terminal_size((100, 32))
         rendered, regions, page = render_toolbox(
             title, rows, view, size.columns, size.lines, status, ansi=True,
+            detail_provider=detail_provider,
         )
         if rendered != last:
             sys.stdout.write(ANSI_CLEAR + tui_newlines(rendered))
             sys.stdout.flush()
             last = rendered
         event = terminal.read_event(text_mode=view.draft is not None)
-        if isinstance(event, DashboardMouseEvent) and shutil.get_terminal_size((100, 32)) != size:
+        if isinstance(event, DashboardMouseEvent) and dashboard_terminal_size((100, 32)) != size:
             continue
         action = toolbox_event(view, rows, event, regions, page)
         if action:
@@ -3219,7 +3406,7 @@ def show_toolbox_text(title: str, lines: list[str], terminal: DashboardTerminal)
     view = ToolboxView()
     while True:
         rows = [action_row("back", "Back")]
-        width = max(20, shutil.get_terminal_size((100, 32)).columns - 4)
+        width = max(20, dashboard_terminal_size((100, 32)).columns - 4)
         wrapped = [part for line in lines if view.search.casefold() in line.casefold()
                    for part in (textwrap.wrap(progress_text(line), width=width, replace_whitespace=False) or [""])]
         rows += [ToolboxRow(str(index), line) for index, line in enumerate(wrapped)]
@@ -3294,72 +3481,140 @@ def run_test_explorer(state: DashboardState, terminal: DashboardTerminal) -> Non
             message = str(error)
 
 
+DIAGNOSTIC_PATTERNS = (
+    ("compiler", re.compile(r"^(?P<path>.+?)\((?P<line>\d+)(?:,(?P<column>\d+))?\)\s*:\s*(?P<severity>(?:fatal )?error|warning)\b[: ]*(?P<message>.*)", re.I)),
+    ("compiler", re.compile(r"^(?P<path>.+?):(?P<line>\d+)(?::(?P<column>\d+))?:\s*(?P<severity>(?:fatal )?error|warning)\s*:\s*(?P<message>.*)", re.I)),
+    ("cmake", re.compile(r"^CMake (?P<severity>Error|Warning)(?: \([^)]*\))? at (?P<path>.+?):(?P<line>\d+)(?: \([^)]*\))?:\s*(?P<message>.*)", re.I)),
+)
+MSBUILD_SUMMARY_LINE = re.compile(r"^\d+\s+(?:Warning|Error)\(s\)$", re.I)
+CTEST_PASSED_LINE = re.compile(r"Test\s+#\d+:.*\bPassed\b")
+FATAL_ERROR_FALLBACK = re.compile(r"\bfatal error\b", re.I)
+
+
 def parse_diagnostics(lines: list[str], working_directory: Path | None,
                       commands: list[dict] | None = None) -> list[dict]:
     diagnostics = []
-    patterns = (
-        re.compile(r"^(?P<path>.+?)\((?P<line>\d+)(?:,(?P<column>\d+))?\)\s*:\s*(?P<severity>(?:fatal )?error|warning)\b[: ]*(?P<message>.*)", re.I),
-        re.compile(r"^(?P<path>.+?):(?P<line>\d+)(?::(?P<column>\d+))?:\s*(?P<severity>(?:fatal )?error|warning)\s*:\s*(?P<message>.*)", re.I),
-        re.compile(r"^CMake (?P<severity>Error|Warning)(?: \([^)]*\))? at (?P<path>.+?):(?P<line>\d+)(?: \([^)]*\))?:\s*(?P<message>.*)", re.I),
-    )
+    command_directories = {
+        "> " + format_command(command["command"]): Path(command["working_directory"])
+        for command in (commands or [])
+        if isinstance(command, dict) and isinstance(command.get("command"), list) and isinstance(command.get("working_directory"), str)
+    }
     for index, raw in enumerate(lines):
         line = progress_text(raw).strip()
-        for command in commands or []:
-            if line == "> " + format_command(command["command"]):
-                working_directory = Path(command["working_directory"])
+        if line in command_directories:
+            working_directory = command_directories[line]
+            continue
+        if line.startswith("> ") or MSBUILD_SUMMARY_LINE.match(line) or CTEST_PASSED_LINE.search(line):
+            continue
         line = re.sub(r"^\d+>", "", line)
-        match = next((match for pattern in patterns if (match := pattern.match(line))), None)
+        matched_kind, match = next(
+            ((kind, found) for kind, pattern in DIAGNOSTIC_PATTERNS if (found := pattern.match(line))),
+            (None, None),
+        )
         if match:
             item = match.groupdict()
             path = Path(item["path"].strip())
-            item["source"] = str(path if path.is_absolute() else working_directory / path) if path.is_absolute() or working_directory else None
+            if path.is_absolute():
+                source_path: Path | None = path
+            elif working_directory is not None:
+                candidate = working_directory / path
+                if matched_kind == "cmake" and not candidate.exists() and (REPOSITORY_ROOT / path).exists():
+                    source_path = REPOSITORY_ROOT / path
+                else:
+                    source_path = candidate
+            else:
+                source_path = None
+            item["source"] = str(source_path) if source_path is not None else None
             item["line"] = int(item["line"])
             item["severity"] = "error" if "error" in item["severity"].lower() else "warning"
         else:
-            severity = re.search(r"\b(error|warning)\b", line, re.I)
-            if not severity:
+            if ERROR_LINE.search(line) or FATAL_ERROR_FALLBACK.search(line):
+                severity = "error"
+            elif WARNING_LINE.search(line):
+                severity = "warning"
+            else:
                 continue
-            item = {"source": None, "line": None, "severity": severity.group(1).lower(), "message": line}
+            item = {"source": None, "line": None, "severity": severity, "message": line}
         diagnostics.append({**item, "log_line": index, "raw": line})
     return diagnostics
 
 
-def diagnostic_preview(diagnostic: dict, lines: list[str]) -> list[str]:
+def _read_cached_source(path: str, cache: dict[str, list[str] | str] | None) -> list[str] | str:
+    if cache is not None and path in cache:
+        return cache[path]
+    try:
+        loaded: list[str] | str = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as error:
+        loaded = f"Source unavailable: {path}: {error}"
+    if cache is not None:
+        cache[path] = loaded
+    return loaded
+
+
+def diagnostic_preview(diagnostic: dict, lines: list[str],
+                       source_cache: dict[str, list[str] | str] | None = None) -> list[str]:
     index = diagnostic["log_line"]
     result = ["Raw log context:", *[f"{n + 1}: {lines[n]}" for n in range(max(0, index - 4), min(len(lines), index + 7))],
               "", "CURRENT SOURCE (read-only; may have changed since this run)"]
     path, line = diagnostic.get("source"), diagnostic.get("line")
     if not path or not line or line < 1:
         return result + ["Source location unavailable or invalid; no replacement was guessed."]
-    try:
-        source = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError as error:
-        return result + [f"Source unavailable: {path}: {error}"]
+    source = _read_cached_source(path, source_cache)
+    if isinstance(source, str):
+        return result + [source]
     if line > len(source):
         return result + [f"Invalid location: {path}:{line} (current file has {len(source)} lines)."]
     return result + [f"{path}:{line}", *[f"{'>' if n + 1 == line else ' '} {n + 1}: {source[n]}" for n in range(max(0, line - 6), min(len(source), line + 5))]]
 
 
+def _diagnostic_row_details(item: dict, lines: list[str],
+                            source_cache: dict[str, list[str] | str]) -> tuple[str, ...]:
+    path, line_number = item.get("source"), item.get("line")
+    if not path or not line_number or line_number < 1:
+        snippet = "Source location unavailable or invalid; no replacement was guessed."
+    else:
+        source = _read_cached_source(path, source_cache)
+        if isinstance(source, str):
+            snippet = source
+        elif line_number > len(source):
+            snippet = f"Invalid location: {path}:{line_number} (current file has {len(source)} lines)."
+        else:
+            snippet = f"> {line_number}: {source[line_number - 1]}"
+    return (
+        "Log context: " + (lines[item["log_line"] - 1] if item["log_line"] else "(start of log)"),
+        item["raw"],
+        lines[item["log_line"] + 1] if item["log_line"] + 1 < len(lines) else "(end of log)",
+        "CURRENT SOURCE (read-only; may have changed)",
+        str(path or "Source location unavailable"),
+        snippet,
+    )
+
+
 def browse_run_diagnostics(run: dict, terminal: DashboardTerminal) -> None:
-    lines = Path(run["log"]).read_text(encoding="utf-8", errors="replace").splitlines()
+    try:
+        lines = Path(run["log"]).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as error:
+        raise BuildError(f"Could not read log '{run['log']}': {error}") from error
     cwd = Path(run["working_directory"]) if run.get("working_directory") else None
     diagnostics = parse_diagnostics(lines, cwd, run.get("commands"))
+    source_cache: dict[str, list[str] | str] = {}
     view, severity = ToolboxView(), "all"
+    status = "Legacy log: command directory unknown" if not cwd else str(cwd)
+
+    def details_for(row: ToolboxRow) -> tuple[str, ...]:
+        if row.key.isdigit():
+            return _diagnostic_row_details(diagnostics[int(row.key)], lines, source_cache)
+        return row.details
+
     while True:
         rows = [action_row("back", "Back"), action_row("filter", "Diagnostics: " + severity),
                 action_row("preview", "Inspect selected diagnostic / current source"), action_row("raw", "Browse raw log")]
-        rows += [ToolboxRow(str(index), item["raw"],
-                            ("Log context: " + (lines[item["log_line"] - 1] if item["log_line"] else "(start of log)"),
-                             item["raw"], lines[item["log_line"] + 1] if item["log_line"] + 1 < len(lines) else "(end of log)",
-                             "CURRENT SOURCE (read-only; may have changed)",
-                             str(item.get("source") or "Source location unavailable"),
-                             next((line for line in diagnostic_preview(item, lines) if line.startswith("> ")),
-                                  diagnostic_preview(item, lines)[-1])),
-                            tone="bad" if item["severity"] == "error" else "warn")
+        rows += [ToolboxRow(str(index), item["raw"], tone="bad" if item["severity"] == "error" else "warn")
                  for index, item in enumerate(diagnostics)
                  if (severity == "all" or item["severity"] == severity) and view.search.casefold() in item["raw"].casefold()]
         action = choose_toolbox("Diagnostics: " + Path(run["log"]).name, rows, view, terminal,
-                                "Legacy log: command directory unknown" if not cwd else str(cwd))
+                                status, detail_provider=details_for)
+        status = "Legacy log: command directory unknown" if not cwd else str(cwd)
         if action == "back":
             return
         if action == "filter":
@@ -3367,8 +3622,15 @@ def browse_run_diagnostics(run: dict, terminal: DashboardTerminal) -> None:
             severity = filters[(filters.index(severity) + 1) % len(filters)]
         elif action == "raw":
             show_toolbox_text("Raw log (authoritative)", lines, terminal)
-        elif action == "preview" and view.focused and view.focused.isdigit():
-            show_toolbox_text("Diagnostic and CURRENT SOURCE", diagnostic_preview(diagnostics[int(view.focused)], lines), terminal)
+        elif action == "preview":
+            if view.focused and view.focused.isdigit():
+                show_toolbox_text(
+                    "Diagnostic and CURRENT SOURCE",
+                    diagnostic_preview(diagnostics[int(view.focused)], lines, source_cache),
+                    terminal,
+                )
+            else:
+                status = "Select a diagnostic first."
 
 
 def run_history_label(run: dict, glyphs: dict, now: float | None = None) -> str:
@@ -3485,7 +3747,10 @@ def run_profile_picker(state: DashboardState, terminal: DashboardTerminal) -> No
         for name, settings in profiles.items():
             if view.search.casefold() not in name.casefold():
                 continue
-            preview = DashboardState()
+            preview = DashboardState(
+                applications=state.applications,
+                installed_packages=state.installed_packages,
+            )
             apply_dashboard_profile(preview, name, settings)
             effective = dashboard_settings(preview)
             kind = "built-in" if name in BUILTIN_PROFILES else "saved"
@@ -3535,7 +3800,7 @@ def run_distribution_picker(state: DashboardState, terminal: DashboardTerminal) 
         for name in state.applications:
             mark = "[x]" if name in chosen else "[ ]"
             rows.append(ToolboxRow(
-                f"toggle:{name}", f"{mark} {APP_LABELS.get(name, name)} ({name})",
+                f"toggle:{name}", f"{mark} {app_label(name, state.installed_packages)} ({name})",
                 (f"{'Ships' if name in chosen else 'Left out'}: apps/{name}.ilpk",),
                 action=True, tone="ok" if name in chosen else "dim"))
         action = choose_toolbox("Distribution apps", rows, view, terminal, message)
@@ -3769,9 +4034,23 @@ def run_compiler_options(state: DashboardState, terminal: DashboardTerminal) -> 
     view = ToolboxView()
     last = None
     cyclable = tuple(COMPILER_OPTION_CHOICES)
+
+    def cycle_option(key: str, direction: int) -> None:
+        current_settings = dashboard_settings(state)
+        if key == "sanitizer" and "asan" in unsupported_features(current_settings.get("compiler", "default")):
+            return
+        set_compiler_option(
+            state, key,
+            cycle_choice(
+                COMPILER_OPTION_CHOICES[key],
+                current_settings.get(key, "default"),
+                direction,
+            ),
+        )
+
     while True:
         rows = compiler_option_rows(state)
-        size = shutil.get_terminal_size((100, 32))
+        size = dashboard_terminal_size((100, 32))
         rendered, regions, page = render_toolbox(
             "Compiler options", rows, view, size.columns, size.lines,
             compiler_status_line(state), ansi=True,
@@ -3782,7 +4061,7 @@ def run_compiler_options(state: DashboardState, terminal: DashboardTerminal) -> 
             sys.stdout.flush()
             last = rendered
         event = terminal.read_event()
-        if isinstance(event, DashboardMouseEvent) and shutil.get_terminal_size((100, 32)) != size:
+        if isinstance(event, DashboardMouseEvent) and dashboard_terminal_size((100, 32)) != size:
             continue
         if isinstance(event, DashboardMouseEvent) and event.kind in ("left", "right"):
             region = next((hit for hit in regions if hit.row == event.y and 1 <= event.x <= hit.right), None)
@@ -3792,23 +4071,11 @@ def run_compiler_options(state: DashboardState, terminal: DashboardTerminal) -> 
                 if clicked == "back" and event.kind == "left":
                     return compiler_status_line(state)
                 if clicked in cyclable:
-                    set_compiler_option(
-                        state, clicked,
-                        cycle_choice(
-                            COMPILER_OPTION_CHOICES[clicked],
-                            dashboard_settings(state).get(clicked, "default"),
-                            1 if event.kind == "left" else -1,
-                        ),
-                    )
+                    cycle_option(clicked, 1 if event.kind == "left" else -1)
             continue
         selected = rows[view.selected].key if rows else ""
         if event in ("left", "right", "enter") and selected in cyclable:
-            direction = -1 if event == "left" else 1
-            set_compiler_option(
-                state, selected,
-                cycle_choice(COMPILER_OPTION_CHOICES[selected],
-                             dashboard_settings(state).get(selected, "default"), direction),
-            )
+            cycle_option(selected, -1 if event == "left" else 1)
             continue
         action = toolbox_event(view, rows, event, regions, page)
         if action == "back":
@@ -3830,9 +4097,11 @@ def run_development_tool(state: DashboardState, terminal: DashboardTerminal, too
     elif tool == "artifacts":
         run_artifact_picker(state, terminal)
     elif tool == "stats":
-        execute_dashboard_action(state, "file_stats", terminal)
+        if execute_dashboard_action(state, "file_stats", terminal):
+            state.last_action = "file_stats"
     elif tool in ("doctor", "wasm_tools", "watch"):
-        execute_dashboard_action(state, tool, terminal)
+        if execute_dashboard_action(state, tool, terminal):
+            state.last_action = tool
         return state.status
     elif tool == "shortcuts":
         show_toolbox_text("Keyboard shortcuts", dashboard_shortcut_lines(state), terminal)
@@ -3880,14 +4149,9 @@ def fuzzy_match(query: str, text: str) -> tuple[int, tuple[int, ...]] | None:
 def palette_entries(state: DashboardState) -> list[tuple[str, str, str, str]]:
     """(key, category, text, detail) for every action, setting value and tool."""
     entries = []
-    selected = state.selected
-    try:
-        for index, (kind, label, key) in enumerate(DASHBOARD_ITEMS):
-            if kind == "action" and key != "quit":
-                state.selected = index
-                entries.append((f"action:{key}", "Action", label, dashboard_selection_hint(state)))
-    finally:
-        state.selected = selected
+    for index, (kind, label, key) in enumerate(DASHBOARD_ITEMS):
+        if kind == "action" and key != "quit":
+            entries.append((f"action:{key}", "Action", label, dashboard_selection_hint(state, index)))
     entries += [(f"tool:{key}", "Tool", label, "Development Tools") for key, label in DEVELOPMENT_TOOLS]
     for key, choices in COMPILER_OPTION_CHOICES.items():
         title = COMPILER_OPTION_LABELS[key]
@@ -3902,11 +4166,14 @@ def palette_entries(state: DashboardState) -> list[tuple[str, str, str, str]]:
                 for name in profiles]
     options = {
         "configuration": list(DASHBOARD_CONFIGURATIONS),
-        "application": [APP_LABELS.get(app, app) for app in state.applications],
+        "application": [app_label(app, state.installed_packages) for app in state.applications],
         "parallel": [label for label, _value in DASHBOARD_PARALLEL_OPTIONS],
     }
+    docs_ready = documentation_available()
     for kind, label, key in DASHBOARD_ITEMS:
-        if kind != "setting" or key == "profile" or (key == "wasm" and not WASM_HOST_SUPPORTED):
+        if (kind != "setting" or key == "profile"
+                or (key == "wasm" and not WASM_HOST_SUPPORTED)
+                or (key == "documentation" and not docs_ready)):
             continue
         for value in options.get(key, ["On", "Off"]):
             entries.append((f"set:{key}={value}", "Setting", f"{label}: {value}",
@@ -3914,10 +4181,13 @@ def palette_entries(state: DashboardState) -> list[tuple[str, str, str, str]]:
     return entries
 
 
-def palette_rows(state: DashboardState, query: str) -> tuple[list[ToolboxRow], int]:
-    entries = palette_entries(state)
+def palette_rows(
+    state: DashboardState, query: str,
+    entries: Sequence[tuple[str, str, str, str]] | None = None,
+) -> tuple[list[ToolboxRow], int]:
+    all_entries = palette_entries(state) if entries is None else entries
     ranked = []
-    for order, (key, category, text, detail) in enumerate(entries):
+    for order, (key, category, text, detail) in enumerate(all_entries):
         match = fuzzy_match(query, text)
         if match is not None:
             ranked.append((-match[0], order, key, category, text, detail, set(match[1])))
@@ -3932,7 +4202,7 @@ def palette_rows(state: DashboardState, query: str) -> tuple[list[ToolboxRow], i
                     *((character, ANSI_BOLD + ANSI_UNDERLINE if index in positions else "")
                       for index, character in enumerate(text)))
         rows.append(ToolboxRow(key, f"{verb:<6}{text}", (text, detail), segments=segments))
-    return rows, len(entries)
+    return rows, len(all_entries)
 
 
 def run_command_palette(state: DashboardState, terminal: DashboardTerminal) -> str | None:
@@ -3941,27 +4211,28 @@ def run_command_palette(state: DashboardState, terminal: DashboardTerminal) -> s
     last = None
     moving = motion_enabled()
     caret_on = True
+    entries = palette_entries(state)
+    glyphs = terminal_glyphs()
     rows: list[ToolboxRow] = []
     total = 0
     event: object = None
     while True:
         if event != "tick":  # A blink repaints; only input can change the rows.
-            rows, total = palette_rows(state, view.draft or "")
-        size = shutil.get_terminal_size((100, 32))
+            rows, total = palette_rows(state, view.draft or "", entries=entries)
+        size = dashboard_terminal_size((100, 32))
         rendered, regions, page = render_toolbox(
             "Command palette", rows, view, size.columns, size.lines,
             f"{len(rows)} of {total} commands", ansi=True,
             help_text="Type to filter | Up/Down or hover: choose | Enter or click: run | Escape: close",
-            prompt=f"{terminal_glyphs()['chevron']} ",
-            caret="▏" if caret_on and terminal_glyphs() is UNICODE_GLYPHS else ("_" if caret_on else " "),
+            prompt=f"{glyphs['chevron']} ",
+            caret=glyphs["caret"] if caret_on else " ",
         )
         if rendered != last:
             if event == "tick" and last is not None:
-                sys.stdout.write(ANSI_HOME + tui_newlines(rendered.replace("\n", ANSI_ERASE_LINE + "\n"))
-                                 + ANSI_ERASE_LINE + ANSI_ERASE_BELOW)
+                write_in_place_frame(rendered)
             else:
                 sys.stdout.write(ANSI_CLEAR + tui_newlines(rendered))
-            sys.stdout.flush()
+                sys.stdout.flush()
             last = rendered
         event = terminal.read_event(text_mode=True, timeout=0.5 if moving else None)
         if event == "tick":
@@ -4006,6 +4277,7 @@ def apply_palette_choice(state: DashboardState, terminal: DashboardTerminal, cho
         message = run_development_tool(state, terminal, value)
         if message:
             state.status = message
+        refresh_dashboard_context(state)
         return None
     if kind == "profile":
         profiles = load_profiles(state.profiles_file, allow_missing=True)
@@ -4045,16 +4317,11 @@ def dashboard_shortcut_lines(state: DashboardState) -> list[str]:
              "  .                   repeat the last action",
              "  ?                   this page", "  q or Escape         leave", "",
              "Action hotkeys (command-line equivalent)"]
-    selected = state.selected
-    try:
-        for index, (kind, label, key) in enumerate(DASHBOARD_ITEMS):
-            if kind != "action" or key == "quit":
-                continue
-            state.selected = index
-            lines.append(f"  {DASHBOARD_HOTKEYS.get(key, ' ')}  {label:<24} "
-                         f"{dashboard_selection_hint(state)}")
-    finally:
-        state.selected = selected
+    for index, (kind, label, key) in enumerate(DASHBOARD_ITEMS):
+        if kind != "action" or key == "quit":
+            continue
+        lines.append(f"  {DASHBOARD_HOTKEYS.get(key, ' ')}  {label:<24} "
+                     f"{dashboard_selection_hint(state, index)}")
     lines += ["", "After a progress action",
               "  d   browse its diagnostics     l   read its full log     any other key: back",
               "", "Subviews", "  /   edit the search     Enter apply     Escape cancel / back",
@@ -4144,13 +4411,10 @@ def run_dashboard() -> int:
             if rendered != last_rendered:
                 if ticked and last_rendered is not None and terminal_size == last_size:
                     # Animation frames overwrite in place; clearing would flicker.
-                    sys.stdout.write(
-                        ANSI_HOME + tui_newlines(rendered.replace("\n", ANSI_ERASE_LINE + "\n"))
-                        + ANSI_ERASE_LINE + ANSI_ERASE_BELOW
-                    )
+                    write_in_place_frame(rendered)
                 else:
                     sys.stdout.write(ANSI_CLEAR + tui_newlines(rendered))
-                sys.stdout.flush()
+                    sys.stdout.flush()
                 last_rendered = rendered
             last_size = terminal_size
             event = terminal.read_event(timeout=DASHBOARD_TICK_SECONDS if animate else None)
@@ -4199,8 +4463,8 @@ def run_dashboard() -> int:
                 if action == "quit":
                     return 0
                 if action is not None:
-                    execute_dashboard_action(state, action, terminal)
-                    state.last_action = action
+                    if execute_dashboard_action(state, action, terminal):
+                        state.last_action = action
                     refresh_dashboard_context(state)
                     sys.stdout.write(terminal_progress_signals(None))
                     last_rendered = None
@@ -4227,11 +4491,17 @@ def prepend_env_path(env: dict[str, str], key: str, entries: Sequence[Path]) -> 
 def intel_compiler_path(command: Sequence[str]) -> Path | None:
     """The icx path a configure or build command will use, if it uses one."""
     for item in command:
-        if "=" not in item:
+        match = re.fullmatch(r"-D(CMAKE_(?:C|CXX)_COMPILER)(?::[^=]+)?=(.*)", item)
+        if not match:
             continue
-        value = item.split("=", 1)[1].strip().strip('"')
+        value = match[2].strip().strip('"')
         if Path(value).stem.lower() in ("icx", "icpx"):
-            return Path(value)
+            candidate = Path(value)
+            if not candidate.is_absolute() and candidate.parent == Path("."):
+                located = shutil.which(value)
+                if located:
+                    return Path(located)
+            return candidate
     if len(command) >= 3 and Path(command[0]).stem.lower() == "cmake" and command[1] == "--build":
         cache = read_cmake_cache(resolve_build_directory(Path(command[2])))
         for key in ("CMAKE_CXX_COMPILER", "CMAKE_C_COMPILER"):
@@ -4251,6 +4521,11 @@ def intel_runtime_directories(compiler: Path) -> tuple[Path, ...]:
     return tuple(found)
 
 
+def _version_sort_key(path: Path) -> tuple[int, ...]:
+    parts = [int(piece) for piece in path.name.split(".") if piece.isdigit()]
+    return tuple(parts) if parts else (0,)
+
+
 def windows_sdk_tool_directory() -> Path | None:
     """The newest Windows SDK x64 bin directory that contains mt.exe."""
     roots = []
@@ -4264,7 +4539,11 @@ def windows_sdk_tool_directory() -> Path | None:
         if key in seen or not root.is_dir():
             continue
         seen.add(key)
-        versions = sorted((path for path in root.iterdir() if path.is_dir()), reverse=True)
+        versions = sorted(
+            (path for path in root.iterdir() if path.is_dir()),
+            key=_version_sort_key,
+            reverse=True,
+        )
         for version in versions:
             manifest_tool = version / "x64" / "mt.exe"
             if manifest_tool.is_file():
@@ -4284,35 +4563,50 @@ def oneapi_setvars(compiler: Path) -> Path | None:
     return None
 
 
+def parse_windows_set_output(text: str) -> dict[str, str]:
+    """Parse `cmd /c set` output, preserving names like ProgramFiles(x86)."""
+    environment: dict[str, str] = {}
+    for line in text.splitlines():
+        name, separator, value = line.partition("=")
+        # setvars prints some names in lowercase (path=). Windows treats them
+        # as the same variable, so keep one canonical spelling. Allow parentheses
+        # so ProgramFiles(x86) and CommonProgramFiles(x86) are preserved.
+        if separator and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_()]*", name):
+            environment[name.upper()] = value
+    return environment
+
+
 def oneapi_environment(setvars: Path) -> dict[str, str] | None:
     """The environment after setvars.bat. Cached: the batch file takes several seconds."""
     key = os.path.normcase(str(setvars))
     if key in _oneapi_environment_cache:
         return _oneapi_environment_cache[key]
     # cmd.exe quote rules mangle a /c string that both quotes a path and uses &&.
-    # A one-line batch file keeps the call and the environment dump intact.
-    script = Path(tempfile.gettempdir()) / "illumo-oneapi-env.bat"
-    script.write_text(
-        f'@echo off\r\ncall "{setvars}" intel64 >nul\r\nset\r\n', encoding="ascii",
-    )
+    # A unique temporary batch file keeps the call intact and avoids cross-process races.
+    script_path: str | None = None
     try:
+        encoding = "mbcs" if os.name == "nt" else "utf-8"
+        with tempfile.NamedTemporaryFile(
+            mode="w", prefix="illumo-oneapi-", suffix=".bat",
+            encoding=encoding, errors="strict", delete=False,
+        ) as script:
+            script_path = script.name
+            script.write(f'@echo off\r\ncall "{setvars}" intel64 >nul\r\nset\r\n')
         result = subprocess.run(
-            ["cmd", "/d", "/c", str(script)],
-            capture_output=True, check=False,
+            ["cmd", "/d", "/c", script_path],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=60, check=False,
         )
+    except (OSError, UnicodeEncodeError, subprocess.TimeoutExpired):
+        _oneapi_environment_cache[key] = None
+        return None
     finally:
-        script.unlink(missing_ok=True)
+        if script_path is not None:
+            Path(script_path).unlink(missing_ok=True)
     if result.returncode != 0:
         _oneapi_environment_cache[key] = None
         return None
-    text = result.stdout.decode("mbcs", errors="replace")
-    environment: dict[str, str] = {}
-    for line in text.splitlines():
-        name, separator, value = line.partition("=")
-        # setvars prints some names in lowercase (path=). Windows treats them
-        # as the same variable, so keep one canonical spelling.
-        if separator and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
-            environment[name.upper()] = value
+    text = result.stdout.decode("mbcs" if os.name == "nt" else "utf-8", errors="replace")
+    environment = parse_windows_set_output(text)
     if "LIB" not in environment:
         _oneapi_environment_cache[key] = None
         return None
@@ -4355,6 +4649,24 @@ def compiler_subprocess_environment(command: Sequence[str]) -> dict[str, str] | 
     return environment
 
 
+def _apply_env_overrides(
+    base: dict[str, str] | None, overrides: dict[str, str | None] | None,
+) -> dict[str, str] | None:
+    if not overrides:
+        return base
+    merged = dict(os.environ) if base is None else dict(base)
+    for key, value in overrides.items():
+        if os.name == "nt":
+            folded = key.casefold()
+            for existing in [name for name in merged if name.casefold() == folded]:
+                del merged[existing]
+        else:
+            merged.pop(key, None)
+        if value is not None:
+            merged[key] = value
+    return merged
+
+
 class CommandRunner:
     """Print and execute external commands from a predictable directory."""
 
@@ -4365,6 +4677,8 @@ class CommandRunner:
         self,
         command: Sequence[str],
         working_directory: Path = REPOSITORY_ROOT,
+        *,
+        env_overrides: dict[str, str | None] | None = None,
     ) -> None:
         # CMake's build tool operates in its binary tree; make that directory
         # explicit so relative compiler locations have recorded context.
@@ -4381,11 +4695,12 @@ class CommandRunner:
         ansi = sys.stdout.isatty()
         print(dashboard_style("> ", ANSI_BOLD + ANSI_VIOLET, ansi)
               + dashboard_style(format_command(command), ANSI_BOLD, ansi), flush=True)
-        environment = compiler_subprocess_environment(list(command))
-        if environment is not None:
-            print(f"Intel runtime libraries: {environment['ILLUMO_INTEL_RUNTIME']}", flush=True)
         if self.dry_run:
             return
+        environment = compiler_subprocess_environment(list(command))
+        if environment is not None and "ILLUMO_INTEL_RUNTIME" in environment:
+            print(f"Intel runtime libraries: {environment['ILLUMO_INTEL_RUNTIME']}", flush=True)
+        environment = _apply_env_overrides(environment, env_overrides)
 
         started = time.monotonic()
         try:
@@ -4414,6 +4729,15 @@ class CommandRunner:
                 "See the tool diagnostics above; subsequent steps were skipped.",
                 result.returncode,
             )
+
+
+def find_powershell(dry_run: bool, requirement: str) -> str:
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is not None:
+        return powershell
+    if dry_run:
+        return "powershell"
+    raise BuildError(f"PowerShell was not found on PATH; {requirement} requires it.")
 
 
 def format_command(command: Sequence[str]) -> str:
@@ -4463,7 +4787,9 @@ def read_build_version(root: Path = REPOSITORY_ROOT) -> dict[str, str]:
     return fields
 
 
-def set_release(release: str, root: Path = REPOSITORY_ROOT, commit: bool = True) -> None:
+def set_release(
+    release: str, root: Path = REPOSITORY_ROOT, commit: bool = True, dry_run: bool = False,
+) -> None:
     """Start release YY.MM: write VERSION.txt and commit it on its own.
 
     Build numbers count first-parent commits after the commit that last
@@ -4478,12 +4804,17 @@ def set_release(release: str, root: Path = REPOSITORY_ROOT, commit: bool = True)
     # Zero-padded YY.MM compares correctly as text.
     if RELEASE_PATTERN.fullmatch(current) and release <= current:
         raise BuildError(f"Release {release} is not after the current release {current}.")
+    git = existing_tool("git", dry_run) if commit else None
+    if dry_run:
+        print(f"Would update VERSION.txt: {current or '(none)'} -> {release}")
+        if commit:
+            print(f"Would commit 'Start release v{release}' for VERSION.txt.")
+        return
     version_file.write_text(release + "\n", encoding="utf-8", newline="\n")
     print(f"VERSION.txt: {current or '(none)'} -> {release}")
-    if not commit:
+    if not commit or git is None:
         print("Commit VERSION.txt to start the release; its build numbers count from that commit.")
         return
-    git = existing_tool("git", False)
     result = subprocess.run(
         [git, "commit", "--only", "-m", f"Start release v{release}", "--", "VERSION.txt"],
         cwd=root, capture_output=True, text=True, encoding="utf-8",
@@ -4499,7 +4830,9 @@ def set_release(release: str, root: Path = REPOSITORY_ROOT, commit: bool = True)
 
 def run_version(arguments: argparse.Namespace) -> None:
     if arguments.set:
-        set_release(arguments.set, commit=not arguments.no_commit)
+        set_release(arguments.set, commit=not arguments.no_commit, dry_run=arguments.dry_run)
+        if arguments.dry_run:
+            return
     fields = read_build_version()
     if arguments.json:
         print(json.dumps(fields, indent=2))
@@ -4537,7 +4870,7 @@ def is_excluded_repository_path(path: Path) -> bool:
     return (
         first == ".git"
         or first == "archive"
-        or (len(parts) > 1 and first.startswith("build"))
+        or (len(parts) > 1 and (first.startswith("build") or first.startswith("cmake-build")))
         or normalized.startswith("illumo/thirdparty/")
         or normalized.startswith("docs/output/")
     )
@@ -4577,7 +4910,7 @@ def repository_text_category(path: Path) -> str | None:
 
     suffix = path.suffix.lower()
     parts = {part.lower() for part in path.parts}
-    c_family = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
+    c_family = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl"}
     if suffix in c_family:
         if "tests" in parts or "testsupport" in parts:
             return "Tests C/C++"
@@ -4949,6 +5282,7 @@ def print_source_file_statistics(
     scope_label: str,
     sort_label: str,
     limit: int | None = None,
+    files_source: str = "tracked",
 ) -> None:
     print("ILLUMO FIRST-PARTY SOURCE FILE STATISTICS")
     print(f"Scope: {scope_label}")
@@ -4958,20 +5292,21 @@ def print_source_file_statistics(
         print("  No source files matched the requested filters.")
         return
 
+    category_width = max(16, max(len(item.category) for item in files))
     print(
-        f"  {'Rank':>4}  {'LOC':>7}  {'Physical':>8}  {'Category':<16}  Path"
+        f"  {'Rank':>4}  {'LOC':>7}  {'Physical':>8}  {'Category':<{category_width}}  Path"
     )
     print(
-        f"  {'-' * 4}  {'-' * 7}  {'-' * 8}  {'-' * 16}  {'-' * 44}"
+        f"  {'-' * 4}  {'-' * 7}  {'-' * 8}  {'-' * category_width}  {'-' * 44}"
     )
     for index, item in enumerate(files, start=1):
         rel_str = item.path.as_posix()
         print(
             f"  {index:>4}  {item.loc:>7,}  {item.physical_lines:>8,}  "
-            f"{item.category:<16}  {rel_str}"
+            f"{item.category:<{category_width}}  {rel_str}"
         )
     print(
-        f"  {'-' * 4}  {'-' * 7}  {'-' * 8}  {'-' * 16}  {'-' * 44}"
+        f"  {'-' * 4}  {'-' * 7}  {'-' * 8}  {'-' * category_width}  {'-' * 44}"
     )
     if limit is not None and limit > 0 and len(files) < total_matching:
         shown_loc = sum(item.loc for item in files)
@@ -4989,8 +5324,9 @@ def print_source_file_statistics(
             f"  Total: {total_matching:,} files, {total_matching_loc:,} LOC, "
             f"{total_matching_physical:,} physical lines"
         )
+    source_text = "tracked files" if files_source == "tracked" else "discovered files"
     print(
-        "Scope: current contents of tracked files; excludes build directories, "
+        f"Scope: current contents of {source_text}; excludes build directories, "
         "archive, Illumo/thirdparty, docs/output, binary assets, and blank lines from LOC."
     )
 
@@ -5095,6 +5431,7 @@ def run_profile_save(arguments: argparse.Namespace) -> None:
     settings = {
         key: getattr(arguments, key)
         for key in PROFILE_FLAGS + ("parallel", "cmake_arg")
+        if not (key == "no_wasm" and not getattr(arguments, key) and WASM_HOST_SUPPORTED)
     }
     settings.update({
         key: str(getattr(arguments, key))
@@ -5109,21 +5446,10 @@ def run_profile_save(arguments: argparse.Namespace) -> None:
         print(f"Would save profile '{arguments.name}' to {path}")
         print(json.dumps(settings, indent=2))
         return
-    temporary: str | None = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent,
-            prefix=path.name + ".", suffix=".tmp", delete=False,
-        ) as output:
-            temporary = output.name
-            json.dump({"version": 1, "profiles": profiles}, output, indent=2)
-            output.write("\n")
-        os.replace(temporary, path)
+        write_json_atomic(path, {"version": 1, "profiles": profiles})
     except OSError as error:
         raise BuildError(f"Could not save profiles to '{path}': {error}") from error
-    finally:
-        if temporary is not None and os.path.exists(temporary):
-            os.unlink(temporary)
     print(f"Saved profile '{arguments.name}' to {path}")
 
 
@@ -5150,6 +5476,7 @@ class AppOutput:
     name: str
     module: Path | None = None
     manifest: Path | None = None
+    title: str = ""
 
     @property
     def staged(self) -> bool:
@@ -5157,7 +5484,7 @@ class AppOutput:
 
     @property
     def label(self) -> str:
-        return APP_LABELS.get(self.name, self.name)
+        return APP_LABELS.get(self.name) or self.title or self.name
 
 
 @dataclass(frozen=True)
@@ -5231,7 +5558,7 @@ def runtime_outputs(
                 module = folder / package.module
             if (folder / "illumo.json").is_file():
                 manifest = folder / "illumo.json"
-        staged.append(AppOutput(package.name, module, manifest))
+        staged.append(AppOutput(package.name, module, manifest, package.title))
     retired: list[Path] = []
     for name in RETIRED_EXECUTABLES:
         for directory in (
@@ -5285,12 +5612,8 @@ def print_build_summary(
         rows.append(("info", "WASM runtime", "skipped (--no-wasm); no playable apps"))
     for retired in outputs.retired:
         rows.append(("warn", "Stale output", f"{retired} (pre-WASM; delete it)"))
-    marks = {"ok": ("+", ANSI_GREEN), "warn": ("!", ANSI_YELLOW), "info": ("-", ANSI_DIM)}
-    try:
-        "✔⚠·".encode(sys.stdout.encoding or "utf-8")
-        marks = {"ok": ("✔", ANSI_GREEN), "warn": ("⚠", ANSI_YELLOW), "info": ("·", ANSI_DIM)}
-    except UnicodeEncodeError:
-        pass
+    glyphs = terminal_glyphs()
+    marks = {"ok": (glyphs["ok"], ANSI_GREEN), "warn": (glyphs["warn"], ANSI_YELLOW), "info": (glyphs["info"], ANSI_DIM)}
     heading = f"{title} in {format_duration(time.monotonic() - started)}"
     print()
     print(dashboard_style(heading, ANSI_BOLD + ANSI_GREEN, ansi))
@@ -5387,7 +5710,7 @@ def run_doctor(arguments: argparse.Namespace) -> None:
             status = "ok" if result.returncode == 0 else "error"
             if name == "cmake":
                 match = re.search(r"cmake version (\d+)\.(\d+)", output)
-                minimum = (3, 24) if arguments.fresh else (3, 20)
+                minimum = max(minimum_cmake_version(), (3, 24) if arguments.fresh else (0, 0))
                 if not match or tuple(map(int, match.groups())) < minimum:
                     status = "error"
                     output += f"; CMake {minimum[0]}.{minimum[1]} or later required"
@@ -5596,6 +5919,13 @@ def add_common_build_arguments(parser: argparse.ArgumentParser) -> None:
         help="build in parallel, optionally with a job limit",
     )
     parser.add_argument(
+        "--no-parallel",
+        dest="parallel",
+        action="store_const",
+        const=None,
+        help="disable explicit build parallelism (overrides a profile's --parallel)",
+    )
+    parser.add_argument(
         "--tracy",
         action="store_true",
         help="enable Tracy instrumentation with ILLUMO_ENABLE_TRACY",
@@ -5625,7 +5955,7 @@ def add_common_build_arguments(parser: argparse.ArgumentParser) -> None:
         "--no-wasm",
         action="store_true",
         help=(
-            "skip IllumoRuntime and the IllumoGame WASM package with "
+            "skip IllumoRuntime and the WASM application packages with "
             "ILLUMO_BUILD_WASM_RUNTIME=OFF (default: "
             + ("on" if WASM_HOST_SUPPORTED else "off")
             + " on this host)"
@@ -5660,8 +5990,48 @@ def add_common_build_arguments(parser: argparse.ArgumentParser) -> None:
         help="print commands without executing them",
     )
     parser.set_defaults(
-        tracy=False, no_tests=False, no_docs=False, no_tidy=False,
+        tracy=False, no_tests=False, no_docs=not documentation_available(), no_tidy=False,
         no_wasm=not WASM_HOST_SUPPORTED,
+    )
+
+
+def _add_clang_ninja_arguments(
+    parser: argparse.ArgumentParser, default_dir: Path, label: str,
+) -> None:
+    parser.add_argument(
+        "--build-dir",
+        type=Path,
+        default=default_dir,
+        metavar="PATH",
+        help=f"{label} build tree (default: {default_dir})",
+    )
+    parser.add_argument(
+        "--parallel",
+        nargs="?",
+        const=0,
+        type=positive_job_count,
+        metavar="JOBS",
+        help="build in parallel, optionally with a job limit",
+    )
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="configure a fresh build tree without removing the directory (--fresh)",
+    )
+    parser.add_argument(
+        "--cmake-arg",
+        action="append",
+        default=[],
+        metavar="ARG",
+        help="extra configure argument; repeat and use --cmake-arg=-DNAME=VALUE",
+    )
+    parser.add_argument(
+        "--verbose", action="store_true", help="request verbose build output"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print commands without executing them",
     )
 
 
@@ -5748,7 +6118,7 @@ def create_parser(
     app_choices = (
         workspace.applications
         if workspace.applications
-        else ("IllumoRuntime", "IllEd")
+        else (WASM_RUNTIME_APPLICATION,)
     )
     default_app = workspace.primary_application
 
@@ -5832,70 +6202,12 @@ def create_parser(
     coverage_parser = subparsers.add_parser(
         "coverage", help="configure and run the Clang/LLVM coverage target"
     )
-    coverage_parser.add_argument(
-        "--build-dir",
-        type=Path,
-        default=DEFAULT_COVERAGE_DIRECTORY,
-        metavar="PATH",
-        help="coverage build tree (default: build-workspace-coverage)",
-    )
-    coverage_parser.add_argument(
-        "--parallel",
-        nargs="?",
-        const=0,
-        type=positive_job_count,
-        metavar="JOBS",
-        help="build in parallel, optionally with a job limit",
-    )
-    coverage_parser.add_argument(
-        "--cmake-arg",
-        action="append",
-        default=[],
-        metavar="ARG",
-        help="extra configure argument; repeat and use --cmake-arg=-DNAME=VALUE",
-    )
-    coverage_parser.add_argument(
-        "--verbose", action="store_true", help="request verbose build output"
-    )
-    coverage_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="print commands without executing them",
-    )
+    _add_clang_ninja_arguments(coverage_parser, DEFAULT_COVERAGE_DIRECTORY, "coverage")
 
     tidy_parser = subparsers.add_parser(
         "tidy", help="configure and run the workspace clang-tidy target"
     )
-    tidy_parser.add_argument(
-        "--build-dir",
-        type=Path,
-        default=DEFAULT_TIDY_DIRECTORY,
-        metavar="PATH",
-        help="clang-tidy build tree (default: build-workspace-tidy)",
-    )
-    tidy_parser.add_argument(
-        "--parallel",
-        nargs="?",
-        const=0,
-        type=positive_job_count,
-        metavar="JOBS",
-        help="configure/build in parallel, optionally with a job limit",
-    )
-    tidy_parser.add_argument(
-        "--cmake-arg",
-        action="append",
-        default=[],
-        metavar="ARG",
-        help="extra configure argument; repeat and use --cmake-arg=-DNAME=VALUE",
-    )
-    tidy_parser.add_argument(
-        "--verbose", action="store_true", help="request verbose build output"
-    )
-    tidy_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="print commands without executing them",
-    )
+    _add_clang_ninja_arguments(tidy_parser, DEFAULT_TIDY_DIRECTORY, "clang-tidy")
 
     docs_parser = subparsers.add_parser(
         "docs", help="build the two documentation PDFs through docs/build.ps1"
@@ -5920,9 +6232,40 @@ def create_parser(
         help="with --set, write VERSION.txt without committing it",
     )
     version_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="with --set, preview the change without writing or committing",
+    )
+    version_parser.add_argument(
         "--json",
         action="store_true",
         help="emit every version field as JSON",
+    )
+    logs_parser = subparsers.add_parser(
+        "logs",
+        help="inspect or prune recorded dashboard logs under build-orchestrator-logs/",
+    )
+    logs_parser.add_argument(
+        "--prune",
+        action="store_true",
+        help="delete older run logs and sidecars, keeping the newest --keep runs",
+    )
+    logs_parser.add_argument(
+        "--keep",
+        type=non_negative_count,
+        default=25,
+        metavar="COUNT",
+        help="number of newest runs to retain when pruning (default: %(default)s)",
+    )
+    logs_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="with --prune, report what would be removed without deleting anything",
+    )
+    logs_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable JSON",
     )
     stats_parser = subparsers.add_parser(
         "stats", help="show Git state and first-party repository statistics"
@@ -5944,7 +6287,7 @@ def create_parser(
         "--top",
         "--limit",
         dest="limit",
-        type=positive_job_count,
+        type=positive_count,
         metavar="COUNT",
         help="limit per-file output to the top COUNT files",
     )
@@ -5964,20 +6307,20 @@ def create_parser(
         "--top",
         "--limit",
         dest="limit",
-        type=positive_job_count,
+        type=positive_count,
         metavar="COUNT",
         help="limit output to the top COUNT largest files",
     )
     file_stats_parser.add_argument(
         "--min-loc",
-        type=int,
+        type=non_negative_count,
         default=0,
         metavar="LOC",
         help="only include files with at least LOC nonblank lines",
     )
     file_stats_parser.add_argument(
         "--category",
-        choices=["production", "tests", "cpp", "shaders", "all"],
+        choices=["production", "tests", "cpp", "shaders", "build", "docs", "config", "all"],
         default="production",
         help="file category to analyze (default: %(default)s)",
     )
@@ -6002,7 +6345,7 @@ def create_parser(
     file_stats_parser.add_argument(
         "--project",
         metavar="NAME",
-        help="filter files to a specific project (e.g., IllumoGame, IllEd, Illumo)",
+        help="filter files to a specific top-level directory (e.g., Illumo, IllEd, IllMeshViewer)",
     )
     file_stats_parser.add_argument(
         "--json",
@@ -6077,6 +6420,26 @@ def positive_job_count(value: str) -> int:
         raise argparse.ArgumentTypeError("job count must be an integer or 'auto'") from error
     if count < 1:
         raise argparse.ArgumentTypeError("job count must be at least 1")
+    return count
+
+
+def positive_count(value: str) -> int:
+    try:
+        count = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("count must be a positive integer") from error
+    if count < 1:
+        raise argparse.ArgumentTypeError("count must be at least 1")
+    return count
+
+
+def non_negative_count(value: str) -> int:
+    try:
+        count = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("value must be a non-negative integer") from error
+    if count < 0:
+        raise argparse.ArgumentTypeError("value must be 0 or greater")
     return count
 
 
@@ -6534,9 +6897,9 @@ def wasm_toolchain_error(missing: list[Path]) -> str:
     return (
         f"The pinned WASM toolchain is incomplete; missing {missing[0]}"
         + (f" and {len(missing) - 1} more" if len(missing) > 1 else "")
-        + f".\nIllumoGame builds as a WASM package ({wasmtime}, {wasi_sdk}). "
+        + f".\nInteractive applications build as WASM packages ({wasmtime}, {wasi_sdk}). "
         "Run 'python build.py wasm-tools' to download and verify the pinned "
-        "toolchain, or pass --no-wasm to build without IllumoRuntime and the game."
+        "toolchain, or pass --no-wasm to build without IllumoRuntime and the apps."
     )
 
 
@@ -6545,7 +6908,7 @@ def require_wasm_toolchain(arguments: argparse.Namespace, dry_run: bool) -> None
         return
     if not WASM_HOST_SUPPORTED:
         raise BuildError(
-            "IllumoRuntime and the IllumoGame package require Windows x64; "
+            "IllumoRuntime and its WASM application packages require Windows x64; "
             "drop --wasm or pass --no-wasm on this host."
         )
     directory = resolve_build_directory(arguments.build_dir)
@@ -6564,6 +6927,8 @@ def build_command(
     arguments: argparse.Namespace,
     cmake: str,
     target: str | Sequence[str] | None = None,
+    *,
+    clean: bool | None = None,
 ) -> list[str]:
     build_directory = resolve_build_directory(arguments.build_dir)
     command = [
@@ -6573,7 +6938,7 @@ def build_command(
         "--config",
         arguments.config,
     ]
-    if getattr(arguments, "clean", False):
+    if getattr(arguments, "clean", False) if clean is None else clean:
         command.append("--clean-first")
     selected_target = (
         target if target is not None else getattr(arguments, "target", None)
@@ -6628,11 +6993,14 @@ def executable_path(
             return candidate
 
     target_filename = f"{name}{suffix}".lower()
-    for root_dir, _subdirs, files in os.walk(build_directory):
+    config_lower = configuration.lower()
+    pruned = {"cmakefiles", "testing", "dist", "dist-staging", "wasm-guests"}
+    for root_dir, subdirs, files in os.walk(build_directory):
+        subdirs[:] = [d for d in subdirs if d.lower() not in pruned]
         for file in files:
             if file.lower() == target_filename:
                 found = Path(root_dir) / file
-                if configuration.lower() in found.parts or len(candidates) <= 2:
+                if any(part.lower() == config_lower for part in found.parts) or len(candidates) <= 2:
                     return found
 
     rendered = " or ".join(str(candidate) for candidate in candidates)
@@ -6675,31 +7043,32 @@ def distribution_app_names(requested: Sequence[str] | None) -> tuple[str, ...]:
 
 
 def run_distribution(arguments: argparse.Namespace) -> None:
-    """Build the selected configuration and assemble its distribution (D-E38).
+    """Build the runtime and pack its distribution (D-E38).
 
-    The IllumoDistribution target leaves dist/<config>/ in the build tree:
-    the runtime with engine.ilpk and apps/<name>.ilpk, no loose assets.
+    The IllumoDistribution target depends on IllumoRuntime (which stages every
+    app package), IllumoPack and IllumoVersionInfo, and leaves dist/<config>/
+    in the build tree with engine.ilpk and apps/<name>.ilpk.
     """
+    if not wasm_requested(arguments):
+        raise BuildError(
+            "Assembling a distribution requires the WASM runtime; "
+            "drop --no-wasm (distributions are Windows x64 only)."
+        )
     started = time.monotonic()
     chosen = distribution_app_names(arguments.apps)
     runner = CommandRunner(arguments.dry_run)
     cmake = configure(arguments, runner)
-    runner.run(build_command(arguments, cmake))
-    # The distribution script reads its selection from the environment, which
-    # the build tool passes on to it; no selection ships every app.
-    previous = os.environ.get(DISTRIBUTION_APPS_VARIABLE)
+    # Pass ILLUMO_DIST_APPS per-process so it layers over any cached compiler
+    # environment (e.g. Intel setvars.bat) without mutating global os.environ.
     if chosen:
-        os.environ[DISTRIBUTION_APPS_VARIABLE] = ",".join(chosen)
         print(f"Distribution apps: {', '.join(chosen)}", flush=True)
-    else:
-        os.environ.pop(DISTRIBUTION_APPS_VARIABLE, None)
-    try:
-        runner.run(build_command(arguments, cmake, "IllumoDistribution"))
-    finally:
-        if previous is None:
-            os.environ.pop(DISTRIBUTION_APPS_VARIABLE, None)
-        else:
-            os.environ[DISTRIBUTION_APPS_VARIABLE] = previous
+    env_overrides: dict[str, str | None] = {
+        DISTRIBUTION_APPS_VARIABLE: ",".join(chosen) if chosen else None,
+    }
+    runner.run(
+        build_command(arguments, cmake, "IllumoDistribution"),
+        env_overrides=env_overrides,
+    )
     build_directory = resolve_build_directory(arguments.build_dir)
     print_build_summary(arguments, "Distribution assembled", started)
     print(f"Distribution: {build_directory / 'dist' / arguments.config}")
@@ -6707,6 +7076,7 @@ def run_distribution(arguments: argparse.Namespace) -> None:
 
 def run_ctest_case(
     arguments: argparse.Namespace, cmake: str, runner: CommandRunner, test: dict,
+    workspace: WorkspaceProjects | None = None,
 ) -> bool:
     """Run one exact CTest case that is not owned by a discovered runner.
 
@@ -6714,7 +7084,8 @@ def run_ctest_case(
     its direct --run invocation.
     """
     build_directory = resolve_build_directory(arguments.build_dir)
-    workspace = discover_workspace_projects(REPOSITORY_ROOT)
+    if workspace is None:
+        workspace = discover_workspace_projects(REPOSITORY_ROOT)
     target = ctest_executable_target(test, build_directory)
     if target in workspace.test_runners or target in workspace.smoke_targets:
         return False
@@ -6741,13 +7112,21 @@ def run_tests(arguments: argparse.Namespace) -> None:
 
     if arguments.test:
         # Plain add_test() cases (the WASM runtime and package tests) share
-        # name prefixes with discovered runners, so ask CTest first.
+        # name prefixes with discovered runners, so ask CTest first. When CTest
+        # identifies a discovered runner (e.g. IllumoPhysicsTests for Illumo.Physics.*),
+        # keep that exact runner target directly instead of re-guessing by prefix.
+        target: str | None = None
         if not runner.dry_run and arguments.test != PUBLIC_HEADER_SMOKE_TEST:
             listing = ctest_listing(existing_tool("ctest", False), build_directory, arguments.config)
             test = next((item for item in listing if item["name"] == arguments.test), None)
-            if test is not None and run_ctest_case(arguments, cmake, runner, test):
-                return
-        target = workspace.resolve_test_target(arguments.test)
+            if test is not None:
+                ctest_target = ctest_executable_target(test, build_directory)
+                if ctest_target in workspace.test_runners or ctest_target in workspace.smoke_targets:
+                    target = ctest_target
+                elif run_ctest_case(arguments, cmake, runner, test, workspace):
+                    return
+        if target is None:
+            target = workspace.resolve_test_target(arguments.test)
         runner.run(build_command(arguments, cmake, target))
         test_binary = executable_path(
             build_directory,
@@ -6774,8 +7153,10 @@ def run_tests(arguments: argparse.Namespace) -> None:
         return
 
     if arguments.list_tests:
+        all_targets = [*workspace.test_runners, *workspace.smoke_targets]
+        if all_targets:
+            runner.run(build_command(arguments, cmake, all_targets))
         for target in workspace.test_runners:
-            runner.run(build_command(arguments, cmake, target))
             test_binary = executable_path(
                 build_directory,
                 arguments.config,
@@ -6785,7 +7166,6 @@ def run_tests(arguments: argparse.Namespace) -> None:
             )
             runner.run((str(test_binary), "--list"), test_binary.parent)
         for smoke_target in workspace.smoke_targets:
-            runner.run(build_command(arguments, cmake, smoke_target))
             if smoke_target == "IllumoPublicHeaderSmoke":
                 print(PUBLIC_HEADER_SMOKE_TEST, flush=True)
             else:
@@ -6874,10 +7254,10 @@ def run_application(arguments: argparse.Namespace) -> None:
 
 WATCH_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl",
-    ".vert", ".frag", ".glsl", ".cmake", ".json",
+    ".vert", ".frag", ".glsl", ".cmake", ".json", ".ilsc",
 }
-# Top-level scratch and output folders; build*, archive, thirdparty and
-# dot-directories are pruned everywhere.
+# Top-level scratch and output folders; build*, cmake-build*, archive,
+# thirdparty and dot-directories are pruned everywhere.
 WATCH_PRUNED_ROOTS = {"docs", "tmp", "scratch", "output", "licenses", "__pycache__"}
 
 
@@ -6941,18 +7321,24 @@ def run_watch_cycle(
 
 def run_watch(arguments: argparse.Namespace) -> None:
     """Build once, then rebuild (and re-run --test) whenever a source changes."""
+    if arguments.test and getattr(arguments, "no_tests", False):
+        raise BuildError("Cannot run --test in watch mode when testing is disabled via --no-tests.")
     runner = CommandRunner(arguments.dry_run)
     cmake = configure(arguments, runner)
     build_directory = resolve_build_directory(arguments.build_dir)
-    commands = [build_command(arguments, cmake)]
+    first_build = build_command(arguments, cmake)
+    subsequent_build = build_command(arguments, cmake, clean=False)
+    test_command: list[str] | None = None
     if arguments.test:
-        commands.append([
+        test_command = [
             existing_tool("ctest", runner.dry_run), "--test-dir", str(build_directory),
             "-C", arguments.config, "-R", test_name_batches([arguments.test])[0][1],
             "--no-tests=error", "--output-on-failure",
-        ])
+        ]
+    first_commands = [first_build, *([test_command] if test_command else [])]
+    repeat_commands = [subsequent_build, *([test_command] if test_command else [])]
     if runner.dry_run:
-        for command in commands:
+        for command in first_commands:
             runner.run(command)
         return
     glyphs = terminal_glyphs()
@@ -6960,10 +7346,16 @@ def run_watch(arguments: argparse.Namespace) -> None:
     snapshot = watch_snapshot(REPOSITORY_ROOT)
     changed: list[str] = []
     cycle = 0
+    if ansi:
+        sys.stdout.write(ANSI_PUSH_TITLE)
+        sys.stdout.flush()
     try:
         while True:
             cycle += 1
-            run_watch_cycle(runner, commands, changed, cycle, glyphs, ansi)
+            run_watch_cycle(
+                runner, first_commands if cycle == 1 else repeat_commands,
+                changed, cycle, glyphs, ansi,
+            )
             print(dashboard_style(
                 f"Watching {len(snapshot):,} files; save one to rebuild (Ctrl+C stops).",
                 ANSI_DIM, ansi), flush=True)
@@ -6980,6 +7372,10 @@ def run_watch(arguments: argparse.Namespace) -> None:
     except KeyboardInterrupt:
         print("\n" + dashboard_style(f"Watch stopped after {cycle} cycle{'s' if cycle != 1 else ''}.",
                                      ANSI_DIM, ansi), flush=True)
+    finally:
+        if ansi:
+            sys.stdout.write(ANSI_POP_TITLE)
+            sys.stdout.flush()
 
 
 def positive_interval(value: str) -> float:
@@ -7001,11 +7397,7 @@ def run_wasm_tools(arguments: argparse.Namespace) -> None:
     if not missing:
         print(f"WASM toolchain ready: {wasmtime} + {wasi_sdk} in {DEFAULT_WASM_TOOLS_DIRECTORY}")
         return
-    powershell = shutil.which("pwsh") or shutil.which("powershell")
-    if powershell is None:
-        if not runner.dry_run:
-            raise BuildError(f"PowerShell was not found on PATH; {WASM_BOOTSTRAP_SCRIPT.name} requires it.")
-        powershell = "powershell"
+    powershell = find_powershell(runner.dry_run, WASM_BOOTSTRAP_SCRIPT.name)
     print(
         f"Fetching the SHA256-pinned {wasmtime} and {wasi_sdk} release archives "
         f"from GitHub into {DEFAULT_WASM_TOOLS_DIRECTORY}.",
@@ -7021,101 +7413,111 @@ def run_wasm_tools(arguments: argparse.Namespace) -> None:
     missing = missing_wasm_tools(DEFAULT_WASM_TOOLS_DIRECTORY)
     if missing:
         raise BuildError(wasm_toolchain_error(missing))
-    print("WASM toolchain ready. 'python build.py play' builds and launches IllumoGame.")
+    print("WASM toolchain ready. 'python build.py play' builds and launches an application.")
+
+
+def _run_clang_ninja_target(
+    arguments: argparse.Namespace,
+    *,
+    target: str,
+    coverage: bool,
+    tidy: bool,
+    extra_tools: Sequence[str] = (),
+) -> None:
+    runner = CommandRunner(arguments.dry_run)
+    cmake = existing_tool("cmake", runner.dry_run)
+    for tool in ("ninja", "clang", "clang++", *extra_tools):
+        existing_tool(tool, runner.dry_run)
+    if tidy and not runner.dry_run:
+        tidy_path = shutil.which("clang-tidy")
+        tidy_dir = Path(tidy_path).parent if tidy_path else None
+        has_runner = bool(
+            shutil.which("run-clang-tidy")
+            or shutil.which("run-clang-tidy.py")
+            or (tidy_dir and (
+                (tidy_dir / "run-clang-tidy").is_file()
+                or (tidy_dir / "run-clang-tidy.py").is_file()
+            ))
+        )
+        if not has_runner:
+            raise BuildError(
+                "Required tool 'run-clang-tidy' (or 'run-clang-tidy.py') was not found on PATH "
+                "or beside clang-tidy; IllumoTidy requires it."
+            )
+    check_args = argparse.Namespace(
+        build_dir=arguments.build_dir,
+        generator="Ninja",
+        architecture=None,
+        compiler="clang",
+        fresh=getattr(arguments, "fresh", False),
+    )
+    validate_build_settings(check_args)
+    build_directory = resolve_build_directory(arguments.build_dir)
+    configure_cmd = [
+        cmake,
+        "-S",
+        str(SOURCE_DIRECTORY),
+        "-B",
+        str(build_directory),
+        *(["--fresh"] if getattr(arguments, "fresh", False) else []),
+        "-G",
+        "Ninja",
+        "-DCMAKE_BUILD_TYPE=Debug",
+        "-DCMAKE_C_COMPILER=clang",
+        "-DCMAKE_CXX_COMPILER=clang++",
+        "-DILLUMO_BUILD_DOCUMENTATION=OFF",
+        "-DILLUMO_ENABLE_TRACY=OFF",
+        f"-DILLUMO_ENABLE_COVERAGE={'ON' if coverage else 'OFF'}",
+        f"-DILLUMO_ENABLE_CLANG_TIDY={'ON' if tidy else 'OFF'}",
+    ]
+    configure_cmd.extend(arguments.cmake_arg)
+    runner.run(configure_cmd)
+
+    build_cmd = [
+        cmake,
+        "--build",
+        str(build_directory),
+        "--target",
+        target,
+    ]
+    if arguments.parallel is not None:
+        build_cmd.append("--parallel")
+        if arguments.parallel > 0:
+            build_cmd.append(str(arguments.parallel))
+    if arguments.verbose:
+        build_cmd.append("--verbose")
+    runner.run(build_cmd)
 
 
 def run_coverage(arguments: argparse.Namespace) -> None:
-    runner = CommandRunner(arguments.dry_run)
-    cmake = existing_tool("cmake", runner.dry_run)
-    build_directory = resolve_build_directory(arguments.build_dir)
-    validate_workspace_build_directory(build_directory)
-    configure_coverage = [
-        cmake,
-        "-S",
-        str(SOURCE_DIRECTORY),
-        "-B",
-        str(build_directory),
-        "-G",
-        "Ninja",
-        "-DCMAKE_BUILD_TYPE=Debug",
-        "-DCMAKE_C_COMPILER=clang",
-        "-DCMAKE_CXX_COMPILER=clang++",
-        "-DILLUMO_BUILD_DOCUMENTATION=OFF",
-        "-DILLUMO_ENABLE_TRACY=OFF",
-        "-DILLUMO_ENABLE_COVERAGE=ON",
-        "-DILLUMO_ENABLE_CLANG_TIDY=OFF",
-    ]
-    configure_coverage.extend(arguments.cmake_arg)
-    runner.run(configure_coverage)
-
-    build_coverage = [
-        cmake,
-        "--build",
-        str(build_directory),
-        "--target",
-        "IllumoCoverage",
-    ]
-    if arguments.parallel is not None:
-        build_coverage.append("--parallel")
-        if arguments.parallel > 0:
-            build_coverage.append(str(arguments.parallel))
-    if arguments.verbose:
-        build_coverage.append("--verbose")
-    runner.run(build_coverage)
+    _run_clang_ninja_target(
+        arguments,
+        target="IllumoCoverage",
+        coverage=True,
+        tidy=False,
+        extra_tools=("llvm-profdata", "llvm-cov"),
+    )
 
 
 def run_tidy(arguments: argparse.Namespace) -> None:
-    runner = CommandRunner(arguments.dry_run)
-    cmake = existing_tool("cmake", runner.dry_run)
-    existing_tool("clang-tidy", runner.dry_run)
-    existing_tool("ninja", runner.dry_run)
-    build_directory = resolve_build_directory(arguments.build_dir)
-    validate_workspace_build_directory(build_directory)
-    configure_tidy = [
-        cmake,
-        "-S",
-        str(SOURCE_DIRECTORY),
-        "-B",
-        str(build_directory),
-        "-G",
-        "Ninja",
-        "-DCMAKE_BUILD_TYPE=Debug",
-        "-DCMAKE_C_COMPILER=clang",
-        "-DCMAKE_CXX_COMPILER=clang++",
-        "-DILLUMO_BUILD_DOCUMENTATION=OFF",
-        "-DILLUMO_ENABLE_TRACY=OFF",
-        "-DILLUMO_ENABLE_COVERAGE=OFF",
-        "-DILLUMO_ENABLE_CLANG_TIDY=ON",
-    ]
-    configure_tidy.extend(arguments.cmake_arg)
-    runner.run(configure_tidy)
-
-    build_tidy = [
-        cmake,
-        "--build",
-        str(build_directory),
-        "--target",
-        "IllumoTidy",
-    ]
-    if arguments.parallel is not None:
-        build_tidy.append("--parallel")
-        if arguments.parallel > 0:
-            build_tidy.append(str(arguments.parallel))
-    if arguments.verbose:
-        build_tidy.append("--verbose")
-    runner.run(build_tidy)
+    _run_clang_ninja_target(
+        arguments,
+        target="IllumoTidy",
+        coverage=False,
+        tidy=True,
+        extra_tools=("clang-tidy",),
+    )
 
 
 def run_docs(arguments: argparse.Namespace) -> None:
+    docs_script = REPOSITORY_ROOT / "docs" / "build.ps1"
+    if not docs_script.is_file():
+        raise BuildError(
+            f"Documentation script not found at {docs_script}. "
+            "Generated workspaces omit the engine LaTeX documentation sources."
+        )
     runner = CommandRunner(arguments.dry_run)
-    powershell = shutil.which("pwsh") or shutil.which("powershell")
-    if powershell is None:
-        if runner.dry_run:
-            powershell = "powershell"
-        else:
-            raise BuildError(
-                "PowerShell was not found on PATH; docs/build.ps1 requires it."
-            )
+    powershell = find_powershell(runner.dry_run, "docs/build.ps1")
     runner.run(
         (
             powershell,
@@ -7123,13 +7525,90 @@ def run_docs(arguments: argparse.Namespace) -> None:
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            str(REPOSITORY_ROOT / "docs" / "build.ps1"),
+            str(docs_script),
         )
     )
 
 
-def run_source_file_statistics(arguments: argparse.Namespace) -> None:
-    statistics = collect_repository_statistics(REPOSITORY_ROOT)
+def prune_orchestrator_logs(
+    keep: int, directory: Path | None = None, dry_run: bool = False,
+) -> dict[str, object]:
+    """List or prune older run logs and their sidecar files beyond the newest `keep` runs."""
+    log_dir = directory or (REPOSITORY_ROOT / "build-orchestrator-logs")
+    if not log_dir.is_dir():
+        return {"directory": str(log_dir), "total_runs": 0, "kept_runs": 0,
+                "removed_runs": 0, "removed_files": [], "reclaimed_bytes": 0, "dry_run": dry_run}
+    runs = run_history(log_dir)
+    stale = runs[keep:]
+    removed_files: list[str] = []
+    reclaimed_bytes = 0
+    if stale:
+        stale_logs = {Path(run["log"]) for run in stale}
+        stale_prefixes = tuple(path.stem + "." for path in stale_logs)
+        candidates = sorted(
+            entry for entry in log_dir.iterdir()
+            if entry.is_file() and (entry in stale_logs or entry.name.startswith(stale_prefixes))
+        )
+        for path in candidates:
+            try:
+                reclaimed_bytes += path.stat().st_size
+            except OSError:
+                pass
+            removed_files.append(path.name)
+            if not dry_run:
+                path.unlink(missing_ok=True)
+    return {
+        "directory": str(log_dir),
+        "total_runs": len(runs),
+        "kept_runs": min(len(runs), keep),
+        "removed_runs": len(stale),
+        "removed_files": removed_files,
+        "reclaimed_bytes": reclaimed_bytes,
+        "dry_run": dry_run,
+    }
+
+
+def run_logs(arguments: argparse.Namespace) -> None:
+    log_dir = REPOSITORY_ROOT / "build-orchestrator-logs"
+    if arguments.prune:
+        report = prune_orchestrator_logs(arguments.keep, log_dir, dry_run=arguments.dry_run)
+        if arguments.json:
+            print(json.dumps(report, indent=2))
+            return
+        verb = "Would remove" if arguments.dry_run else "Removed"
+        print(
+            f"{verb} {report['removed_runs']} run(s) ({len(report['removed_files'])} files, "
+            f"{format_size(report['reclaimed_bytes'])}); kept {report['kept_runs']} of {report['total_runs']}."
+        )
+        return
+    runs = run_history(log_dir) if log_dir.is_dir() else []
+    total_bytes = sum(
+        entry.stat().st_size for entry in log_dir.iterdir() if entry.is_file()
+    ) if log_dir.is_dir() else 0
+    if arguments.json:
+        print(json.dumps({
+            "directory": str(log_dir),
+            "runs": len(runs),
+            "total_bytes": total_bytes,
+            "recent": [{"log": Path(r["log"]).name, "action": r.get("action"),
+                        "status": r.get("status"), "elapsed": r.get("elapsed")}
+                       for r in runs[:20]],
+        }, indent=2))
+        return
+    print(f"Orchestrator logs: {log_dir} ({len(runs)} runs, {format_size(total_bytes)})")
+    glyphs = terminal_glyphs()
+    for run in runs[:20]:
+        print("  " + run_history_label(run, glyphs))
+    if len(runs) > 20:
+        print(f"  ... and {len(runs) - 20} older run(s). Use 'python build.py logs --prune --keep 25' to clean up.")
+
+
+def run_source_file_statistics(
+    arguments: argparse.Namespace,
+    statistics: RepositoryStatistics | None = None,
+) -> None:
+    if statistics is None:
+        statistics = collect_repository_statistics(REPOSITORY_ROOT)
     category = getattr(arguments, "category", "production")
     include_tests = getattr(arguments, "include_tests", False)
     sort_by = getattr(arguments, "sort", "loc")
@@ -7203,6 +7682,7 @@ def run_source_file_statistics(arguments: argparse.Namespace) -> None:
             scope_label=scope_label,
             sort_label=sort_label,
             limit=limit,
+            files_source=statistics.repository_files_source,
         )
 
 
@@ -7215,7 +7695,7 @@ def run_repository_statistics(arguments: argparse.Namespace) -> None:
         print_repository_statistics(statistics)
         if by_file:
             print()
-            run_source_file_statistics(arguments)
+            run_source_file_statistics(arguments, statistics=statistics)
 
 
 def run_new_project(arguments: argparse.Namespace) -> None:
@@ -7244,20 +7724,24 @@ def run_new_project(arguments: argparse.Namespace) -> None:
         raise BuildError(str(err)) from err
 
 
+def _run_interactive_dashboard() -> int:
+    try:
+        return run_dashboard()
+    except KeyboardInterrupt:
+        print("\nBuild console closed.", file=sys.stderr)
+        return 130
+    except BuildError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return error.exit_code
+
+
 def main(arguments: Sequence[str] | None = None) -> int:
     workspace = discover_workspace_projects(REPOSITORY_ROOT)
     parser = create_parser(workspace)
     command_line = sys.argv[1:] if arguments is None else list(arguments)
     if not command_line:
         if sys.stdin.isatty() and sys.stdout.isatty():
-            try:
-                return run_dashboard()
-            except KeyboardInterrupt:
-                print("\nBuild console closed.", file=sys.stderr)
-                return 130
-            except BuildError as error:
-                print(f"error: {error}", file=sys.stderr)
-                return error.exit_code
+            return _run_interactive_dashboard()
         command_line = ["build"]
     parsed = parser.parse_args(normalize_arguments(command_line))
     try:
@@ -7271,11 +7755,6 @@ def main(arguments: Sequence[str] | None = None) -> int:
             parsed = parser.parse_args([
                 normalized[0], *profile_arguments(profiles[parsed.profile]), *normalized[1:]
             ])
-    except BuildError as error:
-        print(f"error: {error}", file=sys.stderr)
-        return error.exit_code
-
-    try:
         if parsed.command in COMPILER_COMMANDS:
             apply_compiler_selection(parsed)
     except BuildError as error:
@@ -7292,14 +7771,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 )
             )
             return 0
-        try:
-            return run_dashboard()
-        except KeyboardInterrupt:
-            print("\nBuild console closed.", file=sys.stderr)
-            return 130
-        except BuildError as error:
-            print(f"error: {error}", file=sys.stderr)
-            return error.exit_code
+        return _run_interactive_dashboard()
 
     actions = {
         "_toolbox": run_toolbox_request,
@@ -7318,6 +7790,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         "tidy": run_tidy,
         "docs": run_docs,
         "version": run_version,
+        "logs": run_logs,
         "stats": run_repository_statistics,
         "file-stats": run_source_file_statistics,
         "source-stats": run_source_file_statistics,

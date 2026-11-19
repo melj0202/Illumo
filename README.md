@@ -802,6 +802,7 @@ python build.py tidy
 python build.py docs
 python build.py version
 python build.py version --set 26.10
+python build.py logs --prune --keep 25
 python build.py new-project ../MyNewGame --name MyNewGame
 ```
 
@@ -813,13 +814,15 @@ without any manual step. Products show `v26.09_12`; the log, the startup
 report and `IllumoRuntime --version` show `v26.09_12 (1f709073, dirty)`, and
 a tree without Git history shows `v26.09_0 (unknown)`. `version` prints the
 current build's version (`--json` for every field). To cut a release, run
-`version --set YY.MM`: it writes `VERSION.txt` and commits that file alone,
+`version --set YY.MM` (`--dry-run` previews without writing): it writes
+`VERSION.txt` and commits that file alone,
 and that commit is build 0 of the new release. Release builds need a full
 clone, because a shallow one cannot count commits and builds as `_0`.
 
 `watch` configures once, builds, then polls first-party sources, shaders,
-CMake files and JSON manifests (build trees, `archive/`, `Illumo/thirdparty/`,
-`docs/` and dot-directories excluded) and rebuilds after each save, waiting
+CMake files, `.ilsc` scenes, and JSON manifests (build trees, `archive/`,
+`Illumo/thirdparty/`, `docs/` and dot-directories excluded) and rebuilds
+after each save, waiting
 for bursts of writes to settle. With `--test NAME` it also runs that exact
 CTest case after each build. Failures are reported and watching continues;
 Ctrl+C stops it. `--interval` sets the polling period (default 1 second).
@@ -920,7 +923,9 @@ completion status, and available test results. `.tests.json`, per-batch XML,
 and command context files support interrupted runs. Raw `.log` files remain
 authoritative; older logs remain browsable without metadata but cannot
 supply trusted reruns. All records stay under the ignored log directory
-until explicitly removed. The toolbox uses only the standard library inside
+until explicitly removed (`python build.py logs` summarizes them;
+`python build.py logs --prune --keep N` removes older runs and their sidecars,
+with `--dry-run` to preview). The toolbox uses only the standard library inside
 `build.py`, so generated projects retain it when copying the orchestrator.
 
 Use `python build.py profiles` to list named configurations (`--json` is
@@ -943,12 +948,13 @@ python build.py test --profile mine
 python build.py build --profile mine --docs --config RelWithDebInfo --dry-run
 ```
 
-Profiles apply to `configure`, `build`, `test`, `run`, `doctor`, and
-`profile-save`. Explicit CLI settings override profile values; repeated
-`--cmake-arg` values append after the profile's arguments. Use `--docs`,
-`--tests`, `--tidy`, or `--no-tracy` to reverse saved boolean choices.
-Application arguments after `run --` remain application arguments.
-Coverage and tidy retain their dedicated toolchains and build directories.
+Profiles apply to `configure`, `build`, `dist`, `test`, `run`, `play`,
+`watch`, `doctor`, and `profile-save`. Explicit CLI settings override profile
+values; repeated `--cmake-arg` values append after the profile's arguments.
+Use `--docs`, `--tests`, `--tidy`, `--wasm`, `--no-tracy`, or `--no-parallel`
+to reverse saved choices. Application arguments after `run --` or `play --`
+remain application arguments. Coverage and tidy retain their dedicated
+toolchains and build directories.
 
 `profile-save NAME` creates or replaces that name in the Git-ignored
 `build-profiles.local.json`. It preserves other names and replaces the file
@@ -978,10 +984,12 @@ already exist. Its format is:
 ```
 
 Allowed keys are `config`, `build_dir`, `generator`, `architecture`,
-`tracy`, `no_tests`, `no_docs`, `no_tidy`, `parallel`, and `cmake_arg` (a
+`compiler`, `optimization`, `cpu`, `warnings`, `sanitizer`, `tracy`,
+`no_tests`, `no_docs`, `no_tidy`, `no_wasm`, `parallel`, and `cmake_arg` (a
 string array). Parallelism is `null` for no explicit limit option, `0` for
 automatic, or a positive job count. On the CLI, `--parallel` or
-`--parallel=auto` selects automatic parallelism. Saved profiles replace
+`--parallel=auto` selects automatic parallelism, and `--no-parallel` clears a
+profile's parallelism. Saved profiles replace
 matching built-in definitions; there is no inheritance. Unknown keys and
 malformed values are rejected.
 
@@ -1010,7 +1018,8 @@ report through **Repository statistics**.
 `file-stats` (aliases: `source-stats`, `stats --by-file`) provides a
 per-file breakdown of first-party source files sorted from largest to
 smallest by LOC. Options include `-n COUNT` / `--top COUNT`, `--min-loc`,
-`--include-tests`, `--category`, `--sort`, and `--json`. The interactive
+`--include-tests`, `--category` (`production`, `tests`, `cpp`, `shaders`,
+`build`, `docs`, `config`, `all`), `--sort`, and `--json`. The interactive
 build console exposes this through **Source file statistics**.
 
 Run the orchestrator regression suite with:
