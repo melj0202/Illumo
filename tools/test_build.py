@@ -721,7 +721,9 @@ class DashboardMouseTests(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()) as output:
             with patch.object(build.sys.stdout, "isatty", return_value=True):
                 self.assertEqual(build.run_dashboard(), 0)
-        self.assertEqual(output.getvalue().count(build.ANSI_CLEAR), 2)
+        # Initial full clear + one differential in-place hover repaint; second hover on same row does not repaint.
+        self.assertEqual(output.getvalue().count(build.ANSI_CLEAR), 1)
+        self.assertEqual(output.getvalue().count(build.ANSI_SYNC_START), 2)
         execute.assert_not_called()
 
     def test_wheel_decoding_and_navigation_does_not_activate(self):
@@ -1867,7 +1869,9 @@ class DashboardPolishTests(unittest.TestCase):
             self.assertIsNone(build.run_command_palette(self.state, terminal))
         self.assertEqual(terminal.read_event.call_args.kwargs["timeout"], 0.5)
         self.assertEqual(rows.call_count, 2)  # Blinks repaint without re-ranking.
-        self.assertEqual(output.getvalue().count(build.ANSI_CLEAR), 2)
+        # Only the initial paint clears the screen; blinks and filter typing repaint in place.
+        self.assertEqual(output.getvalue().count(build.ANSI_CLEAR), 1)
+        self.assertEqual(output.getvalue().count(build.ANSI_SYNC_START), 4)
 
     def test_run_history_label(self):
         run = {"log": str(self.root / "build-1.log"), "status": "failed", "action": "build",
@@ -2382,6 +2386,7 @@ class OrchestratorAuditRegressionTests(unittest.TestCase):
         # Every built-in TrueColor theme preserves exact text geometry across animated frames,
         # cosmic nebula backdrop, row flashes, and full-console diagonal shockwaves.
         state = build.DashboardState(applications=("game",))
+        self.assertEqual(state.reactor_mode, "off")
         plain = build.render_dashboard(state, 100, ansi=False, terminal_rows=40)
         for theme_key in build.THEME_ORDER:
             state.theme = theme_key
@@ -2392,8 +2397,15 @@ class OrchestratorAuditRegressionTests(unittest.TestCase):
             self.assertIn("\x1b[48;2;", styled)
             stripped = "\n".join(build._ANSI_SEQUENCE.sub("", line) for line in styled.splitlines())
             self.assertEqual(stripped, plain)
+            # Also verify steady-state fast path (no wave, no flash) matches plain geometry.
+            state.wave_frame = None
+            state.flash_row = None
+            steady = build.render_dashboard(state, 100, ansi=True, terminal_rows=40, frame=12)
+            stripped_steady = "\n".join(build._ANSI_SEQUENCE.sub("", line) for line in steady.splitlines())
+            self.assertEqual(stripped_steady, plain)
 
-        # Wide-screen Live Reactor sidekick composes cleanly beside the dashboard without moving hit regions.
+        # Wide-screen Live Reactor sidekick defaults to off, stays lazy until toggled with 'v',
+        # and composes cleanly beside the dashboard without moving hit regions.
         sidekick = build.LightshowState(scene="torus", theme_name="synthwave", show_logo=False)
         panel = build.render_sidekick_panel(sidekick, 36, len(plain.splitlines()),
                                             theme=build.resolve_theme("synthwave"), frame=12, ansi=True)
@@ -2401,6 +2413,83 @@ class OrchestratorAuditRegressionTests(unittest.TestCase):
         composed = build.compose_dashboard_with_sidekick(plain, panel, gap=2)
         self.assertEqual(len(composed.splitlines()), len(plain.splitlines()))
         self.assertIn("Reactor", build._ANSI_SEQUENCE.sub("", composed.splitlines()[0]))
+
+        # Cycling reactor mode from default "off" enters "torus" on 'v' and "plasma" on 'V'.
+        self.assertEqual(
+            build.REACTOR_MODES[(build.REACTOR_MODES.index("off") + 1) % len(build.REACTOR_MODES)],
+            "torus",
+        )
+        self.assertEqual(
+            build.REACTOR_MODES[(build.REACTOR_MODES.index("off") - 1) % len(build.REACTOR_MODES)],
+            "plasma",
+        )
+
+        # Interactive dashboard keeps Live Reactor off by default on wide terminals until 'v' is pressed.
+        class FakeDashTerminal:
+            windows_input = None
+            def __init__(self, seq):
+                self._events = iter(seq)
+            def enter(self):
+                pass
+            def leave(self):
+                pass
+            def read_event(self, _timeout=None, **_kw):
+                return next(self._events)
+        class FakeTTY(io.StringIO):
+            def isatty(self):
+                return True
+        off_out = FakeTTY()
+        with patch.object(build.sys.stdin, "isatty", return_value=True), \
+             patch.object(build, "motion_enabled", return_value=True), \
+             patch.object(build, "DashboardTerminal", return_value=FakeDashTerminal(["tick", "quit"])), \
+             patch.object(build, "refresh_dashboard_context"), \
+             patch.object(build, "dashboard_terminal_size", return_value=build.os.terminal_size((140, 40))), \
+             contextlib.redirect_stdout(off_out):
+            self.assertEqual(build.run_dashboard(), 0)
+        self.assertNotIn("Reactor", build._ANSI_SEQUENCE.sub("", off_out.getvalue()))
+
+        dash_out = FakeTTY()
+        with patch.object(build.sys.stdin, "isatty", return_value=True), \
+             patch.object(build, "motion_enabled", return_value=True), \
+             patch.object(build, "DashboardTerminal", return_value=FakeDashTerminal(["tick", "key:v", "tick", "key:g", "quit"])), \
+             patch.object(build, "refresh_dashboard_context"), \
+             patch.object(build, "dashboard_terminal_size", return_value=build.os.terminal_size((140, 40))), \
+             contextlib.redirect_stdout(dash_out):
+            self.assertEqual(build.run_dashboard(), 0)
+        dash_rendered = build._ANSI_SEQUENCE.sub("", dash_out.getvalue())
+        self.assertIn("Live Reactor: 3D Torus", dash_rendered)
+        self.assertIn("Reactor", dash_rendered)
+        self.assertIn(build.ANSI_SYNC_START, dash_out.getvalue())
+        self.assertIn(build.ANSI_SYNC_END, dash_out.getvalue())
+        # Navigating menu items and toggling themes/reactor never re-emits ANSI_CLEAR.
+        self.assertEqual(dash_out.getvalue().count(build.ANSI_CLEAR), 1)
+
+        # Differential write_in_place_frame emits only changed rows and erases tail when shrinking.
+        diff_out = io.StringIO()
+        with contextlib.redirect_stdout(diff_out):
+            build.write_in_place_frame("row0\nrow1-new\nrow2", previous="row0\nrow1-old\nrow2\nrow3")
+        diff_text = diff_out.getvalue()
+        self.assertNotIn("row0", diff_text)
+        self.assertNotIn("row2", diff_text)
+        self.assertIn("\x1b[2;1Hrow1-new" + build.ANSI_ERASE_LINE, diff_text)
+        self.assertIn("\x1b[4;1H" + build.ANSI_ERASE_BELOW, diff_text)
+        self.assertNotIn(build.ANSI_CLEAR, diff_text)
+
+        # Stepping down through dashboard menu items diffs only the changed rows (~1-3 KB, no clear).
+        nav_out = FakeTTY()
+        with patch.object(build.sys.stdin, "isatty", return_value=True), \
+             patch.object(build, "motion_enabled", return_value=False), \
+             patch.object(build, "DashboardTerminal", return_value=FakeDashTerminal(["down", "down", "up", "quit"])), \
+             patch.object(build, "refresh_dashboard_context"), \
+             patch.object(build, "dashboard_terminal_size", return_value=build.os.terminal_size((100, 40))), \
+             contextlib.redirect_stdout(nav_out):
+            self.assertEqual(build.run_dashboard(), 0)
+        nav_frames = nav_out.getvalue().split(build.ANSI_SYNC_START)[1:]
+        self.assertEqual(nav_out.getvalue().count(build.ANSI_CLEAR), 1)
+        self.assertEqual(len(nav_frames), 4)
+        # Each arrow move only rewrites the 3 changed rows (a tiny fraction of the initial full frame).
+        for step_frame in nav_frames[1:]:
+            self.assertLess(len(step_frame), len(nav_frames[0]) // 3)
 
         # Theme cycling triggers a wave and palette theme selection updates state.theme cleanly.
         state = build.DashboardState(applications=("game",), theme="illumo", frame=20)

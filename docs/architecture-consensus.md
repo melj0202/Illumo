@@ -2200,9 +2200,14 @@ SceneGraph attachments contribute retained caster descriptors to Renderer.
 The first camera-visible caster deterministically selects light direction. The
 camera frustum is reconstructed from inverse MVP and conservatively extruded
 toward that light by `shadowCasterDistance` (100 world units by default).
-Only intersecting caster bounds participate in the shared light fit and depth
-pass; a second fitted-light-frustum test rejects provably irrelevant depth
-emission. Invalid camera reconstruction falls back to all casters. All
+Shadow orthographic XY bounds are fit within a bounded perspective camera slice
+using power-of-two quantized extents with shrink hysteresis, and the light
+center is snapped in world-origin-anchored light space to shadow-map texels so
+sub-texel camera or prop motion does not swim or blur shadows. Light depth spans
+intersecting casters in the fitted XY box and extends downstream by
+`shadowLightDistance` for non-casting receivers, while fragment shaders normalize
+depth bias by the light-space depth span extracted from the projection matrix.
+Invalid camera reconstruction falls back to all casters. All
 receivers sample the same map, so separate objects cast onto one another.
 Maximum requested map size, minimum radius, and light distance cover the
 participating set. Per-receiver

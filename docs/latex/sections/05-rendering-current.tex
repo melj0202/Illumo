@@ -220,9 +220,12 @@ while preserving defaults.
         retaining independent transform, tint, lighting, and motion state.
         The Renderer retains caster descriptors, chooses light settings from
         the first camera-visible caster, and filters them against a conservative
-        camera-frustum extrusion toward the light. Invalid reconstruction falls
-        back to all casters. A monotonically increasing frame serial resets
-        previous-MVP history when a culled visual re-enters.
+        camera-frustum extrusion toward the light. Shadow orthographic XY bounds
+        are bounded to a near camera slice with power-of-two quantized extents,
+        shrink hysteresis, and world-origin texel snapping; fragment shaders
+        normalize receiver depth bias by the light-space depth span. Invalid
+        reconstruction falls back to all casters. A monotonically increasing frame
+        serial resets previous-MVP history when a culled visual re-enters.
 \end{itemize}
 
 \subsection{Managed assets (D-R17/D-R24)}

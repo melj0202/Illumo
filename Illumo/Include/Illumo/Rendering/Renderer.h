@@ -157,6 +157,10 @@ private:
   int requestedShadowMapSize = 0;
   float requestedShadowMinimumRadius = 0.0f;
   float requestedShadowLightDistance = 0.0f;
+  float m_stabilizedShadowHalfExtent = 0.0f;
+  int m_stabilizedShadowMapSize = 0;
+  float m_stabilizedShadowBaseRadius = 0.0f;
+  std::array<float, 3> m_stabilizedShadowLightDir{ 0.0f, 0.0f, 0.0f };
   struct BoundsFrustum
   {
     std::array<Vector4, 6> planes{};

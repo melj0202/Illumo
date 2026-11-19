@@ -1564,6 +1564,154 @@ testMeshVisualNonCastingStillReceivesShadows()
   }
 }
 
+static bool
+renderLightSpaceMatrix(MockBackend& mock,
+                       Renderer& renderer,
+                       DrawList& scene,
+                       Camera& camera,
+                       glm::mat4* outMatrix)
+{
+  mock.resetCounters();
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+  const RenderCommand* cmd =
+    findSubmittedUniformMat4(mock, WorldLook::kLightSpaceMatrixUniform, 0);
+  if (cmd == nullptr || outMatrix == nullptr) {
+    return false;
+  }
+  std::memcpy(
+    glm::value_ptr(*outMatrix), cmd->uniformMat4.value, 16 * sizeof(float));
+  return true;
+}
+
+static glm::vec2
+lightTexelCoord(const glm::mat4& lightSpace, const glm::vec3& point)
+{
+  const glm::vec4 clip = lightSpace * glm::vec4(point, 1.0f);
+  const glm::vec2 uv =
+    (glm::vec2(clip.x, clip.y) / clip.w) * 0.5f + glm::vec2(0.5f);
+  return uv * 1024.0f - glm::vec2(0.5f);
+}
+
+static void
+testMeshVisualShadowProjectionStabilization()
+{
+  testSection("MeshVisual: shadow projection snaps to texels and resists "
+              "runaway casters");
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  camera.setProjectionType(ProjectionType::Perspective);
+  camera.setPerspective(60.0f, 0.1f, 200.0f);
+  camera.lookAt(
+    glm::vec3(0.0f, 6.0f, 10.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  MeshVisual staticCaster;
+  staticCaster.prepare(&renderer);
+  staticCaster.addSolidCube(glm::vec3(0.0f, 0.5f, 0.0f),
+                            glm::vec3(0.5f),
+                            ColorRgba{ 200, 200, 200, 255 });
+
+  MeshVisual dynamicCaster;
+  dynamicCaster.prepare(&renderer);
+  dynamicCaster.addSolidCube(glm::vec3(0.0f, 0.5f, 0.0f),
+                             glm::vec3(0.5f),
+                             ColorRgba{ 180, 140, 120, 255 });
+  dynamicCaster.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(1.5f, 0.5f, 0.0f)));
+
+  MeshVisual floor;
+  floor.prepare(&renderer);
+  floor.addSolidCube(glm::vec3(0.0f, -0.5f, 0.0f),
+                     glm::vec3(60.0f, 0.5f, 60.0f),
+                     ColorRgba{ 160, 160, 160, 255 });
+  floor.setCastsShadows(false);
+
+  DrawList scene(&window, &camera);
+  scene.AddDrawable(&staticCaster, RenderLayerId::World);
+  scene.AddDrawable(&dynamicCaster, RenderLayerId::World);
+  scene.AddDrawable(&floor, RenderLayerId::World);
+
+  glm::mat4 baselineMatrix(1.0f);
+  testTrue(
+    g,
+    renderLightSpaceMatrix(mock, renderer, scene, camera, &baselineMatrix),
+    "baseline frame emits light-space matrix");
+  const float baselineInvHalfExtent = glm::length(glm::vec3(
+    baselineMatrix[0][0], baselineMatrix[1][0], baselineMatrix[2][0]));
+  const float baselineInvHalfDepth = glm::length(glm::vec3(
+    baselineMatrix[0][2], baselineMatrix[1][2], baselineMatrix[2][2]));
+  const glm::vec3 stationaryWorld(0.25f, 0.0f, 0.25f);
+  const glm::vec2 baselineTexel =
+    lightTexelCoord(baselineMatrix, stationaryWorld);
+
+  const float offsets[3] = { 0.003f, 0.007f, 0.019f };
+  for (int step = 0; step < 3; ++step) {
+    dynamicCaster.setModelMatrix(glm::translate(
+      glm::mat4(1.0f), glm::vec3(1.5f + offsets[step], 0.5f, offsets[step])));
+    glm::mat4 movedMatrix(1.0f);
+    testTrue(
+      g,
+      renderLightSpaceMatrix(mock, renderer, scene, camera, &movedMatrix),
+      "moved caster frame emits light-space matrix");
+    const float movedInvHalfExtent = glm::length(
+      glm::vec3(movedMatrix[0][0], movedMatrix[1][0], movedMatrix[2][0]));
+    const float movedInvHalfDepth = glm::length(
+      glm::vec3(movedMatrix[0][2], movedMatrix[1][2], movedMatrix[2][2]));
+    testTrue(g,
+             std::abs(movedInvHalfExtent - baselineInvHalfExtent) < 1e-5f &&
+               std::abs(movedInvHalfDepth - baselineInvHalfDepth) < 1e-5f,
+             "sub-texel caster motion preserves ortho extent and depth span");
+    const glm::vec2 movedTexel = lightTexelCoord(movedMatrix, stationaryWorld);
+    const glm::vec2 delta = movedTexel - baselineTexel;
+    testTrue(g,
+             std::abs(delta.x - std::round(delta.x)) < 1e-3f &&
+               std::abs(delta.y - std::round(delta.y)) < 1e-3f,
+             "stationary surface stays locked to shadow-map texel phase");
+  }
+
+  // Push the dynamic caster far away within the perspective view frustum.
+  dynamicCaster.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(35.0f, 0.5f, -35.0f)));
+  glm::mat4 runawayMatrix(1.0f);
+  testTrue(
+    g,
+    renderLightSpaceMatrix(mock, renderer, scene, camera, &runawayMatrix),
+    "runaway caster frame emits light-space matrix");
+  const float runawayInvHalfExtent = glm::length(
+    glm::vec3(runawayMatrix[0][0], runawayMatrix[1][0], runawayMatrix[2][0]));
+  testTrue(g,
+           std::abs(runawayInvHalfExtent - baselineInvHalfExtent) < 1e-5f,
+           "runaway caster inside frustum does not expand shadow extent");
+
+  // Raise casters above the non-casting floor and verify downstream receiver
+  // points stay within [0, 1] light depth.
+  staticCaster.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 3.0f, 0.0f)));
+  dynamicCaster.setModelMatrix(
+    glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 3.0f, 0.0f)));
+  glm::mat4 elevatedMatrix(1.0f);
+  testTrue(
+    g,
+    renderLightSpaceMatrix(mock, renderer, scene, camera, &elevatedMatrix),
+    "elevated caster frame emits light-space matrix");
+  const glm::vec3 lightDir = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
+  const glm::vec3 floorShadowTarget =
+    glm::vec3(0.0f, 3.0f, 0.0f) - lightDir * (3.0f / lightDir.y);
+  const glm::vec4 targetClip =
+    elevatedMatrix * glm::vec4(floorShadowTarget, 1.0f);
+  const glm::vec3 targetNdc = glm::vec3(targetClip) / targetClip.w;
+  testTrue(g,
+           targetNdc.z >= -1.0f && targetNdc.z <= 1.0f,
+           "downstream non-casting receiver stays inside light depth range");
+}
+
 static void
 testMeshVisualMotionBlurUniformsFromSetters()
 {
@@ -1726,6 +1874,9 @@ registerMeshVisualTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.MeshVisual.NonCastingReceivesShadows", []() {
     return runMeshVisualCase(testMeshVisualNonCastingStillReceivesShadows);
+  });
+  registry.add("Illumo.MeshVisual.ShadowProjectionStabilization", []() {
+    return runMeshVisualCase(testMeshVisualShadowProjectionStabilization);
   });
   registry.add("Illumo.MeshVisual.MotionBlurUniformsFromSetters", []() {
     return runMeshVisualCase(testMeshVisualMotionBlurUniformsFromSetters);

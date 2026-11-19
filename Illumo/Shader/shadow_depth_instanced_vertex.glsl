@@ -17,6 +17,4 @@ layout (std140) uniform FrameUniforms
 void main()
 {
     gl_Position = uLightSpace * (aModel * vec4(aPos, 1.0));
-    // Same caster depth push as shadow_depth_vertex.glsl.
-    gl_Position.z += 0.002 * gl_Position.w;
 }

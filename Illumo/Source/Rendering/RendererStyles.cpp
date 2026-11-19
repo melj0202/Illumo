@@ -279,9 +279,15 @@ float calculateShadow(vec3 fragPos, vec3 normal, vec3 lightDir)
     }
 
     float currentDepth = projCoords.z;
+    float invHalfDepthSpan = length(vec3(
+        uLightSpaceMatrix[0].z, uLightSpaceMatrix[1].z, uLightSpaceMatrix[2].z));
+    const float kReferenceDepthSpan = 16.0;
+    float depthScale = invHalfDepthSpan > 1e-5
+        ? (0.5 * kReferenceDepthSpan * invHalfDepthSpan)
+        : 1.0;
     float tanTheta = min(sinTheta / max(nDotL, 0.1), 3.0);
-    float bias =
-        uShadowBias + uShadowSlopeScale * (1.0 - nDotL) + uShadowBias * tanTheta;
+    float bias = (uShadowBias + uShadowSlopeScale * (1.0 - nDotL) +
+        uShadowBias * tanTheta) * depthScale;
 
     if (uShadowPcf <= 0) {
         float pcfDepth = texture(uShadowMap, projCoords.xy).r;

@@ -37,6 +37,35 @@ copyUniformName(char* dest, size_t destSize, const char* name)
 
 } // namespace
 
+static void
+projectBoundsToLight(const AxisAlignedBounds3& worldBounds,
+                     const glm::mat4& lightView,
+                     glm::vec3* outMin,
+                     glm::vec3* outMax)
+{
+  if (outMin == nullptr || outMax == nullptr) {
+    return;
+  }
+  glm::vec3 lightMin(std::numeric_limits<float>::max());
+  glm::vec3 lightMax(std::numeric_limits<float>::lowest());
+  for (int x = 0; x < 2; ++x) {
+    for (int y = 0; y < 2; ++y) {
+      for (int z = 0; z < 2; ++z) {
+        const glm::vec3 corner(
+          x == 0 ? worldBounds.minimum.x : worldBounds.maximum.x,
+          y == 0 ? worldBounds.minimum.y : worldBounds.maximum.y,
+          z == 0 ? worldBounds.minimum.z : worldBounds.maximum.z);
+        const glm::vec3 lightCorner =
+          glm::vec3(lightView * glm::vec4(corner, 1.0f));
+        lightMin = glm::min(lightMin, lightCorner);
+        lightMax = glm::max(lightMax, lightCorner);
+      }
+    }
+  }
+  *outMin = lightMin;
+  *outMax = lightMax;
+}
+
 bool
 Renderer::buildBoundsFrustum(const Matrix4& matrix, BoundsFrustum* frustum)
 {
@@ -332,6 +361,10 @@ Renderer::releaseShadowResources()
   shadowFramebuffer = FramebufferHandle{};
   shadowDepthTexture = TextureHandle{};
   enrolledShadowMapSize = 0;
+  m_stabilizedShadowHalfExtent = 0.0f;
+  m_stabilizedShadowMapSize = 0;
+  m_stabilizedShadowBaseRadius = 0.0f;
+  m_stabilizedShadowLightDir = { 0.0f, 0.0f, 0.0f };
 }
 
 bool
@@ -444,54 +477,264 @@ Renderer::prepareShadowPass()
     return false;
   }
 
-  const glm::vec3 boundsMin(
-    shadowBoundsMin[0], shadowBoundsMin[1], shadowBoundsMin[2]);
-  const glm::vec3 boundsMax(
-    shadowBoundsMax[0], shadowBoundsMax[1], shadowBoundsMax[2]);
-  const glm::vec3 center = (boundsMin + boundsMax) * 0.5f;
-  const float sceneRadius = glm::length(boundsMax - boundsMin) * 0.5f;
   glm::vec3 lightUp(0.0f, 1.0f, 0.0f);
   if (std::abs(glm::dot(lightDirection, lightUp)) > 0.98f) {
     lightUp = glm::vec3(0.0f, 0.0f, 1.0f);
   }
-
-  const float lightDistance =
-    std::max(requestedShadowLightDistance, sceneRadius + 0.5f);
+  // Anchor the light-space X/Y axes to the world origin so caster motion does
+  // not shift the texel grid across stationary surfaces.
   const glm::mat4 lightView =
-    glm::lookAt(center + lightDirection * lightDistance, center, lightUp);
+    glm::lookAt(glm::vec3(0.0f), -lightDirection, lightUp);
 
-  glm::vec3 lightBoundsMin(std::numeric_limits<float>::max());
-  glm::vec3 lightBoundsMax(std::numeric_limits<float>::lowest());
-  for (int x = 0; x < 2; ++x) {
-    for (int y = 0; y < 2; ++y) {
-      for (int z = 0; z < 2; ++z) {
-        const glm::vec3 corner(x == 0 ? boundsMin.x : boundsMax.x,
-                               y == 0 ? boundsMin.y : boundsMax.y,
-                               z == 0 ? boundsMin.z : boundsMax.z);
-        const glm::vec3 lightCorner =
-          glm::vec3(lightView * glm::vec4(corner, 1.0f));
-        lightBoundsMin = glm::min(lightBoundsMin, lightCorner);
-        lightBoundsMax = glm::max(lightBoundsMax, lightCorner);
+  const float baseRadius = std::max(requestedShadowMinimumRadius, 0.1f);
+  BoundsFrustum cameraFitFrustum = cameraFrustum;
+  bool usePerspectiveXyCap = false;
+  glm::vec2 perspectiveFocusLightXY(0.0f);
+  float perspectiveRawXyCap = 0.0f;
+
+  if (cameraFrustum.valid) {
+    const Vector3 nearCenter =
+      0.25f * (cameraFrustum.corners[0] + cameraFrustum.corners[2] +
+               cameraFrustum.corners[4] + cameraFrustum.corners[6]);
+    const Vector3 farCenter =
+      0.25f * (cameraFrustum.corners[1] + cameraFrustum.corners[3] +
+               cameraFrustum.corners[5] + cameraFrustum.corners[7]);
+    const float nearDiag =
+      glm::length(cameraFrustum.corners[6] - cameraFrustum.corners[0]);
+    const float farDiag =
+      glm::length(cameraFrustum.corners[7] - cameraFrustum.corners[1]);
+    const Vector3 viewAxis = farCenter - nearCenter;
+    const float frustumDepth = glm::length(viewAxis);
+    const bool isPerspective =
+      frustumDepth > 0.001f && farDiag > nearDiag * 1.01f;
+    if (isPerspective) {
+      const Vector3 viewForward = viewAxis / frustumDepth;
+      bool hasVisibleDepth = false;
+      float minVisibleDepth = frustumDepth;
+      for (const ShadowCasterDesc& caster : shadowCasters) {
+        const AxisAlignedBounds3 casterBounds{
+          Vector3(
+            caster.boundsMin[0], caster.boundsMin[1], caster.boundsMin[2]),
+          Vector3(caster.boundsMax[0], caster.boundsMax[1], caster.boundsMax[2])
+        };
+        if (!casterBounds.intersects(cameraFrustum.worldBounds) ||
+            !boundsIntersectFrustum(casterBounds, cameraFrustum)) {
+          continue;
+        }
+        const Vector3 closestPoint(
+          viewForward.x >= 0.0f ? casterBounds.minimum.x
+                                : casterBounds.maximum.x,
+          viewForward.y >= 0.0f ? casterBounds.minimum.y
+                                : casterBounds.maximum.y,
+          viewForward.z >= 0.0f ? casterBounds.minimum.z
+                                : casterBounds.maximum.z);
+        const float casterMinDepth =
+          std::max(0.0f, glm::dot(closestPoint - nearCenter, viewForward));
+        minVisibleDepth = hasVisibleDepth
+                            ? std::min(minVisibleDepth, casterMinDepth)
+                            : casterMinDepth;
+        hasVisibleDepth = true;
       }
+
+      const float baseHorizon = std::max(12.0f, baseRadius * 4.0f);
+      float horizonScale = 1.0f;
+      while (hasVisibleDepth &&
+             minVisibleDepth > baseHorizon * horizonScale * 0.9f &&
+             horizonScale < 1024.0f) {
+        horizonScale *= 2.0f;
+      }
+      const float sliceDepth =
+        std::min(frustumDepth, baseHorizon * horizonScale);
+      if (sliceDepth < frustumDepth) {
+        const float sliceFraction = sliceDepth / frustumDepth;
+        const Vector3 slicedFarCenter = nearCenter + viewForward * sliceDepth;
+        cameraFitFrustum.planes[5] =
+          Vector4(-viewForward, glm::dot(viewForward, slicedFarCenter));
+        for (size_t cornerPair = 0; cornerPair < 4; ++cornerPair) {
+          cameraFitFrustum.corners[cornerPair * 2 + 1] =
+            glm::mix(cameraFrustum.corners[cornerPair * 2],
+                     cameraFrustum.corners[cornerPair * 2 + 1],
+                     sliceFraction);
+        }
+        cameraFitFrustum.worldBounds =
+          AxisAlignedBounds3{ cameraFitFrustum.corners[0],
+                              cameraFitFrustum.corners[0] };
+        for (size_t cornerIdx = 1; cornerIdx < cameraFitFrustum.corners.size();
+             ++cornerIdx) {
+          cameraFitFrustum.worldBounds.include(
+            cameraFitFrustum.corners[cornerIdx]);
+        }
+      }
+
+      const Vector3 focusWorld = nearCenter + viewForward * (sliceDepth * 0.5f);
+      perspectiveFocusLightXY =
+        glm::vec2(lightView * glm::vec4(focusWorld, 1.0f));
+      const float maxCameraHalfExtent = baseRadius * 4.0f * horizonScale;
+      perspectiveRawXyCap = maxCameraHalfExtent * 0.85f;
+      usePerspectiveXyCap = true;
     }
   }
 
-  const glm::vec2 lightCenter =
-    glm::vec2(lightBoundsMin + lightBoundsMax) * 0.5f;
-  const glm::vec2 lightHalfExtents =
-    glm::vec2(lightBoundsMax - lightBoundsMin) * 0.5f;
-  const float fitPadding = std::max(0.05f, sceneRadius * 0.02f);
-  const float halfExtent =
-    std::max(requestedShadowMinimumRadius,
-             std::max(lightHalfExtents.x, lightHalfExtents.y) + fitPadding);
-  const float depthPadding = std::max(0.05f, sceneRadius * 0.05f);
-  const float nearPlane = std::max(0.01f, -lightBoundsMax.z - depthPadding);
+  glm::vec2 xyLightMin(0.0f);
+  glm::vec2 xyLightMax(0.0f);
+  float xyFallbackZMin = 0.0f;
+  float xyFallbackZMax = 0.0f;
+  bool xyBoundsValid = false;
+  if (cameraFrustum.valid) {
+    for (const ShadowCasterDesc& caster : shadowCasters) {
+      const AxisAlignedBounds3 casterBounds{
+        Vector3(caster.boundsMin[0], caster.boundsMin[1], caster.boundsMin[2]),
+        Vector3(caster.boundsMax[0], caster.boundsMax[1], caster.boundsMax[2])
+      };
+      if (!casterBounds.intersects(cameraFitFrustum.worldBounds) ||
+          !boundsIntersectFrustum(casterBounds, cameraFitFrustum)) {
+        continue;
+      }
+      glm::vec3 cLightMin(0.0f);
+      glm::vec3 cLightMax(0.0f);
+      projectBoundsToLight(casterBounds, lightView, &cLightMin, &cLightMax);
+      if (usePerspectiveXyCap) {
+        const glm::vec2 capMin =
+          perspectiveFocusLightXY - glm::vec2(perspectiveRawXyCap);
+        const glm::vec2 capMax =
+          perspectiveFocusLightXY + glm::vec2(perspectiveRawXyCap);
+        if (cLightMax.x < capMin.x || cLightMin.x > capMax.x ||
+            cLightMax.y < capMin.y || cLightMin.y > capMax.y) {
+          continue;
+        }
+        cLightMin.x = std::max(cLightMin.x, capMin.x);
+        cLightMin.y = std::max(cLightMin.y, capMin.y);
+        cLightMax.x = std::min(cLightMax.x, capMax.x);
+        cLightMax.y = std::min(cLightMax.y, capMax.y);
+      }
+      if (!xyBoundsValid) {
+        xyLightMin = glm::vec2(cLightMin);
+        xyLightMax = glm::vec2(cLightMax);
+        xyFallbackZMin = cLightMin.z;
+        xyFallbackZMax = cLightMax.z;
+        xyBoundsValid = true;
+      } else {
+        xyLightMin = glm::min(xyLightMin, glm::vec2(cLightMin));
+        xyLightMax = glm::max(xyLightMax, glm::vec2(cLightMax));
+        xyFallbackZMin = std::min(xyFallbackZMin, cLightMin.z);
+        xyFallbackZMax = std::max(xyFallbackZMax, cLightMax.z);
+      }
+    }
+  }
+  if (!xyBoundsValid) {
+    const AxisAlignedBounds3 fallbackBounds =
+      cameraFrustum.valid
+        ? AxisAlignedBounds3{ Vector3(anchor.boundsMin[0],
+                                      anchor.boundsMin[1],
+                                      anchor.boundsMin[2]),
+                              Vector3(anchor.boundsMax[0],
+                                      anchor.boundsMax[1],
+                                      anchor.boundsMax[2]) }
+        : AxisAlignedBounds3{
+            Vector3(shadowBoundsMin[0], shadowBoundsMin[1], shadowBoundsMin[2]),
+            Vector3(shadowBoundsMax[0], shadowBoundsMax[1], shadowBoundsMax[2])
+          };
+    glm::vec3 fallbackLightMin(0.0f);
+    glm::vec3 fallbackLightMax(0.0f);
+    projectBoundsToLight(
+      fallbackBounds, lightView, &fallbackLightMin, &fallbackLightMax);
+    xyLightMin = glm::vec2(fallbackLightMin);
+    xyLightMax = glm::vec2(fallbackLightMax);
+    xyFallbackZMin = fallbackLightMin.z;
+    xyFallbackZMax = fallbackLightMax.z;
+  }
+
+  const glm::vec2 rawCenter = (xyLightMin + xyLightMax) * 0.5f;
+  const glm::vec2 rawHalfExtents = (xyLightMax - xyLightMin) * 0.5f;
+  const float rawMaxHalf = std::max(rawHalfExtents.x, rawHalfExtents.y);
+  const float fitPadding = std::max(0.05f, rawMaxHalf * 0.08f);
+  const float texelPadScale =
+    requestedShadowMapSize > 2
+      ? static_cast<float>(requestedShadowMapSize) /
+          static_cast<float>(requestedShadowMapSize - 2)
+      : 1.0f;
+  const float requiredHalfExtent =
+    std::max(baseRadius, (rawMaxHalf + fitPadding) * texelPadScale);
+
+  float quantizedHalfExtent = baseRadius;
+  while (quantizedHalfExtent < requiredHalfExtent &&
+         quantizedHalfExtent < 65536.0f) {
+    quantizedHalfExtent *= 2.0f;
+  }
+
+  const glm::vec3 previousLightDir(m_stabilizedShadowLightDir[0],
+                                   m_stabilizedShadowLightDir[1],
+                                   m_stabilizedShadowLightDir[2]);
+  const bool sameConfig =
+    m_stabilizedShadowHalfExtent > 0.0f &&
+    m_stabilizedShadowMapSize == requestedShadowMapSize &&
+    std::abs(m_stabilizedShadowBaseRadius - baseRadius) <= 0.0001f &&
+    glm::dot(previousLightDir, lightDirection) >= 0.9999f;
+  if (sameConfig && requiredHalfExtent <= m_stabilizedShadowHalfExtent &&
+      requiredHalfExtent >= m_stabilizedShadowHalfExtent * 0.4f) {
+    quantizedHalfExtent = m_stabilizedShadowHalfExtent;
+  } else {
+    m_stabilizedShadowHalfExtent = quantizedHalfExtent;
+    m_stabilizedShadowMapSize = requestedShadowMapSize;
+    m_stabilizedShadowBaseRadius = baseRadius;
+    m_stabilizedShadowLightDir = requestedShadowLightDirection;
+  }
+
+  const float halfExtent = quantizedHalfExtent;
+  const float texelSize =
+    (2.0f * halfExtent) / static_cast<float>(requestedShadowMapSize);
+  const glm::vec2 snappedCenter =
+    texelSize > 0.000001f ? glm::floor(rawCenter / texelSize + 0.5f) * texelSize
+                          : rawCenter;
+
+  float zLightMin = 0.0f;
+  float zLightMax = 0.0f;
+  bool zBoundsValid = false;
+  const glm::vec2 orthoXyMin = snappedCenter - glm::vec2(halfExtent);
+  const glm::vec2 orthoXyMax = snappedCenter + glm::vec2(halfExtent);
+  for (const ShadowCasterDesc& caster : shadowCasters) {
+    const AxisAlignedBounds3 casterBounds{
+      Vector3(caster.boundsMin[0], caster.boundsMin[1], caster.boundsMin[2]),
+      Vector3(caster.boundsMax[0], caster.boundsMax[1], caster.boundsMax[2])
+    };
+    if (shadowCasterVolumeValid &&
+        (!casterBounds.intersects(shadowCasterVolume) ||
+         !boundsIntersectFrustum(casterBounds, shadowCasterFrustum))) {
+      continue;
+    }
+    glm::vec3 cLightMin(0.0f);
+    glm::vec3 cLightMax(0.0f);
+    projectBoundsToLight(casterBounds, lightView, &cLightMin, &cLightMax);
+    if (cLightMax.x < orthoXyMin.x || cLightMin.x > orthoXyMax.x ||
+        cLightMax.y < orthoXyMin.y || cLightMin.y > orthoXyMax.y) {
+      continue;
+    }
+    if (!zBoundsValid) {
+      zLightMin = cLightMin.z;
+      zLightMax = cLightMax.z;
+      zBoundsValid = true;
+    } else {
+      zLightMin = std::min(zLightMin, cLightMin.z);
+      zLightMax = std::max(zLightMax, cLightMax.z);
+    }
+  }
+  if (!zBoundsValid) {
+    zLightMin = xyFallbackZMin;
+    zLightMax = xyFallbackZMax;
+  }
+
+  const float nearPadding = std::max(0.5f, halfExtent * 0.1f);
+  const float farPadding = std::max(nearPadding, requestedShadowLightDistance);
+  constexpr float kDepthStep = 4.0f;
+  const float nearPlane =
+    std::floor((-zLightMax - nearPadding) / kDepthStep) * kDepthStep;
   const float farPlane =
-    std::max(nearPlane + 0.1f, -lightBoundsMin.z + depthPadding);
-  const glm::mat4 lightProjection = glm::ortho(lightCenter.x - halfExtent,
-                                               lightCenter.x + halfExtent,
-                                               lightCenter.y - halfExtent,
-                                               lightCenter.y + halfExtent,
+    std::max(nearPlane + kDepthStep,
+             std::ceil((-zLightMin + farPadding) / kDepthStep) * kDepthStep);
+  const glm::mat4 lightProjection = glm::ortho(snappedCenter.x - halfExtent,
+                                               snappedCenter.x + halfExtent,
+                                               snappedCenter.y - halfExtent,
+                                               snappedCenter.y + halfExtent,
                                                nearPlane,
                                                farPlane);
   const glm::mat4 lightSpaceMatrix = lightProjection * lightView;
