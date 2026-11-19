@@ -10,9 +10,11 @@ from collections import deque
 from dataclasses import dataclass, field
 import json
 import io
+import math
 import os
 from pathlib import Path
 import platform
+import random
 import re
 import shlex
 import shutil
@@ -350,6 +352,377 @@ ANSI_POP_TITLE = "\x1b[23;0t"
 _ANSI_SEQUENCE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 # Cyan to violet; the wordmark and progress bars sweep across it.
 GRADIENT_COLORS = (51, 45, 39, 33, 69, 105, 141, 177)
+
+RGB = tuple[int, int, int]
+
+
+def rgb_fg(color: RGB) -> str:
+    return f"\x1b[38;2;{color[0]};{color[1]};{color[2]}m"
+
+
+def rgb_bg(color: RGB) -> str:
+    return f"\x1b[48;2;{color[0]};{color[1]};{color[2]}m"
+
+
+def lerp_rgb(a: RGB, b: RGB, t: float) -> RGB:
+    clamped = 0.0 if t <= 0.0 else (1.0 if t >= 1.0 else t)
+    return (
+        int(a[0] + (b[0] - a[0]) * clamped + 0.5),
+        int(a[1] + (b[1] - a[1]) * clamped + 0.5),
+        int(a[2] + (b[2] - a[2]) * clamped + 0.5),
+    )
+
+
+def boost_rgb(color: RGB, amount: float) -> RGB:
+    return lerp_rgb(color, (255, 255, 255), amount)
+
+
+def scale_rgb(color: RGB, factor: float) -> RGB:
+    return (
+        max(0, min(255, int(color[0] * factor + 0.5))),
+        max(0, min(255, int(color[1] * factor + 0.5))),
+        max(0, min(255, int(color[2] * factor + 0.5))),
+    )
+
+
+def hsv_to_rgb(hue: float, saturation: float, value: float) -> RGB:
+    hue = hue % 1.0
+    sector = int(hue * 6.0)
+    frac = hue * 6.0 - sector
+    p = value * (1.0 - saturation)
+    q = value * (1.0 - frac * saturation)
+    t = value * (1.0 - (1.0 - frac) * saturation)
+    r, g, b = (
+        (value, t, p), (q, value, p), (p, value, t),
+        (p, q, value), (t, p, value), (value, p, q),
+    )[sector % 6]
+    return int(r * 255 + 0.5), int(g * 255 + 0.5), int(b * 255 + 0.5)
+
+
+def sample_gradient(stops: Sequence[RGB], t: float, wrap: bool = False) -> RGB:
+    if not stops:
+        return (200, 220, 255)
+    if len(stops) == 1:
+        return stops[0]
+    if wrap:
+        pos = (t % 1.0) * len(stops)
+        low = int(pos) % len(stops)
+        high = (low + 1) % len(stops)
+        return lerp_rgb(stops[low], stops[high], pos - math.floor(pos))
+    clamped = 0.0 if t <= 0.0 else (1.0 if t >= 1.0 else t)
+    pos = clamped * (len(stops) - 1)
+    low = int(pos)
+    high = min(len(stops) - 1, low + 1)
+    return lerp_rgb(stops[low], stops[high], pos - low)
+
+
+def cli_ansi_enabled() -> bool:
+    return getattr(sys.stdout, "isatty", lambda: False)() and not os.environ.get("NO_COLOR")
+
+
+@dataclass(frozen=True)
+class DashboardTheme:
+    key: str
+    name: str
+    tagline: str
+    banner_stops: tuple[RGB, ...]
+    frame_base: RGB
+    frame_glow: RGB
+    accent: RGB
+    selected_left: RGB
+    selected_right: RGB
+    selected_fg: RGB
+    pulse_stops: tuple[RGB, ...]
+    prism: bool = False
+
+
+DASHBOARD_THEMES: dict[str, DashboardTheme] = {
+    "illumo": DashboardTheme(
+        key="illumo", name="Illumo", tagline="bioluminescent cyan to ultraviolet",
+        banner_stops=((0, 245, 255), (48, 155, 255), (156, 108, 255), (232, 121, 249)),
+        frame_base=(76, 86, 146), frame_glow=(72, 240, 255), accent=(56, 220, 255),
+        selected_left=(20, 62, 104), selected_right=(44, 30, 82), selected_fg=(240, 248, 255),
+        pulse_stops=((0, 225, 255), (130, 248, 255), (218, 162, 255), (130, 248, 255)),
+    ),
+    "synthwave": DashboardTheme(
+        key="synthwave", name="Synthwave", tagline="80s neon magenta and laser cyan",
+        banner_stops=((255, 42, 164), (186, 85, 255), (0, 240, 255), (255, 198, 64)),
+        frame_base=(122, 54, 134), frame_glow=(255, 86, 200), accent=(255, 92, 196),
+        selected_left=(84, 22, 74), selected_right=(24, 54, 88), selected_fg=(255, 240, 252),
+        pulse_stops=((255, 64, 180), (255, 198, 86), (0, 240, 255), (190, 96, 255)),
+    ),
+    "ember": DashboardTheme(
+        key="ember", name="Ember", tagline="molten solar gold and forge crimson",
+        banner_stops=((255, 224, 82), (255, 126, 38), (236, 54, 82), (176, 46, 124)),
+        frame_base=(136, 68, 52), frame_glow=(255, 196, 76), accent=(255, 158, 54),
+        selected_left=(92, 42, 18), selected_right=(66, 20, 38), selected_fg=(255, 246, 232),
+        pulse_stops=((255, 140, 40), (255, 230, 120), (255, 82, 82), (255, 210, 96)),
+    ),
+    "matrix": DashboardTheme(
+        key="matrix", name="Matrix", tagline="phosphor emerald CRT bloom",
+        banner_stops=((180, 255, 108), (0, 242, 122), (0, 198, 154), (24, 146, 106)),
+        frame_base=(40, 110, 74), frame_glow=(120, 255, 168), accent=(64, 246, 140),
+        selected_left=(16, 68, 42), selected_right=(12, 46, 38), selected_fg=(226, 255, 236),
+        pulse_stops=((32, 220, 112), (175, 255, 152), (0, 240, 180), (120, 255, 150)),
+    ),
+    "aurora": DashboardTheme(
+        key="aurora", name="Aurora", tagline="glacial mint and northern indigo",
+        banner_stops=((94, 255, 214), (56, 189, 248), (129, 140, 248), (244, 114, 182)),
+        frame_base=(68, 96, 134), frame_glow=(116, 255, 224), accent=(96, 238, 220),
+        selected_left=(20, 68, 76), selected_right=(44, 38, 86), selected_fg=(236, 252, 255),
+        pulse_stops=((94, 255, 214), (110, 214, 255), (196, 148, 255), (110, 214, 255)),
+    ),
+    "prism": DashboardTheme(
+        key="prism", name="Prism", tagline="full-spectrum animated RGB rainbow",
+        banner_stops=((255, 72, 118), (255, 206, 64), (64, 242, 148), (64, 196, 255), (188, 112, 255)),
+        frame_base=(96, 84, 144), frame_glow=(255, 236, 140), accent=(110, 236, 255),
+        selected_left=(56, 30, 88), selected_right=(22, 64, 92), selected_fg=(255, 255, 255),
+        pulse_stops=((255, 92, 148), (255, 224, 96), (96, 255, 168), (96, 216, 255), (200, 128, 255)),
+        prism=True,
+    ),
+}
+THEME_ORDER = tuple(DASHBOARD_THEMES)
+
+
+def default_theme_name() -> str:
+    chosen = os.environ.get("ILLUMO_THEME", "").strip().lower()
+    return chosen if chosen in DASHBOARD_THEMES else "illumo"
+
+
+def resolve_theme(name: str | None = None) -> DashboardTheme:
+    key = (name or default_theme_name()).strip().lower()
+    return DASHBOARD_THEMES.get(key, DASHBOARD_THEMES["illumo"])
+
+
+def theme_color(theme: DashboardTheme, t: float, phase: float = 0.0) -> RGB:
+    if theme.prism:
+        return hsv_to_rgb((t * 0.85 + phase) % 1.0, 0.84, 1.0)
+    if phase != 0.0:
+        return sample_gradient(theme.banner_stops, t + phase, wrap=True)
+    return sample_gradient(theme.banner_stops, t, wrap=False)
+
+
+def perimeter_glow_rgb(
+    theme: DashboardTheme,
+    pos: float,
+    perimeter: int,
+    frame: int | None,
+    *,
+    override_base: RGB | None = None,
+    override_glow: RGB | None = None,
+) -> RGB:
+    """24-bit color along the box frame with two orbiting neon glints when animated."""
+    span = max(1, perimeter)
+    u = (pos % span) / span
+    if override_base is not None:
+        base = override_base
+    elif theme.prism:
+        phase = (frame or 0) * 0.015
+        base = scale_rgb(hsv_to_rgb((u + phase) % 1.0, 0.65, 1.0), 0.72)
+    else:
+        tint = sample_gradient(theme.banner_stops, u, wrap=True)
+        base = lerp_rgb(theme.frame_base, tint, 0.34)
+    if frame is None:
+        return base
+    glow_color = override_glow or (
+        boost_rgb(hsv_to_rgb((u + frame * 0.015) % 1.0, 0.55, 1.0), 0.35)
+        if theme.prism else theme.frame_glow
+    )
+    head_a = (frame * 1.6) % span
+    head_b = (head_a + span * 0.5) % span
+    dist_a = min(abs(pos - head_a), span - abs(pos - head_a))
+    dist_b = min(abs(pos - head_b), span - abs(pos - head_b))
+    intensity = max(
+        math.exp(-(dist_a * dist_a) / 48.0),
+        0.72 * math.exp(-(dist_b * dist_b) / 36.0),
+    )
+    return lerp_rgb(base, glow_color, min(1.0, intensity))
+
+
+def _horizontal_border_segments(
+    left: str,
+    right: str,
+    fill: str,
+    width: int,
+    label: Sequence[tuple[str, str]],
+    glyphs: dict,
+    ansi: bool,
+    *,
+    theme: DashboardTheme,
+    frame: int | None,
+    start_pos: float,
+    step: float,
+    perimeter: int,
+    override_base: RGB | None = None,
+    override_glow: RGB | None = None,
+    bg_rgb: RGB | None = None,
+) -> str:
+    """Box rule identical in text to frame_rule(), shaded in 24-bit TrueColor."""
+    if not ansi:
+        return frame_rule(left, right, label, width, glyphs, False)
+    inner = max(0, width - 2)
+    label_width = sum(dashboard_visible_width(text) for text, _style in label)
+    has_label = bool(label and inner >= 6)
+    used = min(label_width, inner - 3) if has_label else 0
+    bg_prefix = rgb_bg(bg_rgb) if bg_rgb is not None else ""
+    # Paint border cells in 2-cell chunks for smooth gradients with compact escapes.
+    parts: list[str] = []
+
+    def paint_char(col: int, text: str) -> None:
+        rgb = perimeter_glow_rgb(
+            theme, start_pos + step * col, perimeter, frame,
+            override_base=override_base, override_glow=override_glow,
+        )
+        parts.append(f"{bg_prefix}{rgb_fg(rgb)}{text}{ANSI_RESET}")
+
+    paint_char(0, left)
+    if has_label:
+        paint_char(1, fill + " ")
+        parts.append(render_segments(label, used, True, base=bg_prefix, ellipsis=glyphs["ellipsis"]))
+        tail_start = 3 + used
+        tail_len = max(0, inner - 3 - used)
+        if tail_len:
+            paint_char(tail_start, " ")
+            col = tail_start + 1
+            remaining = tail_len
+            while remaining > 0:
+                chunk = min(2, remaining)
+                paint_char(col, fill * chunk)
+                col += chunk
+                remaining -= chunk
+        else:
+            paint_char(tail_start, " ")
+    else:
+        col = 1
+        remaining = inner
+        while remaining > 0:
+            chunk = min(2, remaining)
+            paint_char(col, fill * chunk)
+            col += chunk
+            remaining -= chunk
+    paint_char(width - 1, right)
+    return "".join(parts)
+
+
+def ambient_bg_rgb(
+    theme: DashboardTheme,
+    col: int,
+    row_y: int,
+    width: int,
+    total_rows: int,
+    frame: int | None,
+    *,
+    header_glow: float = 0.0,
+    wave_pos: float | None = None,
+) -> RGB:
+    """Deep living 24-bit cosmic nebula background for one dashboard cell."""
+    nx = col / max(1, width - 1)
+    ny = row_y / max(1, total_rows - 1)
+    deep = scale_rgb(theme.selected_right, 0.24)
+    mid = scale_rgb(theme.selected_left, 0.42)
+    if frame is not None:
+        t = frame * 0.095
+        # Smooth vertical aurora wave across rows so text stays unbroken while the backdrop breathes.
+        swirl = 0.5 + 0.5 * math.sin(ny * 4.4 - t)
+        bg = lerp_rgb(deep, mid, swirl * 0.78)
+        if theme.prism:
+            prism_tint = scale_rgb(hsv_to_rgb((ny * 0.45 + frame * 0.012) % 1.0, 0.65, 1.0), 0.16)
+            bg = lerp_rgb(bg, prism_tint, 0.55)
+    else:
+        bg = lerp_rgb(deep, mid, 0.28 + 0.48 * (1.0 - ny))
+    if header_glow > 0.0:
+        # Backlit radial aura centered behind the ILLUMO logo.
+        dx = (nx - 0.5) * 2.2
+        aura = math.exp(-(dx * dx) * 2.1) * header_glow
+        if frame is not None:
+            aura *= 0.84 + 0.16 * math.sin(frame * 0.14)
+        glow_tint = scale_rgb(theme_color(theme, nx, phase=(frame or 0) * 0.01 if theme.prism else 0.0), 0.36)
+        bg = lerp_rgb(bg, glow_tint, min(0.85, aura))
+    if wave_pos is not None:
+        # Diagonal full-console energy shockwave sweeping across all rows.
+        diag = nx * 0.75 + ny * 0.45
+        dist = diag - wave_pos
+        ring = math.exp(-(dist * dist) / 0.009)
+        if ring > 0.02:
+            wave_rgb = scale_rgb(boost_rgb(theme.accent, 0.35), 0.68)
+            bg = lerp_rgb(bg, wave_rgb, min(0.9, ring))
+    return bg
+
+
+def render_gradient_row(
+    segments: Sequence[tuple[str, str]],
+    width: int,
+    ansi: bool,
+    left_bg: RGB,
+    right_bg: RGB,
+    fg_rgb: RGB,
+    ellipsis: str = "...",
+    flash: float = 0.0,
+    flash_rgb: RGB = (255, 255, 255),
+    shimmer_x: float | None = None,
+    shimmer_rgb: RGB = (255, 255, 255),
+    ambient_fn=None,
+) -> str:
+    """Lay styled runs across a 24-bit horizontal background shader ribbon."""
+    if not ansi or width < 1:
+        return render_segments(segments, width, ansi, "", ellipsis)
+    total = sum(dashboard_visible_width(text) for text, _style in segments)
+    overflow = total > width
+    if overflow and dashboard_visible_width(ellipsis) > width:
+        ellipsis = "." * width
+    limit = width - dashboard_visible_width(ellipsis) if overflow else width
+    cells: list[tuple[str, str, int]] = []
+    used = 0
+    full = False
+    for text, style in segments:
+        for character in text:
+            cell = dashboard_visible_width(character)
+            if used + cell > limit:
+                full = True
+                break
+            cells.append((character, style, used))
+            used += cell
+        if full:
+            break
+    if overflow:
+        tail_style = cells[-1][1] if cells else ""
+        for character in ellipsis:
+            cell = dashboard_visible_width(character)
+            cells.append((character, tail_style, used))
+            used += cell
+    while used < width:
+        cells.append((" ", "", used))
+        used += 1
+    default_fg = rgb_fg(fg_rgb) if fg_rgb is not None else ""
+    span = max(1, width - 1)
+    out: list[str] = []
+    # Coalesce runs sharing identical (bg, style) so strings stay intact and ANSI stays compact.
+    last_bg: RGB | None = None
+    last_style = None
+    for character, style, col in cells:
+        b_col = (col // 2) * 2
+        if ambient_fn is not None:
+            bg = ambient_fn(b_col)
+        else:
+            t = min(1.0, b_col / span)
+            bg = lerp_rgb(left_bg, right_bg, t)
+            if shimmer_x is not None:
+                d = abs(b_col - shimmer_x)
+                if d < 10.0:
+                    bg = lerp_rgb(bg, shimmer_rgb, 0.28 * math.exp(-(d * d) / 18.0))
+            if flash > 0.0:
+                bg = lerp_rgb(bg, flash_rgb, min(0.75, flash))
+        if bg != last_bg or style != last_style:
+            fg = style if style else default_fg
+            if out:
+                out.append(ANSI_RESET)
+            out.append(f"{rgb_bg(bg)}{fg}")
+            last_bg = bg
+            last_style = style
+        out.append(character)
+    if out:
+        out.append(ANSI_RESET)
+    return "".join(out)
 
 # Unicode glyphs, with ASCII stand-ins for consoles whose encoding lacks them
 # (a redirected Windows stdout is cp1252). Block and arrow glyphs are CP437.
@@ -829,6 +1202,12 @@ class DashboardState:
     # Animation clock (ticks) and the tick at which the status last changed.
     frame: int = 0
     status_frame: int | None = None
+    # Active TrueColor visual theme key, transient row flash, full-console wave, and sidekick reactor.
+    theme: str = field(default_factory=default_theme_name)
+    flash_row: int | None = None
+    flash_frame: int | None = None
+    wave_frame: int | None = None
+    reactor_mode: str = "torus"
     # (key, monotonic time, value) for the file-backed workspace status line.
     workspace_cache: tuple | None = None
 
@@ -1286,19 +1665,22 @@ def _dashboard_workspace_status(state: DashboardState, ok: str, bad: str) -> tup
             ANSI_YELLOW)
 
 
-def gradient_segments(text: str, offset: int = 0) -> list[tuple[str, str]]:
-    """One styled run per glyph, sweeping the wordmark gradient."""
+def gradient_segments(
+    text: str, offset: float = 0.0, theme: DashboardTheme | None = None,
+) -> list[tuple[str, str]]:
+    """One styled run per glyph, sweeping the active TrueColor theme gradient."""
+    palette = theme or resolve_theme()
     visible = sum(1 for character in text if not character.isspace())
     span = max(1, visible - 1)
+    phase = (offset / 8.0) if offset else 0.0
     segments: list[tuple[str, str]] = []
     seen = 0
     for character in text:
         if character.isspace():
             segments.append((character, ""))
             continue
-        position = (seen / span) * (len(GRADIENT_COLORS) - 1) + offset
-        color = GRADIENT_COLORS[int(round(position)) % len(GRADIENT_COLORS)]
-        segments.append((character, f"{ANSI_BOLD}\x1b[38;5;{color}m"))
+        color = theme_color(palette, seen / span, phase=phase)
+        segments.append((character, f"{ANSI_BOLD}{rgb_fg(color)}"))
         seen += 1
     return segments
 
@@ -1379,14 +1761,30 @@ def dashboard_value_text(value: str, glyphs: dict) -> str:
     return value
 
 
-def banner_segments(row: str) -> list[tuple[str, str]]:
-    """One banner row, colored by column so the gradient runs vertically true."""
+def banner_segments(
+    row: str,
+    row_index: int = 0,
+    frame: int | None = None,
+    theme: DashboardTheme | None = None,
+) -> list[tuple[str, str]]:
+    """One banner row shaded in 24-bit TrueColor with a subtle 2D diagonal shimmer."""
+    palette = theme or resolve_theme()
     width = max(1, len(BANNER_ROWS[0]) - 1)
-    return [
-        (character, "" if character == " " else
-         f"{ANSI_BOLD}\x1b[38;5;{GRADIENT_COLORS[column * (len(GRADIENT_COLORS) - 1) // width]}m")
-        for column, character in enumerate(row)
-    ]
+    phase = (frame * 0.014) if (frame is not None and palette.prism) else 0.0
+    result: list[tuple[str, str]] = []
+    for column, character in enumerate(row):
+        if character == " ":
+            result.append((character, ""))
+            continue
+        t = column / width
+        if frame is not None:
+            wave = 0.08 * math.sin(frame * 0.14 + column * 0.28 - row_index * 0.85)
+            shimmer = 0.16 * max(0.0, math.sin(frame * 0.11 - column * 0.22 + row_index * 0.7))
+            rgb = boost_rgb(theme_color(palette, t + wave, phase=phase), shimmer)
+        else:
+            rgb = theme_color(palette, t + row_index * 0.04, phase=0.0)
+        result.append((character, f"{ANSI_BOLD}{rgb_fg(rgb)}"))
+    return result
 
 
 def format_age(seconds: float) -> str:
@@ -1470,32 +1868,158 @@ def render_dashboard(
         hit_regions.clear()
     glyphs = terminal_glyphs()
     ellipsis = glyphs["ellipsis"]
-    vertical = dashboard_style(glyphs["vertical"], ANSI_FRAME, ansi)
+    theme = resolve_theme(state.theme)
+    accent_style = ANSI_BOLD + rgb_fg(theme.accent)
+    tall_banner = (
+        terminal_rows is not None and terminal_rows >= BANNER_MIN_ROWS
+        and glyphs is UNICODE_GLYPHS and inner_width >= 40
+    )
+    keys_pairs = (
+        (glyphs["up_down"], " move  "),
+        (glyphs["left_right"], " change  "),
+        ("Enter", " run  "),
+        ("/", " find  "),
+        ("g", " theme  "),
+        ("f", " flair  "),
+        ("?", " help  "),
+        ("q", " quit"),
+    )
+    keys_help = "".join(k + v for k, v in keys_pairs)
+    mouse_help = "Mouse: click, wheel"
+    combined_help = f"{keys_help} | {mouse_help}"
+    split_mouse = mouse_enabled and dashboard_visible_width(combined_help) + 1 > inner_width
+    # Exact row count so the orbiting TrueColor perimeter glow closes seamlessly.
+    total_rows = 1 + (4 if tall_banner else 1) + 2 + 2 + len(DASHBOARD_ITEMS) + 1 + (2 if split_mouse else 1) + 2
+    perimeter = 2 * (width - 1) + 2 * max(1, total_rows - 1)
+    wave_pos: float | None = None
+    if frame is not None and state.wave_frame is not None:
+        age = frame - state.wave_frame
+        if 0 <= age < 16:
+            wave_pos = -0.15 + (age / 15.0) * 1.55
+    base_glass = scale_rgb(theme.selected_right, 0.22)
 
-    def border(left: str, right: str, title: str = "", title_style: str = "") -> None:
+    def _side_rails(row_y: int, scanline: bool = False) -> tuple[str, str]:
+        if not ansi:
+            return glyphs["vertical"], glyphs["vertical"]
+        if scanline:
+            beam = rgb_fg(boost_rgb(theme.accent, 0.5))
+            v = f"{rgb_bg(scale_rgb(theme.accent, 0.35))}{beam}{glyphs['vertical']}{ANSI_RESET}"
+            return v, v
+        left_rgb = perimeter_glow_rgb(theme, perimeter - row_y, perimeter, frame)
+        right_rgb = perimeter_glow_rgb(theme, (width - 1) + row_y, perimeter, frame)
+        left_bg = ambient_bg_rgb(theme, 0, row_y, width, total_rows, frame, wave_pos=wave_pos)
+        right_bg = ambient_bg_rgb(theme, width - 1, row_y, width, total_rows, frame, wave_pos=wave_pos)
+        return (
+            f"{rgb_bg(left_bg)}{rgb_fg(left_rgb)}{glyphs['vertical']}{ANSI_RESET}",
+            f"{rgb_bg(right_bg)}{rgb_fg(right_rgb)}{glyphs['vertical']}{ANSI_RESET}",
+        )
+
+    def border(
+        left: str, right: str, title: str = "", title_style: str = "",
+        *, outer: str = "", title_segments: Sequence[tuple[str, str]] | None = None,
+    ) -> None:
         # Section titles sit in the rule itself, so the whole console still
         # fits a default 30-row terminal (taller output disables the mouse).
-        label = [(title, title_style)] if title and inner_width >= 12 else ()
-        lines.append(frame_rule(left, right, label, width, glyphs, ansi))
+        label: Sequence[tuple[str, str]] = ()
+        if inner_width >= 12:
+            if title_segments is not None:
+                label = title_segments
+            elif title:
+                label = [(title, title_style)]
+        row_y = len(lines)
+        scanline = ansi and reveal is not None and 0 < reveal < total_rows and row_y == reveal - 1
+        row_bg = ambient_bg_rgb(theme, width // 2, row_y, width, total_rows, frame, wave_pos=wave_pos) if ansi else None
+        if scanline:
+            beam_rgb = boost_rgb(theme.accent, 0.45)
+            lines.append(_horizontal_border_segments(
+                left, right, glyphs["horizontal"], width, label, glyphs, ansi,
+                theme=theme, frame=None, start_pos=0, step=1, perimeter=perimeter,
+                override_base=beam_rgb, bg_rgb=scale_rgb(theme.accent, 0.32),
+            ))
+            return
+        if outer == "top":
+            lines.append(_horizontal_border_segments(
+                left, right, glyphs["horizontal"], width, label, glyphs, ansi,
+                theme=theme, frame=frame, start_pos=0, step=1, perimeter=perimeter,
+                bg_rgb=row_bg,
+            ))
+        elif outer == "bottom":
+            bottom_start = (width - 1) + (total_rows - 1) + (width - 1)
+            lines.append(_horizontal_border_segments(
+                left, right, glyphs["horizontal"], width, label, glyphs, ansi,
+                theme=theme, frame=frame, start_pos=bottom_start, step=-1, perimeter=perimeter,
+                bg_rgb=row_bg,
+            ))
+        else:
+            # Inner dividers: subtly shaded with the theme accent on the rails.
+            lines.append(_horizontal_border_segments(
+                left, right, glyphs["horizontal"], width, label, glyphs, ansi,
+                theme=theme, frame=None, start_pos=row_y * 2, step=0.6, perimeter=perimeter,
+                override_base=scale_rgb(theme.frame_base, 0.92), bg_rgb=row_bg,
+            ))
 
-    def row(segments: Sequence[tuple[str, str]], base: str = "") -> None:
-        lines.append(vertical + render_segments(segments, inner_width, ansi, base, ellipsis) + vertical)
+    def row(
+        segments: Sequence[tuple[str, str]],
+        selected: bool = False,
+        flash: float = 0.0,
+        header_glow: float = 0.0,
+    ) -> None:
+        row_y = len(lines)
+        scanline = ansi and reveal is not None and 0 < reveal < total_rows and row_y == reveal - 1
+        left_rail, right_rail = _side_rails(row_y, scanline=scanline)
+        if scanline:
+            body = render_gradient_row(
+                segments, inner_width, ansi,
+                scale_rgb(theme.accent, 0.38), scale_rgb(theme.frame_glow, 0.22),
+                boost_rgb(theme.selected_fg, 0.4), ellipsis,
+            )
+        elif selected:
+            shimmer_x = ((frame * 2.2) % (inner_width + 24)) - 12 if frame is not None else None
+            body = render_gradient_row(
+                segments, inner_width, ansi,
+                theme.selected_left, theme.selected_right, theme.selected_fg,
+                ellipsis, flash=flash, flash_rgb=theme.accent,
+                shimmer_x=shimmer_x, shimmer_rgb=boost_rgb(theme.accent, 0.45),
+            )
+        elif flash > 0.0 and ansi:
+            body = render_gradient_row(
+                segments, inner_width, ansi,
+                scale_rgb(theme.accent, 0.4 * flash), scale_rgb(theme.frame_glow, 0.18 * flash),
+                theme.selected_fg, ellipsis,
+            )
+        elif ansi:
+            body = render_gradient_row(
+                segments, inner_width, True,
+                base_glass, base_glass, theme.selected_fg, ellipsis,
+                ambient_fn=lambda col, _y=row_y, _g=header_glow: ambient_bg_rgb(
+                    theme, col + 1, _y, width, total_rows, frame,
+                    header_glow=_g, wave_pos=wave_pos,
+                ),
+            )
+        else:
+            body = render_segments(segments, inner_width, False, "", ellipsis)
+        lines.append(left_rail + body + right_rail)
 
-    border(glyphs["top_left"], glyphs["top_right"])
-    if (terminal_rows is not None and terminal_rows >= BANNER_MIN_ROWS
-            and glyphs is UNICODE_GLYPHS and inner_width >= 40):
+    border(glyphs["top_left"], glyphs["top_right"], outer="top")
+    if tall_banner:
         band = None if frame is None else shine_band(frame, len(BANNER_ROWS[0]) + len(BANNER_ROWS))
         for index, banner_row in enumerate(BANNER_ROWS):
             # Offsetting each row by its index tilts the sheen diagonally.
-            row(centered_segments(apply_shine(banner_segments(banner_row), band, index), inner_width))
-        row(centered_segments([("workspace build console", ANSI_DIM)], inner_width))
+            row(centered_segments(
+                apply_shine(banner_segments(banner_row, index, frame=frame, theme=theme), band, index),
+                inner_width,
+            ), header_glow=0.95 if index == 1 else 0.72)
+        row(centered_segments([("workspace build console", ANSI_DIM)], inner_width), header_glow=0.35)
     else:
         band = None if frame is None else shine_band(frame, 11, speed=1.0)
-        wordmark = apply_shine(gradient_segments("I L L U M O"), band)
+        word_offset = (frame * 0.12) if (frame is not None and theme.prism) else (
+            0.35 * math.sin(frame * 0.12) if frame is not None else 0.0
+        )
+        wordmark = apply_shine(gradient_segments("I L L U M O", offset=word_offset, theme=theme), band)
         subtitle = f"  {glyphs['separator']}  workspace build console"
         if 11 + dashboard_visible_width(subtitle) <= inner_width:
             wordmark.append((subtitle, ANSI_DIM))
-        row(centered_segments(wordmark, inner_width))
+        row(centered_segments(wordmark, inner_width), header_glow=0.85)
     settings = dashboard_settings(state)
     try:
         current_identity = build_identity(settings) if state.history else None
@@ -1515,22 +2039,31 @@ def render_dashboard(
     row(centered_segments([(workspace_status, workspace_style)], inner_width))
 
     last_kind = None
+    hotkey_rgb = lerp_rgb(theme.accent, theme.banner_stops[-1], 0.45)
+    hotkey_style = rgb_fg(hotkey_rgb)
+    hotkey_selected_style = ANSI_BOLD + rgb_fg(boost_rgb(theme.accent, 0.35))
     for index, (kind, label, key) in enumerate(DASHBOARD_ITEMS):
         if kind != last_kind:
+            section = "Settings" if kind == "setting" else "Actions"
+            section_segs = gradient_segments(
+                section, offset=(frame * 0.08 if frame is not None and theme.prism else 0.0), theme=theme
+            )
             border(
                 glyphs["middle_left"], glyphs["middle_right"],
-                "Settings" if kind == "setting" else "Actions", ANSI_BOLD + ANSI_BLUE,
+                section, ANSI_BOLD + ANSI_BLUE, title_segments=section_segs,
             )
             last_kind = kind
         selected = index == state.selected
         hotkey = DASHBOARD_HOTKEYS.get(key, " ") if kind == "action" else " "
-        marker_style = ANSI_BOLD + (
-            ANSI_CYAN if frame is None
-            else f"\x1b[38;5;{MARKER_PULSE[(frame // 3) % len(MARKER_PULSE)]}m"
-        )
+        if frame is None:
+            marker_rgb = theme.accent
+        else:
+            pulse_t = (frame * 0.055) % 1.0
+            marker_rgb = boost_rgb(sample_gradient(theme.pulse_stops, pulse_t, wrap=True), 0.12)
+        marker_style = ANSI_BOLD + rgb_fg(marker_rgb)
         prefix = [
             (f" {glyphs['marker'] if selected else ' '} ", marker_style),
-            (f"{hotkey} ", ANSI_VIOLET if kind == "action" else ""),
+            (f"{hotkey} ", (hotkey_selected_style if selected else hotkey_style) if kind == "action" else ""),
             (label, ANSI_BOLD if selected else ""),
         ]
         prefix_width = sum(dashboard_visible_width(text) for text, _style in prefix)
@@ -1538,10 +2071,11 @@ def render_dashboard(
         previous_x = None
         if kind == "setting":
             value = dashboard_value(state, key)
+            chevron_style = rgb_fg(boost_rgb(theme.accent, 0.25)) if selected else ANSI_DIM
             suffix = [
-                (f"{glyphs['left']} ", ANSI_DIM),
+                (f"{glyphs['left']} ", chevron_style),
                 (dashboard_value_text(value, glyphs), dashboard_value_style(key, value, state)),
-                (f" {glyphs['right']} ", ANSI_DIM),
+                (f" {glyphs['right']} ", chevron_style),
             ]
             gap = inner_width - prefix_width - sum(
                 dashboard_visible_width(text) for text, _style in suffix
@@ -1572,25 +2106,28 @@ def render_dashboard(
                     break
         if hit_regions is not None:
             hit_regions.append(DashboardHitRegion(index, len(lines) + 1, width, previous_x))
-        row(segments, ANSI_SELECTED if selected else "")
+        flash = 0.0
+        if (frame is not None and state.flash_row == index
+                and state.flash_frame is not None and 0 <= frame - state.flash_frame < 6):
+            flash = 1.0 - (frame - state.flash_frame) / 6.0
+        row(segments, selected=selected, flash=flash)
 
     border(glyphs["middle_left"], glyphs["middle_right"])
-    keys_help = (
-        f"{glyphs['up_down']} move  {glyphs['left_right']} change  Enter run  "
-        "/ find  ? help  q quit"
-    )
-    mouse_help = "Mouse: click, right-click, wheel"
-    combined_help = f"{keys_help} | {mouse_help}"
-    if mouse_enabled and dashboard_visible_width(combined_help) + 1 <= inner_width:
-        row([(" " + combined_help, ANSI_DIM)])
+    help_segments: list[tuple[str, str]] = [(" ", "")]
+    for keycap, desc in keys_pairs:
+        help_segments.append((keycap, accent_style))
+        help_segments.append((desc, ANSI_DIM))
+    if mouse_enabled and not split_mouse:
+        help_segments.append((f" | {mouse_help}", ANSI_DIM))
+        row(help_segments)
     else:
-        row([(" " + keys_help, ANSI_DIM)])
+        row(help_segments)
         if mouse_enabled:
             row([(" Click select | Right-click previous | Wheel navigate", ANSI_DIM)])
     icon, status_style = {
         "success": (glyphs["ok"], ANSI_GREEN),
         "failure": (glyphs["bad"], ANSI_YELLOW),
-    }.get(state.status_kind, (glyphs["bullet"], ANSI_DIM))
+    }.get(state.status_kind, (glyphs["bullet"], rgb_fg(theme.accent)))
     status = [(f" {icon} ", status_style), (state.status, status_style)]
     if frame is not None and state.status_frame is not None:
         # One sheen across a status that just changed.
@@ -1608,7 +2145,7 @@ def render_dashboard(
     row(status)
     border(
         glyphs["bottom_left"], glyphs["bottom_right"],
-        dashboard_selection_hint(state), ANSI_DIM,
+        dashboard_selection_hint(state), ANSI_DIM, outer="bottom",
     )
     if reveal is not None:
         lines = [line if index < reveal else "" for index, line in enumerate(lines)]
@@ -1740,10 +2277,22 @@ def cycle_dashboard_profile(state: DashboardState, direction: int) -> None:
         apply_dashboard_profile(state, name, profiles[name])
 
 
+def cycle_dashboard_theme(state: DashboardState, direction: int = 1) -> DashboardTheme:
+    """Step through the built-in 24-bit TrueColor themes with a full-console wave."""
+    current = state.theme if state.theme in DASHBOARD_THEMES else THEME_ORDER[0]
+    next_key = THEME_ORDER[(THEME_ORDER.index(current) + direction) % len(THEME_ORDER)]
+    state.theme = next_key
+    state.wave_frame = state.frame
+    theme = DASHBOARD_THEMES[next_key]
+    state.status, state.status_kind = f"Theme: {theme.name} — {theme.tagline}", "normal"
+    return theme
+
+
 def adjust_dashboard_setting(state: DashboardState, direction: int) -> None:
     key = DASHBOARD_ITEMS[state.selected][2]
     if key == "profile":
         cycle_dashboard_profile(state, direction)
+        state.flash_row, state.flash_frame = state.selected, state.frame
         return
     if key == "configuration":
         state.configuration_index = (
@@ -1774,6 +2323,9 @@ def adjust_dashboard_setting(state: DashboardState, direction: int) -> None:
                 state.parallel_index = next((i for i, v in reversed(numeric) if v < current_parallel), 1)
         else:
             state.parallel_index = (state.parallel_index + direction) % len(known)
+    else:
+        return
+    state.flash_row, state.flash_frame = state.selected, state.frame
     mapped = {
         "configuration": ("config", state.configuration),
         "testing": ("no_tests", not state.testing_enabled),
@@ -1949,6 +2501,7 @@ class DashboardProgress:
     # (time, completed) for the current phase's reported total; drives the
     # throughput sparkline.
     samples: deque[tuple[float, int]] = field(default_factory=lambda: deque(maxlen=512))
+    theme: str = field(default_factory=default_theme_name)
 
     def __post_init__(self) -> None:
         self.phase_started = self.started
@@ -2022,15 +2575,19 @@ class DashboardProgress:
             self.phases[-1][2] = now
 
 
-def progress_bar(fraction: float, width: int, glyphs: dict, style: str = "",
-                 shine: float | None = None) -> list[tuple[str, str]]:
-    """Half-cell resolution; the filled part sweeps the gradient unless
-    styled. `shine` lights the filled cells around that position."""
+def progress_bar(
+    fraction: float, width: int, glyphs: dict, style: str = "",
+    shine: float | None = None, theme: DashboardTheme | None = None,
+) -> list[tuple[str, str]]:
+    """Half-cell resolution; the filled part sweeps the active TrueColor gradient
+    unless styled. `shine` lights the filled cells around that position."""
     fraction = min(1.0, max(0.0, fraction))
     full, half = divmod(int(round(fraction * width * 2)), 2)
+    palette = theme or resolve_theme()
+    span = max(1, width - 1)
     segments: list[tuple[str, str]] = []
     for index in range(full + half):
-        color = style or f"\x1b[38;5;{GRADIENT_COLORS[index * len(GRADIENT_COLORS) // max(1, width)]}m"
+        color = style or rgb_fg(theme_color(palette, index / span))
         if shine is not None and abs(index - shine) < 1.5:
             color = ANSI_SHINE
         segments.append((glyphs["bar_fill"] if index < full else glyphs["bar_half"], color))
@@ -2051,6 +2608,26 @@ def sparkline(values: Sequence[float], glyphs: dict,
         return sparks[0 if high <= 0 else len(sparks) // 2] * len(values)
     top = len(sparks) - 1
     return "".join(sparks[max(0, min(top, int((value - low) / span * top + 0.5)))] for value in values)
+
+
+def sparkline_segments(
+    values: Sequence[float], glyphs: dict,
+    low: float | None = None, high: float | None = None,
+    theme: DashboardTheme | None = None,
+) -> list[tuple[str, str]]:
+    """Sparkline with per-cell 24-bit TrueColor heat shading by bar height."""
+    text = sparkline(values, glyphs, low=low, high=high)
+    if not text:
+        return []
+    palette = theme or resolve_theme()
+    sparks = glyphs["sparks"]
+    top = max(1, len(sparks) - 1)
+    result: list[tuple[str, str]] = []
+    for glyph in text:
+        level = sparks.index(glyph) / top if glyph in sparks else 0.5
+        rgb = boost_rgb(theme_color(palette, level), 0.2 * max(0.0, level - 0.6))
+        result.append((glyph, rgb_fg(rgb)))
+    return result
 
 
 def progress_throughput(progress: DashboardProgress, now: float, window: int = 24) -> list[float]:
@@ -2204,6 +2781,7 @@ def render_dashboard_progress(
     content_width = width - 4 if framed else width
     bar_width = max(4, min(32, content_width - 44))
 
+    theme = resolve_theme(progress.theme)
     # Motion: the title's colors flow and a sheen runs along the bar while
     # running; the result badge flashes for a moment after finishing.
     moving = ansi and motion_enabled()
@@ -2222,7 +2800,7 @@ def render_dashboard_progress(
         if succeeded or progress.total:
             sweep = (now - progress.finished) * bar_width * 2.5 if finale else None
             tool_line = [*progress_bar(1.0 if succeeded else reached, bar_width, glyphs,
-                                       ANSI_GREEN if succeeded else ANSI_RED, shine=sweep),
+                                       ANSI_GREEN if succeeded else ANSI_RED, shine=sweep, theme=theme),
                          (" ", ""), *tool_line]
         if succeeded and progress.previous_elapsed is not None and progress.previous_elapsed > 0:
             tool_line.append((f"  {compare_with_last_run(elapsed, progress.previous_elapsed)}", ANSI_DIM))
@@ -2231,14 +2809,14 @@ def render_dashboard_progress(
         eta = progress_eta(progress, end)
         filled = fraction * bar_width
         shine = (elapsed * 16) % (filled + 12) - 3 if moving and running else None
-        tool_line = [*progress_bar(fraction, bar_width, glyphs, shine=shine),
+        tool_line = [*progress_bar(fraction, bar_width, glyphs, shine=shine, theme=theme),
                      (f" {count} (tool-reported)", "")]
         if eta:
             tool_line.append((f"  {eta}", ANSI_DIM))
     elif running and progress.previous_elapsed is not None and progress.previous_elapsed > 0:
         fraction = min(0.99, elapsed / progress.previous_elapsed)
         tool_line = [
-            *progress_bar(fraction, bar_width, glyphs, ANSI_BLUE),
+            *progress_bar(fraction, bar_width, glyphs, ANSI_BLUE, theme=theme),
             (f" ~{int(fraction * 100)}% of the last run ({format_duration(progress.previous_elapsed)}); "
              "this tool has not reported a total", ANSI_DIM),
         ]
@@ -2251,7 +2829,7 @@ def render_dashboard_progress(
         first_time, first_count = progress.samples[0]
         last_time, last_count = progress.samples[-1]
         average = (last_count - first_count) / max(0.001, last_time - first_time)
-        throughput_line = [("Rate:   ", ANSI_DIM), (sparkline(rates, glyphs, low=0), ANSI_CYAN),
+        throughput_line = [("Rate:   ", ANSI_DIM), *sparkline_segments(rates, glyphs, low=0, theme=theme),
                            (f"  {average:.1f} {progress.unit}/s", ANSI_DIM)]
 
     if progress.phases:
@@ -2299,8 +2877,11 @@ def render_dashboard_progress(
     ]
     if progress.tests_total:
         counts.append((f"   Last test run: {progress.tests_completed}/{progress.tests_total}", ""))
-    title = [(f"{icon} ", tone), *gradient_segments("ILLUMO", elapsed * 6 if moving and running else 0),
-             (f" {glyphs['chevron']} {progress_text(progress.title)}", ANSI_BOLD)]
+    title = [
+        (f"{icon} ", tone),
+        *gradient_segments("ILLUMO", elapsed * 6 if moving and running else 0, theme=theme),
+        (f" {glyphs['chevron']} {progress_text(progress.title)}", ANSI_BOLD),
+    ]
     info: list[list[tuple[str, str]]] = [
         [(progress_text(progress.context), ANSI_DIM)],
         status_line,
@@ -2308,7 +2889,7 @@ def render_dashboard_progress(
         tool_line,
         *([throughput_line] if throughput_line else []),
         counts,
-        [("$ ", ANSI_VIOLET), (progress_text(progress.command), "")],
+        [("$ ", rgb_fg(theme.accent)), (progress_text(progress.command), "")],
         [("Full log: ", ANSI_DIM), (log_label, "")],
     ]
     errors: list[list[tuple[str, str]]] = []
@@ -2319,8 +2900,8 @@ def render_dashboard_progress(
     else:
         footer = [(f"Exit code: {progress.returncode} {separator} ", ANSI_DIM),
                   ("Enter", ANSI_BOLD), (f" back {separator} ", ANSI_DIM),
-                  ("d", ANSI_BOLD + ANSI_VIOLET), (f" diagnostics {separator} ", ANSI_DIM),
-                  ("l", ANSI_BOLD + ANSI_VIOLET), (" full log", ANSI_DIM)]
+                  ("d", ANSI_BOLD + rgb_fg(theme.accent)), (f" diagnostics {separator} ", ANSI_DIM),
+                  ("l", ANSI_BOLD + rgb_fg(theme.accent)), (" full log", ANSI_DIM)]
     ellipsis = glyphs["ellipsis"]
 
     if framed:
@@ -2328,16 +2909,90 @@ def render_dashboard_progress(
         chrome = 1 + len(info) + (1 + len(errors) if errors else 0) + 2
         tail_count = max(0, height - chrome)
         tail = list(progress.lines)[-tail_count:] if tail_count else []
-        lines = [frame_rule(glyphs["top_left"], glyphs["top_right"], title, width, glyphs, ansi)]
-        lines += [frame_line(segments, width, glyphs, ansi) for segments in info]
+        total_box_rows = min(height, chrome + len(tail))
+        perimeter = 2 * (width - 1) + 2 * max(1, total_box_rows - 1)
+        if running and moving:
+            anim_frame: int | None = int(elapsed * 14)
+            frame_base, frame_glow = None, None
+        elif succeeded:
+            anim_frame = int((now - (progress.finished or now)) * 28) if finale else None
+            frame_base, frame_glow = (46, 152, 92), (255, 240, 120)
+        elif progress.cancelled:
+            anim_frame = None
+            frame_base, frame_glow = (176, 132, 48), (255, 224, 96)
+        else:
+            anim_frame = int((now - (progress.finished or now)) * 22) if finale else None
+            frame_base, frame_glow = (172, 52, 64), (255, 118, 128)
+
+        def p_line(segments: Sequence[tuple[str, str]], row_y: int) -> str:
+            if not ansi:
+                return frame_line(segments, width, glyphs, False)
+            left_rgb = perimeter_glow_rgb(
+                theme, perimeter - row_y, perimeter, anim_frame,
+                override_base=frame_base, override_glow=frame_glow,
+            )
+            right_rgb = perimeter_glow_rgb(
+                theme, (width - 1) + row_y, perimeter, anim_frame,
+                override_base=frame_base, override_glow=frame_glow,
+            )
+            content = render_segments(segments, max(1, width - 4), True, "", ellipsis)
+            return (
+                f"{rgb_fg(left_rgb)}{glyphs['vertical']}{ANSI_RESET} "
+                f"{content} "
+                f"{rgb_fg(right_rgb)}{glyphs['vertical']}{ANSI_RESET}"
+            )
+
+        lines = [_horizontal_border_segments(
+            glyphs["top_left"], glyphs["top_right"], glyphs["horizontal"], width, title, glyphs, ansi,
+            theme=theme, frame=anim_frame, start_pos=0, step=1, perimeter=perimeter,
+            override_base=frame_base, override_glow=frame_glow,
+        )]
+        for segments in info:
+            lines.append(p_line(segments, len(lines)))
         if errors:
-            lines.append(frame_rule(glyphs["middle_left"], glyphs["middle_right"],
-                                    [("First errors", ANSI_BOLD + ANSI_RED)], width, glyphs, ansi))
-            lines += [frame_line(segments, width, glyphs, ansi) for segments in errors]
-        lines.append(frame_rule(glyphs["middle_left"], glyphs["middle_right"],
-                                [("Output", ANSI_BOLD + ANSI_BLUE)], width, glyphs, ansi))
-        lines += [frame_line([(line, progress_line_style(line))], width, glyphs, ansi) for line in tail]
-        footer_line = frame_rule(glyphs["bottom_left"], glyphs["bottom_right"], footer, width, glyphs, ansi)
+            lines.append(_horizontal_border_segments(
+                glyphs["middle_left"], glyphs["middle_right"], glyphs["horizontal"], width,
+                [("First errors", ANSI_BOLD + ANSI_RED)], glyphs, ansi,
+                theme=theme, frame=None, start_pos=0, step=0.6, perimeter=perimeter,
+                override_base=frame_base or theme.frame_base,
+            ))
+            for segments in errors:
+                lines.append(p_line(segments, len(lines)))
+        lines.append(_horizontal_border_segments(
+            glyphs["middle_left"], glyphs["middle_right"], glyphs["horizontal"], width,
+            gradient_segments("Output", theme=theme), glyphs, ansi,
+            theme=theme, frame=None, start_pos=0, step=0.6, perimeter=perimeter,
+            override_base=frame_base or theme.frame_base,
+        ))
+        for line in tail:
+            lines.append(p_line([(line, progress_line_style(line))], len(lines)))
+        if finale and succeeded and ansi and glyphs is UNICODE_GLYPHS:
+            spare = min(4, max(0, height - len(lines) - 1))
+            if spare > 0 and content_width >= 20:
+                t_fin = max(0.0, now - (progress.finished or now))
+                sparks = "✦✧⋆✴·"
+                centers = (content_width * 0.22, content_width * 0.5, content_width * 0.78)
+                for r_i in range(spare):
+                    row_segs: list[tuple[str, str]] = []
+                    for c_i in range(content_width):
+                        ch, col_rgb = " ", None
+                        for b_idx, cx in enumerate(centers):
+                            radius = (t_fin * 22.0 + b_idx * 4.5) % 14.0
+                            dx = (c_i - cx) * 0.55
+                            dy = (r_i - spare * 0.5) * 1.4
+                            dist = math.sqrt(dx * dx + dy * dy)
+                            if abs(dist - radius) < 0.75 and ((c_i * 7 + r_i * 13 + int(t_fin * 12) + b_idx) % 5 == 0):
+                                ch = sparks[(c_i + r_i + b_idx) % len(sparks)]
+                                col_rgb = boost_rgb(theme_color(theme, (b_idx * 0.33 + t_fin * 0.6) % 1.0), 0.45)
+                                break
+                        row_segs.append((ch, ANSI_BOLD + rgb_fg(col_rgb) if col_rgb else ""))
+                    lines.append(p_line(row_segs, len(lines)))
+        bottom_start = (width - 1) + max(1, total_box_rows - 1) + (width - 1)
+        footer_line = _horizontal_border_segments(
+            glyphs["bottom_left"], glyphs["bottom_right"], glyphs["horizontal"], width, footer, glyphs, ansi,
+            theme=theme, frame=anim_frame, start_pos=bottom_start, step=-1, perimeter=perimeter,
+            override_base=frame_base, override_glow=frame_glow,
+        )
         if len(lines) + 1 > height:
             lines = lines[:max(0, height - 1)]
         lines.append(footer_line)
@@ -2750,6 +3405,7 @@ def run_progress_session(
             title,
             f"{identity['configuration']} | {identity['build_directory']} | {extra}",
             log_path,
+            theme=state.theme,
         )
         progress.previous_elapsed = previous_success_elapsed(action, identity)
         write_json_atomic(log_path.with_suffix(".json"), record)
@@ -3278,7 +3934,8 @@ def render_toolbox(title: str, rows: list[ToolboxRow], view: ToolboxView,
                    width: int, height: int, status: str = "",
                    ansi: bool = False, help_text: str | None = None,
                    prompt: str | None = None, caret: str = "",
-                   detail_provider=None) -> tuple[str, list[DashboardHitRegion], int]:
+                   detail_provider=None,
+                   theme_name: str | None = None) -> tuple[str, list[DashboardHitRegion], int]:
     width = max(1, width - 1)
     page = max(1, height - 13)
     view.selected = max(0, min(view.selected, len(rows) - 1))
@@ -3291,36 +3948,65 @@ def render_toolbox(title: str, rows: list[ToolboxRow], view: ToolboxView,
         view.focused = selected.key
     glyphs = terminal_glyphs()
     ellipsis = glyphs["ellipsis"]
+    theme = resolve_theme(theme_name)
     # Boxed like the menu: title in the top border, the list count in a
     # divider and the status message in the bottom border. Very narrow
     # terminals fall back to bare lines with the same row positions.
     framed = width >= 20
     content_width = width - 4 if framed else width
+    box_rows = min(max(1, height - 1), 12 + page)
+    perimeter = 2 * (width - 1) + 2 * max(1, box_rows - 1)
 
-    def rule(left: str, right: str, label: list[tuple[str, str]]) -> str:
-        if framed:
-            return frame_rule(left, right, label, width, glyphs, ansi)
-        return render_segments(label, width, ansi, ellipsis=ellipsis).rstrip()
+    def rule(left: str, right: str, label: list[tuple[str, str]], outer: str = "") -> str:
+        if not framed:
+            return render_segments(label, width, ansi, ellipsis=ellipsis).rstrip()
+        if not ansi:
+            return frame_rule(left, right, label, width, glyphs, False)
+        if outer == "top":
+            return _horizontal_border_segments(
+                left, right, glyphs["horizontal"], width, label, glyphs, True,
+                theme=theme, frame=None, start_pos=0, step=1, perimeter=perimeter,
+            )
+        if outer == "bottom":
+            bottom_start = (width - 1) + max(1, box_rows - 1) + (width - 1)
+            return _horizontal_border_segments(
+                left, right, glyphs["horizontal"], width, label, glyphs, True,
+                theme=theme, frame=None, start_pos=bottom_start, step=-1, perimeter=perimeter,
+            )
+        return _horizontal_border_segments(
+            left, right, glyphs["horizontal"], width, label, glyphs, True,
+            theme=theme, frame=None, start_pos=0, step=0.6, perimeter=perimeter,
+            override_base=scale_rgb(theme.frame_base, 0.92),
+        )
 
-    def line(segments: list[tuple[str, str]]) -> str:
-        if framed:
-            return frame_line(segments, width, glyphs, ansi)
-        return render_segments(segments, width, ansi, ellipsis=ellipsis).rstrip()
+    def line(segments: list[tuple[str, str]], row_y: int) -> str:
+        if not framed:
+            return render_segments(segments, width, ansi, ellipsis=ellipsis).rstrip()
+        if not ansi:
+            return frame_line(segments, width, glyphs, False)
+        left_rgb = perimeter_glow_rgb(theme, perimeter - row_y, perimeter, None)
+        right_rgb = perimeter_glow_rgb(theme, (width - 1) + row_y, perimeter, None)
+        content = render_segments(segments, max(1, width - 4), True, "", ellipsis)
+        return (
+            f"{rgb_fg(left_rgb)}{glyphs['vertical']}{ANSI_RESET} "
+            f"{content} "
+            f"{rgb_fg(right_rgb)}{glyphs['vertical']}{ANSI_RESET}"
+        )
 
     search = (
         [(prompt or "Search editing (Enter applies, Escape cancels): ", ANSI_YELLOW),
-         (progress_text(view.draft), ANSI_BOLD), (caret, ANSI_CYAN)]
+         (progress_text(view.draft), ANSI_BOLD), (caret, rgb_fg(theme.accent))]
         if view.draft is not None else
         [("Search: ", ANSI_DIM), (progress_text(view.search) or "(none)",
                                   ANSI_BOLD if view.search else ANSI_DIM)]
     )
     lines = [
         rule(glyphs["top_left"], glyphs["top_right"],
-             [*gradient_segments("ILLUMO"), (f" {glyphs['chevron']} ", ANSI_DIM),
-              (progress_text(title), ANSI_BOLD)]),
+             [*gradient_segments("ILLUMO", theme=theme), (f" {glyphs['chevron']} ", ANSI_DIM),
+              (progress_text(title), ANSI_BOLD)], outer="top"),
         line([(help_text or "Arrows / hover: select | Enter / click action: execute | /: search | q/Esc: back",
-               ANSI_DIM)]),
-        line(search),
+               ANSI_DIM)], 1),
+        line(search, 2),
         rule(glyphs["middle_left"], glyphs["middle_right"], []),
     ]
     regions = []
@@ -3330,33 +4016,47 @@ def render_toolbox(title: str, rows: list[ToolboxRow], view: ToolboxView,
     thumb_size = max(1, page * page // len(rows)) if scrollbar else 0
     thumb_top = (view.top * (page - thumb_size) // max(1, len(rows) - page)) if scrollbar else 0
     label_width = content_width - 2 if scrollbar else content_width
-    edge = dashboard_style(glyphs["vertical"], ANSI_FRAME, ansi)
+    marker_style = ANSI_BOLD + rgb_fg(theme.accent)
+    thumb_style = rgb_fg(theme.accent)
     for offset in range(page):
         segments: list[tuple[str, str]] = []
-        base = ""
+        chosen = False
         index = view.top + offset
         if offset < visible:
             row = rows[index]
             chosen = index == view.selected
             segments = [
-                (f"{glyphs['marker']} " if chosen else "  ", ANSI_BOLD + ANSI_CYAN),
+                (f"{glyphs['marker']} " if chosen else "  ", marker_style),
                 ("[Action] " if row.action else "", ANSI_VIOLET),
                 *(row.segments or [(
                     progress_text(row.label),
                     ANSI_CYAN if row.action and not row.tone else TOOLBOX_TONES.get(row.tone, ""),
                 )]),
             ]
-            base = ANSI_SELECTED if chosen else ""
-        text = render_segments(segments, label_width, ansi, base, ellipsis)
+        if chosen and ansi:
+            text = render_gradient_row(
+                segments, label_width, True,
+                theme.selected_left, theme.selected_right, theme.selected_fg, ellipsis,
+            )
+        else:
+            text = render_segments(segments, label_width, ansi, ANSI_SELECTED if chosen else "", ellipsis)
         if scrollbar:
             on_thumb = thumb_top <= offset < thumb_top + thumb_size
             text += " " + dashboard_style(
                 glyphs["thumb"] if on_thumb else glyphs["rail"],
-                ANSI_CYAN if on_thumb else ANSI_TRACK, ansi,
+                thumb_style if on_thumb else ANSI_TRACK, ansi,
             )
         if framed:
-            margin = dashboard_style(" ", base, ansi) if base else " "
-            text = edge + margin + text + " " + edge
+            row_y = len(lines)
+            if ansi:
+                left_rgb = perimeter_glow_rgb(theme, perimeter - row_y, perimeter, None)
+                right_rgb = perimeter_glow_rgb(theme, (width - 1) + row_y, perimeter, None)
+                left_edge = f"{rgb_fg(left_rgb)}{glyphs['vertical']}{ANSI_RESET}"
+                right_edge = f"{rgb_fg(right_rgb)}{glyphs['vertical']}{ANSI_RESET}"
+                margin = f"{rgb_bg(theme.selected_left)} {ANSI_RESET}" if chosen else " "
+                text = left_edge + margin + text + " " + right_edge
+            else:
+                text = glyphs["vertical"] + " " + text + " " + glyphs["vertical"]
         lines.append(text)
         if offset < visible:
             regions.append(DashboardHitRegion(index, len(lines), width, 1))
@@ -3367,9 +4067,9 @@ def render_toolbox(title: str, rows: list[ToolboxRow], view: ToolboxView,
     else:
         details = ("Select an item to inspect its details.",)
     for number, detail in enumerate(list(details[:6]) + [""] * max(0, 6 - len(details))):
-        lines.append(line([(progress_text(detail), ANSI_BOLD if number == 0 else ANSI_DIM)]))
+        lines.append(line([(progress_text(detail), ANSI_BOLD if number == 0 else ANSI_DIM)], len(lines)))
     lines.append(rule(glyphs["bottom_left"], glyphs["bottom_right"],
-                      [(progress_text(status), ANSI_YELLOW)] if status else []))
+                      [(progress_text(status), ANSI_YELLOW)] if status else [], outer="bottom"))
     rendered = "\n".join(lines[:max(1, height - 1)])
     return rendered, regions if width >= 30 and height >= 12 else [], page
 
@@ -4178,6 +4878,12 @@ def palette_entries(state: DashboardState) -> list[tuple[str, str, str, str]]:
         for value in options.get(key, ["On", "Off"]):
             entries.append((f"set:{key}={value}", "Setting", f"{label}: {value}",
                             DASHBOARD_SETTING_HINTS.get(key, "")))
+    for theme_key in THEME_ORDER:
+        theme = DASHBOARD_THEMES[theme_key]
+        entries.append((f"theme:{theme_key}", "Theme", f"Theme: {theme.name}",
+                        f"{theme.tagline}; press g to cycle"))
+    entries.append(("flair:lightshow", "Theme", "Spectacle & 3D visualizers",
+                    "3D Torus, Tunnel, Fireworks, Inferno, CSim Life, Plasma & Hyperwarp (f opens)"))
     return entries
 
 
@@ -4194,7 +4900,8 @@ def palette_rows(
     ranked.sort()
     # A verb per category: what choosing the row will do.
     verbs = {"Action": ("Run", ANSI_VIOLET), "Tool": ("Open", ANSI_CYAN),
-             "Profile": ("Use", ANSI_YELLOW), "Setting": ("Set", ANSI_BLUE)}
+             "Profile": ("Use", ANSI_YELLOW), "Setting": ("Set", ANSI_BLUE),
+             "Theme": ("Look", ANSI_GREEN)}
     rows = []
     for _score, _order, key, category, text, detail, positions in ranked:
         verb, color = verbs[category]
@@ -4226,6 +4933,7 @@ def run_command_palette(state: DashboardState, terminal: DashboardTerminal) -> s
             help_text="Type to filter | Up/Down or hover: choose | Enter or click: run | Escape: close",
             prompt=f"{glyphs['chevron']} ",
             caret=glyphs["caret"] if caret_on else " ",
+            theme_name=state.theme,
         )
         if rendered != last:
             if event == "tick" and last is not None:
@@ -4279,6 +4987,18 @@ def apply_palette_choice(state: DashboardState, terminal: DashboardTerminal, cho
             state.status = message
         refresh_dashboard_context(state)
         return None
+    if kind == "theme" and value in DASHBOARD_THEMES:
+        state.theme = value
+        state.wave_frame = state.frame
+        theme = DASHBOARD_THEMES[value]
+        state.status, state.status_kind = f"Theme: {theme.name} — {theme.tagline}", "normal"
+        return None
+    if kind == "flair":
+        state.theme = run_lightshow(terminal, theme_name=state.theme, auto=True)
+        state.wave_frame = state.frame
+        theme = resolve_theme(state.theme)
+        state.status, state.status_kind = f"Spectacle closed (theme: {theme.name})", "normal"
+        return None
     if kind == "profile":
         profiles = load_profiles(state.profiles_file, allow_missing=True)
         if value in profiles:
@@ -4312,8 +5032,11 @@ def dashboard_shortcut_lines(state: DashboardState) -> list[str]:
              "  Tab                 jump between Settings and Actions",
              "  Home/End            first or last row",
              "  m                   compiler options (also under Development Tools)",
+             "  g                   cycle 24-bit color theme with a full-console energy wave",
+             "  v                   cycle wide-screen Live Reactor sidekick (click panel to burst)",
+             "  f                   launch 7-scene TrueColor Spectacle (3D Torus, Tunnel, Fireworks, Inferno, CSim Life, Plasma, Warp)",
              "  /                   command palette: type to find any action, tool,",
-             "                      profile or setting value; Enter runs it",
+             "                      profile, theme or setting value; Enter runs it",
              "  .                   repeat the last action",
              "  ?                   this page", "  q or Escape         leave", "",
              "Action hotkeys (command-line equivalent)"]
@@ -4327,6 +5050,973 @@ def dashboard_shortcut_lines(state: DashboardState) -> list[str]:
               "", "Subviews", "  /   edit the search     Enter apply     Escape cancel / back",
               "  Page Up/Down, Home/End scroll long lists"]
     return lines
+
+
+LIGHTSHOW_SCENES = (
+    ("torus", "3D Torus"),
+    ("tunnel", "Tunnel"),
+    ("fireworks", "Fireworks"),
+    ("fire", "Inferno"),
+    ("life", "CSim Life"),
+    ("plasma", "Plasma"),
+    ("warp", "Hyperwarp"),
+)
+LIGHTSHOW_SCENE_KEYS = tuple(key for key, _label in LIGHTSHOW_SCENES)
+REACTOR_MODES = ("torus", "tunnel", "fireworks", "fire", "life", "plasma", "off")
+_ASCII_SHADE = " .:-=+*#%@"
+# Authentic Gosper Glider Gun (36x9) for the CSim Life tribute.
+_GOSPER_GUN: tuple[tuple[int, int], ...] = (
+    (0, 4), (0, 5), (1, 4), (1, 5),
+    (10, 4), (10, 5), (10, 6), (11, 3), (11, 7), (12, 2), (12, 8), (13, 2), (13, 8),
+    (14, 5), (15, 3), (15, 7), (16, 4), (16, 5), (16, 6), (17, 5),
+    (20, 2), (20, 3), (20, 4), (21, 2), (21, 3), (21, 4), (22, 1), (22, 5),
+    (24, 0), (24, 1), (24, 5), (24, 6),
+    (34, 2), (34, 3), (35, 2), (35, 3),
+)
+_TORUS_SHAPES = ("Torus", "Trefoil Knot", "Hyper-Cube")
+
+
+class LightshowState:
+    """Real-time half-block 24-bit TrueColor demoscene & 3D shader engine."""
+
+    def __init__(
+        self,
+        scene: str = "torus",
+        theme_name: str | None = None,
+        seed: int = 42,
+        *,
+        auto: bool = False,
+        show_logo: bool = True,
+    ) -> None:
+        self.scene = scene if scene in LIGHTSHOW_SCENE_KEYS else "torus"
+        self.theme_name = resolve_theme(theme_name).key
+        self.show_logo = show_logo
+        self.auto = auto
+        self.scene_age = 0
+        self.transition = 0.0
+        self.frame = 0
+        self.pulse = 0.0
+        self.shape_index = 0
+        self.rng = random.Random(seed)
+        self.pw = 0
+        self.ph = 0
+        # 3D Torus background stars: (x_frac, y_frac, phase)
+        self.bg_stars: list[tuple[float, float, float]] = [
+            (self.rng.random(), self.rng.random(), self.rng.uniform(0.0, math.tau))
+            for _ in range(70)
+        ]
+        # 3D Tunnel precomputed polar LUT: list of rows of (angle_norm, depth_inv, fog)
+        self.tunnel_lut_dim: tuple[int, int] = (0, 0)
+        self.tunnel_lut: list[list[tuple[float, float, float]]] = []
+        # Fireworks physics: rockets [x, y, vx, vy, target_y, hue], sparks [x, y, vx, vy, life, max_life, rgb]
+        self.fw_dim: tuple[int, int] = (0, 0)
+        self.fw_buf: list[list[list[float]]] = []
+        self.rockets: list[list[float]] = []
+        self.sparks: list[list] = []
+        # Cellular Inferno (DOOM fire) buffer: 0.0 .. 1.0 intensity
+        self.fire_dim: tuple[int, int] = (0, 0)
+        self.fire_grid: list[list[float]] = []
+        # CSim Life toroidal grid + phosphor heat
+        self.life_dim: tuple[int, int] = (0, 0)
+        self.life_cells: list[list[int]] = []
+        self.life_heat: list[list[float]] = []
+        # Plasma expanding shockwaves: [radius, strength]
+        self.shockwaves: list[list[float]] = []
+        # Hyperwarp starfield + decay buffer
+        self.warp_dim: tuple[int, int] = (0, 0)
+        self.stars: list[list[float]] = []
+        self.warp_buf: list[list[list[float]]] = []
+
+    def set_scene(self, scene: str) -> None:
+        if scene in LIGHTSHOW_SCENE_KEYS and scene != self.scene:
+            self.scene = scene
+            self.scene_age = 0
+            self.transition = 1.0
+
+    def trigger_burst(self) -> None:
+        self.pulse = 1.0
+        if self.scene == "torus":
+            self.shape_index = (self.shape_index + 1) % len(_TORUS_SHAPES)
+        elif self.scene == "fireworks" and self.fw_dim[0]:
+            # Grand Finale 5-shell salvo!
+            pw, ph = self.fw_dim
+            for slot in range(5):
+                x = pw * (0.16 + 0.17 * slot) + self.rng.uniform(-3.0, 3.0)
+                self._launch_rocket(x, ph)
+        elif self.scene == "life" and self.life_dim[0]:
+            pw, ph = self.life_dim
+            self._seed_life_burst(self.rng.randrange(pw), self.rng.randrange(ph))
+        elif self.scene == "plasma":
+            self.shockwaves.append([0.0, 1.0])
+            if len(self.shockwaves) > 4:
+                self.shockwaves.pop(0)
+        elif self.scene == "fire" and self.fire_dim[0]:
+            pw, ph = self.fire_dim
+            for y in range(max(0, ph - 4), ph):
+                for x in range(pw):
+                    self.fire_grid[y][x] = 1.0
+
+    def _ensure_tunnel(self, pw: int, ph: int) -> None:
+        if self.tunnel_lut_dim == (pw, ph):
+            return
+        self.tunnel_lut_dim = (pw, ph)
+        cx, cy = pw * 0.5, ph * 0.5
+        scale = min(pw, ph) * 0.42
+        lut: list[list[tuple[float, float, float]]] = []
+        for y in range(ph):
+            dy = (y - cy) * 1.05
+            row: list[tuple[float, float, float]] = []
+            for x in range(pw):
+                dx = x - cx
+                dist = math.sqrt(dx * dx + dy * dy)
+                angle = (math.atan2(dy, dx) / math.tau) % 1.0
+                inv = scale / max(1.8, dist)
+                fog = min(1.0, (dist / max(1.0, scale * 0.72)) ** 1.15)
+                row.append((angle, inv, fog))
+            lut.append(row)
+        self.tunnel_lut = lut
+
+    def _ensure_fireworks(self, pw: int, ph: int) -> None:
+        if self.fw_dim == (pw, ph) and self.fw_buf:
+            return
+        self.fw_dim = (pw, ph)
+        self.fw_buf = [[[0.0, 0.0, 0.0] for _ in range(pw)] for _ in range(ph)]
+        self.rockets.clear()
+        self.sparks.clear()
+        for frac in (0.28, 0.52, 0.74):
+            self._launch_rocket(pw * frac, ph)
+
+    def _launch_rocket(self, x: float, ph: int) -> None:
+        sky_h = max(6, int(ph * 0.76))
+        target_y = self.rng.uniform(sky_h * 0.16, sky_h * 0.58)
+        vy = -self.rng.uniform(1.35, 2.05)
+        vx = self.rng.uniform(-0.22, 0.22)
+        self.rockets.append([x, float(sky_h - 1), vx, vy, target_y, self.rng.random()])
+
+    def _detonate_rocket(self, x: float, y: float, hue_seed: float, theme: DashboardTheme) -> None:
+        pattern = self.rng.choice(("chrysanthemum", "ring", "double", "spiral"))
+        base_rgb = boost_rgb(theme_color(theme, hue_seed, phase=self.frame * 0.015 if theme.prism else 0.0), 0.25)
+        alt_rgb = boost_rgb(theme_color(theme, (hue_seed + 0.42) % 1.0), 0.3)
+        count = 46 if pattern == "double" else 34
+        for idx in range(count):
+            angle = (idx / count) * math.tau + self.rng.uniform(-0.08, 0.08)
+            if pattern == "ring":
+                speed = 1.45 + self.rng.uniform(-0.08, 0.08)
+                color = base_rgb
+            elif pattern == "double":
+                outer = idx % 2 == 0
+                speed = (1.65 if outer else 0.92) + self.rng.uniform(-0.1, 0.1)
+                color = base_rgb if outer else alt_rgb
+            elif pattern == "spiral":
+                speed = 0.55 + (idx / count) * 1.45
+                color = boost_rgb(theme_color(theme, (hue_seed + idx / count) % 1.0), 0.2)
+            else:
+                speed = self.rng.uniform(0.45, 1.85)
+                color = base_rgb if self.rng.random() < 0.75 else (255, 250, 220)
+            life = self.rng.uniform(16.0, 30.0)
+            self.sparks.append([
+                x, y, math.cos(angle) * speed * 1.15, math.sin(angle) * speed * 0.95,
+                life, life, color,
+            ])
+
+    def _step_fireworks(self, pw: int, ph: int, theme: DashboardTheme) -> None:
+        self._ensure_fireworks(pw, ph)
+        sky_h = max(6, int(ph * 0.76))
+        if len(self.rockets) < 3 and self.rng.random() < 0.22:
+            self._launch_rocket(self.rng.uniform(pw * 0.12, pw * 0.88), ph)
+        buf = self.fw_buf
+        for y in range(sky_h):
+            row_b = buf[y]
+            for x in range(pw):
+                c = row_b[x]
+                c[0] *= 0.76
+                c[1] *= 0.76
+                c[2] *= 0.76
+        kept_rockets: list[list[float]] = []
+        for r in self.rockets:
+            r[0] += r[2]
+            r[1] += r[3]
+            r[3] += 0.035
+            ix, iy = int(r[0]), int(r[1])
+            if 0 <= ix < pw and 0 <= iy < sky_h:
+                cell = buf[iy][ix]
+                cell[0], cell[1], cell[2] = 255.0, 245.0, 200.0
+                if iy + 1 < sky_h:
+                    tail = buf[iy + 1][ix]
+                    tail[0] = min(255.0, tail[0] + 220.0)
+                    tail[1] = min(255.0, tail[1] + 150.0)
+                    tail[2] = min(255.0, tail[2] + 70.0)
+            if r[1] <= r[4] or r[3] >= -0.15:
+                self._detonate_rocket(r[0], max(2.0, r[1]), r[5], theme)
+            elif 0 <= ix < pw and r[1] < sky_h:
+                kept_rockets.append(r)
+        self.rockets = kept_rockets
+
+        kept_sparks: list[list] = []
+        for s in self.sparks:
+            s[0] += s[2]
+            s[1] += s[3]
+            s[2] *= 0.94
+            s[3] = s[3] * 0.94 + 0.055
+            s[4] -= 1.0
+            if s[4] <= 0.0:
+                continue
+            ratio = s[4] / s[5]
+            twinkle = 1.0 if (ratio > 0.35 or self.rng.random() > 0.35) else 0.25
+            gain = (ratio ** 0.75) * twinkle
+            ix, iy = int(s[0]), int(s[1])
+            if 0 <= ix < pw and 0 <= iy < sky_h:
+                rgb = s[6]
+                cell = buf[iy][ix]
+                cell[0] = min(255.0, cell[0] + rgb[0] * gain)
+                cell[1] = min(255.0, cell[1] + rgb[1] * gain)
+                cell[2] = min(255.0, cell[2] + rgb[2] * gain)
+                # Subtle 4-neighbor additive bloom on bright sparks.
+                if gain > 0.55:
+                    bloom = gain * 0.28
+                    for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                        nx, ny = ix + ox, iy + oy
+                        if 0 <= nx < pw and 0 <= ny < sky_h:
+                            nc = buf[ny][nx]
+                            nc[0] = min(255.0, nc[0] + rgb[0] * bloom)
+                            nc[1] = min(255.0, nc[1] + rgb[1] * bloom)
+                            nc[2] = min(255.0, nc[2] + rgb[2] * bloom)
+            kept_sparks.append(s)
+        self.sparks = kept_sparks[-360:]
+
+    def _ensure_fire(self, pw: int, ph: int) -> None:
+        if self.fire_dim == (pw, ph) and self.fire_grid:
+            return
+        self.fire_dim = (pw, ph)
+        self.fire_grid = [[0.0] * pw for _ in range(ph)]
+        for x in range(pw):
+            self.fire_grid[ph - 1][x] = 1.0
+
+    def _step_fire(self, pw: int, ph: int) -> None:
+        self._ensure_fire(pw, ph)
+        grid = self.fire_grid
+        # Roaring white-hot coals along the base, pulsing with wave turbulence.
+        base = grid[ph - 1]
+        t = self.frame * 0.22
+        for x in range(pw):
+            wave = 0.78 + 0.22 * math.sin(x * 0.27 + t) * math.cos(x * 0.13 - t * 0.7)
+            base[x] = min(1.0, wave + self.pulse * 0.35 + self.rng.uniform(-0.12, 0.12))
+        cool = max(0.018, 1.35 / max(10, ph))
+        for y in range(ph - 1):
+            dst = grid[y]
+            src = grid[y + 1]
+            src2 = grid[min(ph - 1, y + 2)]
+            for x in range(pw):
+                drift = self.rng.choice((-1, 0, 0, 1))
+                sx = (x + drift) % pw
+                avg = (src[sx] * 2.0 + src[(x - 1) % pw] + src[(x + 1) % pw] + src2[x]) * 0.2
+                decay = cool * self.rng.uniform(0.45, 1.55)
+                dst[x] = max(0.0, avg - decay)
+        # Occasional rising glowing sparks.
+        if self.rng.random() < 0.7:
+            sx = self.rng.randrange(pw)
+            sy = self.rng.randrange(max(1, ph // 3), max(2, ph - 3))
+            grid[sy][sx] = min(1.0, grid[sy][sx] + 0.65)
+
+    def _ensure_life(self, pw: int, ph: int) -> None:
+        if self.life_dim == (pw, ph) and self.life_cells:
+            return
+        self.life_dim = (pw, ph)
+        self.life_cells = [[0] * pw for _ in range(ph)]
+        self.life_heat = [[0.0] * pw for _ in range(ph)]
+        if pw >= 42 and ph >= 18:
+            # Stamp an authentic Gosper Glider Gun in the upper-left.
+            for gx, gy in _GOSPER_GUN:
+                self._set_life((3 + gx) % pw, (3 + gy) % ph)
+        # Plus a central R-pentomino for immediate organic fireworks.
+        cx, cy = (pw * 2) // 3, ph // 2
+        for dx, dy in ((0, -1), (1, -1), (-1, 0), (0, 0), (0, 1)):
+            self._set_life((cx + dx) % pw, (cy + dy) % ph)
+        for _ in range(max(12, (pw * ph) // 55)):
+            self._set_life(self.rng.randrange(pw), self.rng.randrange(ph))
+
+    def _set_life(self, x: int, y: int) -> None:
+        self.life_cells[y][x] = 1
+        self.life_heat[y][x] = 1.0
+
+    def _seed_life_burst(self, cx: int, cy: int) -> None:
+        pw, ph = self.life_dim
+        radius = max(4, min(pw, ph) // 6)
+        for _ in range(radius * 7):
+            angle = self.rng.uniform(0.0, math.tau)
+            dist = self.rng.uniform(0.0, radius)
+            x = int(cx + math.cos(angle) * dist) % pw
+            y = int(cy + math.sin(angle) * dist) % ph
+            self._set_life(x, y)
+
+    def _step_life(self) -> None:
+        pw, ph = self.life_dim
+        cells = self.life_cells
+        heat = self.life_heat
+        nxt = [[0] * pw for _ in range(ph)]
+        alive_count = 0
+        for y in range(ph):
+            ym = (y - 1) % ph
+            yp = (y + 1) % ph
+            row_m, row_0, row_p = cells[ym], cells[y], cells[yp]
+            nxt_row, heat_row = nxt[y], heat[y]
+            for x in range(pw):
+                xm = (x - 1) % pw
+                xp = (x + 1) % pw
+                neighbors = (
+                    row_m[xm] + row_m[x] + row_m[xp]
+                    + row_0[xm] + row_0[xp]
+                    + row_p[xm] + row_p[x] + row_p[xp]
+                )
+                was = row_0[x]
+                now = 1 if (neighbors == 3 or (was and neighbors == 2)) else 0
+                nxt_row[x] = now
+                if now:
+                    alive_count += 1
+                    heat_row[x] = 1.0 if not was else max(0.72, heat_row[x] * 0.96)
+                else:
+                    heat_row[x] *= 0.80
+        self.life_cells = nxt
+        if alive_count < max(16, (pw * ph) // 160):
+            self._seed_life_burst(self.rng.randrange(pw), self.rng.randrange(ph))
+
+    def _ensure_warp(self, pw: int, ph: int) -> None:
+        if self.warp_dim != (pw, ph) or not self.warp_buf:
+            self.warp_dim = (pw, ph)
+            self.warp_buf = [[[0.0, 0.0, 0.0] for _ in range(pw)] for _ in range(ph)]
+        target = max(100, min(240, (pw * ph) // 24))
+        while len(self.stars) < target:
+            self.stars.append([
+                self.rng.uniform(-1.0, 1.0),
+                self.rng.uniform(-1.0, 1.0),
+                self.rng.uniform(0.08, 1.0),
+                self.rng.uniform(0.0, 1.0),
+            ])
+
+    def step(self, width: int, canvas_rows: int) -> None:
+        self.frame += 1
+        self.scene_age += 1
+        self.pulse = max(0.0, self.pulse - 0.055)
+        self.transition = max(0.0, self.transition - 0.14)
+        if self.auto and self.scene_age >= 95:
+            next_idx = (LIGHTSHOW_SCENE_KEYS.index(self.scene) + 1) % len(LIGHTSHOW_SCENE_KEYS)
+            self.scene = LIGHTSHOW_SCENE_KEYS[next_idx]
+            self.scene_age = 0
+            self.transition = 1.0
+            theme_idx = (THEME_ORDER.index(self.theme_name) + 1) % len(THEME_ORDER)
+            self.theme_name = THEME_ORDER[theme_idx]
+        elif self.auto and self.scene_age == 48:
+            self.trigger_burst()
+
+        pw, ph = max(8, width), max(4, canvas_rows * 2)
+        self.pw, self.ph = pw, ph
+        theme = resolve_theme(self.theme_name)
+        if self.scene == "tunnel":
+            self._ensure_tunnel(pw, ph)
+        elif self.scene == "fireworks":
+            self._step_fireworks(pw, ph, theme)
+        elif self.scene == "fire":
+            self._step_fire(pw, ph)
+        elif self.scene == "life":
+            self._ensure_life(pw, ph)
+            self._step_life()
+        elif self.scene == "plasma":
+            for wave in self.shockwaves:
+                wave[0] += max(1.2, max(pw, ph) * 0.032)
+                wave[1] *= 0.94
+            self.shockwaves = [w for w in self.shockwaves if w[1] > 0.05]
+        elif self.scene == "warp":
+            self._ensure_warp(pw, ph)
+
+
+def _render_scene_pixels(ls: LightshowState, pw: int, ph: int, theme: DashboardTheme) -> list[list[RGB]]:
+    """Compute the (ph x pw) 24-bit RGB pixel framebuffer for the active shader."""
+    bg_deep = (6, 8, 16)
+    pixels: list[list[RGB]] = [[bg_deep] * pw for _ in range(ph)]
+    phase = ls.frame * 0.015 if theme.prism else 0.0
+
+    if ls.scene == "torus":
+        # Twinkling cosmic backdrop behind the 3D geometry.
+        for sx, sy, sph in ls.bg_stars:
+            px, py = int(sx * (pw - 1)), int(sy * (ph - 1))
+            tw = 0.35 + 0.65 * (0.5 + 0.5 * math.sin(ls.frame * 0.16 + sph))
+            pixels[py][px] = scale_rgb(boost_rgb(theme.accent, 0.5), tw * 0.55)
+        zbuf = [[-1e9] * pw for _ in range(ph)]
+        a = ls.frame * 0.075
+        b = ls.frame * 0.052
+        ca, sa = math.cos(a), math.sin(a)
+        cb, sb = math.cos(b), math.sin(b)
+        lx, ly, lz = math.cos(ls.frame * 0.04) * 0.55, 0.55, -0.72
+        l_inv = 1.0 / math.sqrt(lx * lx + ly * ly + lz * lz)
+        lx, ly, lz = lx * l_inv, ly * l_inv, lz * l_inv
+        scale = min(pw * 0.44, ph * 0.44)
+        cx, cy = pw * 0.5, ph * 0.5
+        cam_z = 4.6
+
+        def splat_3d(x: float, y: float, z: float, nx: float, ny: float, nz: float, u_col: float) -> None:
+            # Rotate around X then Z/Y.
+            y1, z1 = y * ca - z * sa, y * sa + z * ca
+            x2, z2 = x * cb + z1 * sb, -x * sb + z1 * cb
+            ny1, nz1 = ny * ca - nz * sa, ny * sa + nz * ca
+            nx2, nz2 = nx * cb + nz1 * sb, -nx * sb + nz1 * cb
+            inv_z = 1.0 / max(0.8, cam_z + z2)
+            px = int(cx + x2 * inv_z * scale * 2.15)
+            py = int(cy - y1 * inv_z * scale * 2.15)
+            if not (0 <= px < pw and 0 <= py < ph) or inv_z <= zbuf[py][px]:
+                return
+            zbuf[py][px] = inv_z
+            ndotl = max(0.0, nx2 * lx + ny1 * ly + nz2 * lz)
+            # Half-vector Phong specular + Fresnel rim glow.
+            hx, hy, hz = lx, ly, lz - 1.0
+            h_inv = 1.0 / max(1e-6, math.sqrt(hx * hx + hy * hy + hz * hz))
+            spec = max(0.0, (nx2 * hx + ny1 * hy + nz2 * hz) * h_inv) ** 10
+            rim = max(0.0, 1.0 - abs(nz2)) ** 2.4
+            base = theme_color(theme, u_col, phase=phase)
+            lit = scale_rgb(base, 0.16 + 0.84 * ndotl)
+            lit = lerp_rgb(lit, boost_rgb(theme.frame_glow, 0.3), min(0.75, rim * 0.55))
+            pixels[py][px] = boost_rgb(lit, min(0.92, spec * 0.9 + ls.pulse * 0.25))
+
+        if ls.shape_index == 0:  # Classic Torus
+            r1, r2 = 0.62, 1.38
+            u_steps = max(60, min(110, pw + 24))
+            v_steps = max(36, min(64, ph + 16))
+            for ui in range(u_steps):
+                theta = (ui / u_steps) * math.tau
+                ct, st = math.cos(theta), math.sin(theta)
+                for vi in range(v_steps):
+                    phi = (vi / v_steps) * math.tau
+                    cp, sp = math.cos(phi), math.sin(phi)
+                    ring = r2 + r1 * cp
+                    splat_3d(ring * ct, ring * st, r1 * sp, cp * ct, cp * st, sp, (ui / u_steps + vi / v_steps * 0.25) % 1.0)
+        elif ls.shape_index == 1:  # 3D Trefoil Knot tube
+            u_steps = max(96, min(150, pw * 2))
+            v_steps = 20
+            tube = 0.36
+            for ui in range(u_steps):
+                t = (ui / u_steps) * math.tau
+                x0 = (math.sin(t) + 2.0 * math.sin(2.0 * t)) * 0.58
+                y0 = (math.cos(t) - 2.0 * math.cos(2.0 * t)) * 0.58
+                z0 = (-math.sin(3.0 * t)) * 0.65
+                tx = math.cos(t) + 4.0 * math.cos(2.0 * t)
+                ty = -math.sin(t) + 4.0 * math.sin(2.0 * t)
+                tz = -3.0 * math.cos(3.0 * t)
+                t_len = max(1e-5, math.sqrt(tx * tx + ty * ty + tz * tz))
+                tx, ty, tz = tx / t_len, ty / t_len, tz / t_len
+                # Arbitrary perpendicular frame.
+                bx, by, bz = -ty, tx, 0.0
+                b_len = max(1e-5, math.sqrt(bx * bx + by * by))
+                bx, by = bx / b_len, by / b_len
+                nx0, ny0, nz0 = by * tz - bz * ty, bz * tx - bx * tz, bx * ty - by * tx
+                for vi in range(v_steps):
+                    phi = (vi / v_steps) * math.tau
+                    cp, sp = math.cos(phi), math.sin(phi)
+                    nx = cp * bx + sp * nx0
+                    ny = cp * by + sp * ny0
+                    nz = cp * bz + sp * nz0
+                    splat_3d(x0 + nx * tube, y0 + ny * tube, z0 + nz * tube, nx, ny, nz, (ui / u_steps) % 1.0)
+        else:  # Shaded Spinning Cube with glowing neon edges
+            grid_n = max(14, min(26, min(pw, ph) // 2))
+            faces = (
+                ((0.0, 0.0, 1.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), 0.0),
+                ((0.0, 0.0, -1.0), (-1.0, 0.0, 0.0), (0.0, 1.0, 0.0), 0.16),
+                ((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0), 0.33),
+                ((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0), 0.50),
+                ((0.0, 1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, -1.0), 0.66),
+                ((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0), 0.83),
+            )
+            half = 1.15
+            for normal, right_v, up_v, hue in faces:
+                for i in range(grid_n):
+                    u = -1.0 + 2.0 * (i / (grid_n - 1))
+                    for j in range(grid_n):
+                        v = -1.0 + 2.0 * (j / (grid_n - 1))
+                        edge = max(abs(u), abs(v)) > 0.88
+                        x = (normal[0] + right_v[0] * u + up_v[0] * v) * half
+                        y = (normal[1] + right_v[1] * u + up_v[1] * v) * half
+                        z = (normal[2] + right_v[2] * u + up_v[2] * v) * half
+                        splat_3d(x, y, z, normal[0], normal[1], normal[2], (hue + (0.25 if edge else 0.0)) % 1.0)
+
+    elif ls.scene == "tunnel":
+        ls._ensure_tunnel(pw, ph)
+        t_fly = ls.frame * (0.22 + 0.35 * ls.pulse)
+        t_spin = ls.frame * 0.014 + 0.08 * math.sin(ls.frame * 0.04)
+        lut = ls.tunnel_lut
+        for y in range(ph):
+            lut_row = lut[y]
+            row_px = pixels[y]
+            for x in range(pw):
+                angle, inv, fog = lut_row[x]
+                u = (angle + t_spin + 0.04 * math.sin(inv * 0.6 - t_fly * 0.4)) % 1.0
+                v = inv + t_fly
+                grid_u = abs(((u * 12.0) % 1.0) - 0.5)
+                grid_v = abs((v % 1.0) - 0.5)
+                wire = 1.0 if (grid_u < 0.08 or grid_v < 0.09) else 0.0
+                checker = 0.28 if ((int(u * 12.0) + int(v)) & 1) else 0.10
+                ring = max(0.0, math.sin(v * 2.2 - ls.frame * 0.15)) ** 6
+                rgb = theme_color(theme, (u * 0.65 + v * 0.08) % 1.0, phase=phase)
+                intensity = (checker + wire * 0.72 + ring * 0.55) * fog
+                row_px[x] = boost_rgb(scale_rgb(rgb, min(1.0, intensity)), wire * 0.38 * fog + ring * 0.35 * fog)
+
+    elif ls.scene == "fireworks":
+        ls._ensure_fireworks(pw, ph)
+        sky_h = max(6, int(ph * 0.76))
+        buf = ls.fw_buf
+        # Night sky gradient + twinkling stars.
+        for y in range(sky_h):
+            ny = y / max(1, sky_h - 1)
+            sky_rgb = lerp_rgb((5, 7, 18), scale_rgb(theme.selected_left, 0.38), ny * ny)
+            row_b = buf[y]
+            row_px = pixels[y]
+            for x in range(pw):
+                c = row_b[x]
+                row_px[x] = (
+                    min(255, int(sky_rgb[0] + c[0])),
+                    min(255, int(sky_rgb[1] + c[1])),
+                    min(255, int(sky_rgb[2] + c[2])),
+                )
+        for sx, sy, sph in ls.bg_stars[:45]:
+            px, py = int(sx * (pw - 1)), int(sy * (sky_h - 2))
+            tw = 0.3 + 0.7 * (0.5 + 0.5 * math.sin(ls.frame * 0.2 + sph))
+            c = pixels[py][px]
+            add = int(110 * tw)
+            pixels[py][px] = (min(255, c[0] + add), min(255, c[1] + add), min(255, c[2] + add + 20))
+        # Shimmering wavy water reflection across the bottom 24%.
+        water_tint = scale_rgb(theme.frame_base, 0.22)
+        for y in range(sky_h, ph):
+            depth = (y - sky_h) / max(1, ph - sky_h)
+            mirror_y = max(0, sky_h - 1 - int((y - sky_h) * 1.85))
+            ripple = math.sin(y * 1.15 - ls.frame * 0.35) * (1.2 + 2.4 * depth)
+            row_px = pixels[y]
+            src_row = pixels[mirror_y]
+            fade = 0.58 * (1.0 - 0.55 * depth)
+            for x in range(pw):
+                rx = max(0, min(pw - 1, int(x + ripple)))
+                ref = src_row[rx]
+                row_px[x] = lerp_rgb(water_tint, ref, fade)
+            if y == sky_h:
+                for x in range(pw):
+                    row_px[x] = boost_rgb(row_px[x], 0.14)
+
+    elif ls.scene == "fire":
+        ls._ensure_fire(pw, ph)
+        grid = ls.fire_grid
+        # Build a 4-stop theme-aware inferno palette (obsidian -> deep -> accent -> white-hot).
+        fire_stops = (
+            (5, 5, 10),
+            scale_rgb(theme.banner_stops[-1], 0.65),
+            theme.banner_stops[1 if len(theme.banner_stops) > 1 else 0],
+            theme.banner_stops[0],
+            (255, 252, 232),
+        )
+        for y in range(ph):
+            g_row = grid[y]
+            row_px = pixels[y]
+            for x in range(pw):
+                v = g_row[x]
+                if v < 0.03:
+                    row_px[x] = (5, 5, 10)
+                elif theme.prism:
+                    row_px[x] = boost_rgb(scale_rgb(hsv_to_rgb((v * 0.55 + ls.frame * 0.012) % 1.0, 0.9, 1.0), min(1.0, v * 1.35)), max(0.0, (v - 0.82) * 4.5))
+                else:
+                    row_px[x] = sample_gradient(fire_stops, v)
+
+    elif ls.scene == "life":
+        ls._ensure_life(pw, ph)
+        bg_rgb = scale_rgb(theme.frame_base, 0.12)
+        for y in range(ph):
+            h_row = ls.life_heat[y]
+            c_row = ls.life_cells[y]
+            row_px = pixels[y]
+            for x in range(pw):
+                h = h_row[x]
+                if h < 0.03:
+                    row_px[x] = bg_rgb
+                elif c_row[x]:
+                    base = theme_color(theme, (x / max(1, pw) * 0.7 + y / max(1, ph) * 0.3), phase=phase)
+                    row_px[x] = boost_rgb(base, max(0.0, (h - 0.78) * 3.6))
+                else:
+                    trail = theme_color(theme, 1.0 - h * 0.75, phase=phase)
+                    row_px[x] = lerp_rgb(bg_rgb, scale_rgb(trail, 0.78), h)
+
+    elif ls.scene == "plasma":
+        t = ls.frame * 0.095
+        cx, cy = pw * 0.5, ph * 0.5
+        sin_x = [math.sin(x * 0.11 + t) for x in range(pw)]
+        cos_x = [math.cos(x * 0.07 - t * 0.65) for x in range(pw)]
+        for y in range(ph):
+            sy = math.sin(y * 0.14 - t * 1.25)
+            dy = (y - cy) * 1.15
+            dy2 = dy * dy
+            row_px = pixels[y]
+            for x in range(pw):
+                dx = x - cx
+                dist = math.sqrt(dx * dx + dy2)
+                v = (
+                    sin_x[x] + sy
+                    + math.sin((x * 0.08 + y * 0.09) + t * 0.85)
+                    + math.sin(dist * 0.20 - t * 1.8)
+                    + 0.45 * cos_x[x]
+                )
+                norm = (v + 3.45) / 6.9
+                rgb = theme_color(theme, norm, phase=phase)
+                ridge = max(0.0, math.sin(norm * math.pi * 3.0)) ** 5
+                for sw_r, sw_s in ls.shockwaves:
+                    ring = math.exp(-((dist - sw_r) ** 2) / 11.0) * sw_s
+                    ridge = min(1.0, ridge + ring * 0.95)
+                brightness = 0.26 + 0.74 * max(0.0, min(1.0, norm))
+                row_px[x] = boost_rgb(scale_rgb(rgb, brightness), ridge * 0.58)
+
+    else:  # warp
+        ls._ensure_warp(pw, ph)
+        buf = ls.warp_buf
+        decay = 0.76 if ls.pulse > 0.1 else 0.58
+        for y in range(ph):
+            row_b = buf[y]
+            for x in range(pw):
+                c = row_b[x]
+                c[0] *= decay
+                c[1] *= decay
+                c[2] *= decay
+        cx = pw * 0.5 + math.sin(ls.frame * 0.04) * pw * 0.09
+        cy = ph * 0.5 + math.cos(ls.frame * 0.03) * ph * 0.09
+        speed = 0.034 + 0.072 * ls.pulse
+        for star in ls.stars:
+            prev_z = star[2]
+            star[2] -= speed
+            if star[2] <= 0.03:
+                star[0] = ls.rng.uniform(-1.0, 1.0)
+                star[1] = ls.rng.uniform(-1.0, 1.0)
+                star[2] = 1.0
+                star[3] = ls.rng.uniform(0.0, 1.0)
+                continue
+            x1 = int(cx + (star[0] / prev_z) * pw * 0.44)
+            y1 = int(cy + (star[1] / prev_z) * ph * 0.44)
+            x2 = int(cx + (star[0] / star[2]) * pw * 0.44)
+            y2 = int(cy + (star[1] / star[2]) * ph * 0.44)
+            depth = max(0.0, min(1.0, 1.0 - star[2]))
+            rgb = boost_rgb(theme_color(theme, star[3], phase=phase), depth * 0.55)
+            steps = max(1, min(14, max(abs(x2 - x1), abs(y2 - y1))))
+            for s in range(steps + 1):
+                frac = s / steps
+                px = int(x1 + (x2 - x1) * frac)
+                py = int(y1 + (y2 - y1) * frac)
+                if 0 <= px < pw and 0 <= py < ph:
+                    gain = (0.35 + 0.65 * frac) * (0.28 + 0.72 * depth)
+                    cell = buf[py][px]
+                    cell[0] = min(255.0, cell[0] + rgb[0] * gain)
+                    cell[1] = min(255.0, cell[1] + rgb[1] * gain)
+                    cell[2] = min(255.0, cell[2] + rgb[2] * gain)
+        for y in range(ph):
+            row_b = buf[y]
+            row_px = pixels[y]
+            for x in range(pw):
+                c = row_b[x]
+                row_px[x] = (max(6, int(c[0])), max(8, int(c[1])), max(15, int(c[2])))
+
+    if ls.transition > 0.02:
+        # Smooth radial iris-flash transition when switching scenes.
+        flash = ls.transition * 0.55
+        glow = boost_rgb(theme.accent, 0.5)
+        for y in range(ph):
+            row_px = pixels[y]
+            for x in range(pw):
+                row_px[x] = lerp_rgb(row_px[x], glow, flash)
+    return pixels
+
+
+def _pack_half_blocks(
+    pixels: list[list[RGB]],
+    width: int,
+    canvas_rows: int,
+    ansi: bool,
+    glyphs: dict,
+    logo_cells: dict[tuple[int, int], tuple[str, RGB, bool]] | None = None,
+) -> list[str]:
+    """Pack a (2 * canvas_rows) x width RGB pixel buffer into half-block terminal lines."""
+    use_half = ansi and glyphs is UNICODE_GLYPHS
+    lines: list[str] = []
+    logo = logo_cells or {}
+    for row in range(canvas_rows):
+        top_row = pixels[row * 2]
+        bot_row = pixels[row * 2 + 1]
+        if not use_half:
+            chars: list[str] = []
+            for x in range(width):
+                overlay = logo.get((row, x))
+                if overlay is not None and not overlay[2]:
+                    chars.append(overlay[0])
+                    continue
+                r1, g1, b1 = top_row[x]
+                r2, g2, b2 = bot_row[x]
+                luma = (0.299 * (r1 + r2) + 0.587 * (g1 + g2) + 0.114 * (b1 + b2)) / 510.0
+                idx = max(0, min(len(_ASCII_SHADE) - 1, int(luma * (len(_ASCII_SHADE) - 1) + 0.5)))
+                chars.append(_ASCII_SHADE[idx])
+            lines.append("".join(chars))
+            continue
+        out: list[str] = []
+        last_fg: RGB | None = None
+        last_bg: RGB | None = None
+        for x in range(width):
+            overlay = logo.get((row, x))
+            t_rgb = top_row[x]
+            b_rgb = bot_row[x]
+            if overlay is not None:
+                ch, fg, is_shadow = overlay
+                if is_shadow:
+                    bg = scale_rgb(lerp_rgb(t_rgb, b_rgb, 0.5), 0.16)
+                    out.append(f"\x1b[48;2;{bg[0]};{bg[1]};{bg[2]}m \x1b[0m")
+                else:
+                    bg = scale_rgb(lerp_rgb(t_rgb, b_rgb, 0.5), 0.24)
+                    out.append(f"\x1b[1;38;2;{fg[0]};{fg[1]};{fg[2]};48;2;{bg[0]};{bg[1]};{bg[2]}m{ch}\x1b[0m")
+                last_fg = last_bg = None
+                continue
+            if t_rgb != last_fg or b_rgb != last_bg:
+                out.append(f"\x1b[38;2;{t_rgb[0]};{t_rgb[1]};{t_rgb[2]};48;2;{b_rgb[0]};{b_rgb[1]};{b_rgb[2]}m")
+                last_fg, last_bg = t_rgb, b_rgb
+            out.append("▀")
+        out.append(ANSI_RESET)
+        lines.append("".join(out))
+    return lines
+
+
+def _logo_overlay_cells(
+    width: int, canvas_rows: int, theme: DashboardTheme, frame: int, glyphs: dict,
+) -> dict[tuple[int, int], tuple[str, RGB, bool]]:
+    """Centered 3D drop-shadowed glowing ILLUMO wordmark over the live shader."""
+    if width < 32 or canvas_rows < 7 or glyphs is not UNICODE_GLYPHS:
+        return {}
+    bw = len(BANNER_ROWS[0])
+    x0 = (width - bw) // 2
+    y0 = max(1, (canvas_rows - len(BANNER_ROWS)) // 2)
+    cells: dict[tuple[int, int], tuple[str, RGB, bool]] = {}
+    band = shine_band(frame, bw + len(BANNER_ROWS), speed=1.5, band=4, period=64)
+    # Extruded dark drop-shadow at (+1, +1) first so the glowing face pops in 3D.
+    for r_idx, text in enumerate(BANNER_ROWS):
+        for c_idx, ch in enumerate(text):
+            if ch != " ":
+                sy, sx = y0 + r_idx + 1, x0 + c_idx + 1
+                if 0 <= sy < canvas_rows and 0 <= sx < width:
+                    cells[(sy, sx)] = (" ", (0, 0, 0), True)
+    for r_idx, text in enumerate(BANNER_ROWS):
+        for c_idx, ch in enumerate(text):
+            if ch == " ":
+                continue
+            t = c_idx / max(1, bw - 1)
+            phase = frame * 0.015 if theme.prism else 0.0
+            rgb = boost_rgb(theme_color(theme, t, phase=phase), 0.42)
+            if band is not None and band[0] + r_idx <= c_idx < band[1] + r_idx:
+                rgb = (255, 255, 255)
+            cells[(y0 + r_idx, x0 + c_idx)] = (ch, rgb, False)
+    return cells
+
+
+def render_lightshow_frame(
+    ls: LightshowState, columns: int, rows: int, *, ansi: bool = True, fps: float = 0.0,
+) -> str:
+    """Render one frame of the 7-scene TrueColor Spectacle plus its bottom HUD."""
+    width = max(20, columns - 1)
+    canvas_rows = max(4, rows - 3)
+    glyphs = terminal_glyphs()
+    theme = resolve_theme(ls.theme_name)
+    pw, ph = width, canvas_rows * 2
+    logo = _logo_overlay_cells(width, canvas_rows, theme, ls.frame, glyphs) if ls.show_logo else {}
+    pixels = _render_scene_pixels(ls, pw, ph, theme)
+    body = _pack_half_blocks(pixels, width, canvas_rows, ansi, glyphs, logo)
+
+    # Bottom HUD bar with scene pills, Auto-Director indicator, theme, and FPS.
+    short_labels = {
+        "torus": _TORUS_SHAPES[ls.shape_index].split()[0],
+        "tunnel": "Tunnel", "fireworks": "Fireworks", "fire": "Inferno",
+        "life": "Life", "plasma": "Plasma", "warp": "Warp",
+    }
+    hud: list[tuple[str, str]] = [(" ", "")]
+    for idx, (s_key, _s_label) in enumerate(LIGHTSHOW_SCENES, start=1):
+        label = short_labels[s_key]
+        active = s_key == ls.scene
+        if active:
+            pill_style = ANSI_BOLD + rgb_bg(theme.accent) + "\x1b[38;2;10;12;20m"
+            hud.append((f" {idx}:{label} ", pill_style))
+        else:
+            hud.append((f"{idx}:{label}", ANSI_DIM))
+        hud.append((" ", ""))
+    sep = glyphs["separator"]
+    hud.extend([
+        (f"{sep} ", ANSI_DIM),
+        ("a", ANSI_BOLD + (ANSI_GREEN if ls.auto else rgb_fg(theme.accent))),
+        (f":{'AUTO' if ls.auto else 'auto'} ", ANSI_GREEN if ls.auto else ANSI_DIM),
+        ("g", ANSI_BOLD + rgb_fg(theme.accent)),
+        (f":{theme.name} ", ANSI_DIM),
+        ("Spc", ANSI_BOLD + rgb_fg(theme.accent)),
+        (":boom ", ANSI_DIM),
+        ("q", ANSI_BOLD + rgb_fg(theme.accent)),
+        (":exit", ANSI_DIM),
+    ])
+    if fps > 0.0:
+        hud.append((f" {sep} {fps:4.1f}fps", ANSI_DIM))
+    rule_line = _horizontal_border_segments(
+        glyphs["horizontal"], glyphs["horizontal"], glyphs["horizontal"], width, (), glyphs, ansi,
+        theme=theme, frame=ls.frame, start_pos=0, step=1, perimeter=max(20, width * 2),
+    )
+    hud_line = render_segments(hud, width, ansi, ellipsis=glyphs["ellipsis"])
+    return "\n".join([*body, rule_line, hud_line])
+
+
+def render_sidekick_panel(
+    ls: LightshowState,
+    panel_width: int,
+    panel_rows: int,
+    *,
+    theme: DashboardTheme,
+    frame: int | None,
+    ansi: bool = True,
+) -> list[str]:
+    """Compact orbiting-glow Live Reactor sidekick docked beside wide dashboards."""
+    glyphs = terminal_glyphs()
+    inner_w = max(8, panel_width - 2)
+    canvas_rows = max(4, panel_rows - 2)
+    ls.theme_name = theme.key
+    ls.step(inner_w, canvas_rows)
+    pixels = _render_scene_pixels(ls, inner_w, canvas_rows * 2, theme)
+    body = _pack_half_blocks(pixels, inner_w, canvas_rows, ansi, glyphs)
+    perimeter = 2 * (panel_width - 1) + 2 * max(1, panel_rows - 1)
+    scene_label = dict(LIGHTSHOW_SCENES).get(ls.scene, ls.scene)
+    if ls.scene == "torus":
+        scene_label = _TORUS_SHAPES[ls.shape_index]
+    top_title = [
+        *gradient_segments("Reactor", theme=theme),
+        (f" {glyphs['separator']} {scene_label}", ANSI_DIM),
+    ]
+    bottom_hint = [
+        ("v", ANSI_BOLD + rgb_fg(theme.accent)),
+        (" mode  ", ANSI_DIM),
+        ("g", ANSI_BOLD + rgb_fg(theme.accent)),
+        (" theme  ", ANSI_DIM),
+        ("f", ANSI_BOLD + rgb_fg(theme.accent)),
+        (" full", ANSI_DIM),
+    ]
+    out = [_horizontal_border_segments(
+        glyphs["top_left"], glyphs["top_right"], glyphs["horizontal"], panel_width,
+        top_title, glyphs, ansi, theme=theme, frame=frame, start_pos=0, step=1, perimeter=perimeter,
+    )]
+    for idx, b_line in enumerate(body, start=1):
+        if ansi:
+            l_rgb = perimeter_glow_rgb(theme, perimeter - idx, perimeter, frame)
+            r_rgb = perimeter_glow_rgb(theme, (panel_width - 1) + idx, perimeter, frame)
+            out.append(
+                f"{rgb_fg(l_rgb)}{glyphs['vertical']}{ANSI_RESET}"
+                f"{b_line}"
+                f"{rgb_fg(r_rgb)}{glyphs['vertical']}{ANSI_RESET}"
+            )
+        else:
+            out.append(f"{glyphs['vertical']}{b_line}{glyphs['vertical']}")
+    bottom_start = (panel_width - 1) + max(1, panel_rows - 1) + (panel_width - 1)
+    out.append(_horizontal_border_segments(
+        glyphs["bottom_left"], glyphs["bottom_right"], glyphs["horizontal"], panel_width,
+        bottom_hint, glyphs, ansi, theme=theme, frame=frame, start_pos=bottom_start, step=-1, perimeter=perimeter,
+    ))
+    return out
+
+
+def compose_dashboard_with_sidekick(dashboard_text: str, sidekick_lines: list[str], gap: int = 2) -> str:
+    """Stitch the Live Reactor panel beside the left-aligned dashboard without moving hit regions."""
+    left_lines = dashboard_text.splitlines()
+    spacer = " " * gap
+    combined: list[str] = []
+    for idx, left in enumerate(left_lines):
+        if idx < len(sidekick_lines) and left:
+            combined.append(left + spacer + sidekick_lines[idx])
+        else:
+            combined.append(left)
+    return "\n".join(combined)
+
+
+def run_lightshow(
+    terminal: DashboardTerminal,
+    *,
+    scene: str = "torus",
+    theme_name: str | None = None,
+    max_frames: int | None = None,
+    auto: bool = False,
+) -> str:
+    """Interactive 7-scene TrueColor Spectacle loop; returns the last selected theme key."""
+    ls = LightshowState(scene=scene, theme_name=theme_name, auto=auto)
+    fps = 0.0
+    last_t = time.monotonic()
+    frames_rendered = 0
+    while True:
+        size = dashboard_terminal_size((100, 32))
+        ls.step(max(20, size.columns - 1), max(4, size.lines - 3))
+        now = time.monotonic()
+        dt = max(0.001, now - last_t)
+        fps = (1.0 / dt) if fps == 0.0 else (fps * 0.85 + (1.0 / dt) * 0.15)
+        last_t = now
+        frame_text = render_lightshow_frame(ls, size.columns, size.lines, ansi=True, fps=fps)
+        write_in_place_frame(frame_text)
+        frames_rendered += 1
+        if max_frames is not None and frames_rendered >= max_frames:
+            return ls.theme_name
+        event = terminal.read_event(timeout=0.045)
+        if event == "tick":
+            continue
+        if isinstance(event, DashboardMouseEvent):
+            if event.kind == "left":
+                ls.trigger_burst()
+            elif event.kind == "right":
+                idx = (LIGHTSHOW_SCENE_KEYS.index(ls.scene) + 1) % len(LIGHTSHOW_SCENE_KEYS)
+                ls.set_scene(LIGHTSHOW_SCENE_KEYS[idx])
+            continue
+        if event in ("quit", "escape"):
+            return ls.theme_name
+        if event in ("left", "right"):
+            ls.auto = False
+            step = -1 if event == "left" else 1
+            idx = (LIGHTSHOW_SCENE_KEYS.index(ls.scene) + step) % len(LIGHTSHOW_SCENE_KEYS)
+            ls.set_scene(LIGHTSHOW_SCENE_KEYS[idx])
+        elif isinstance(event, str) and event.startswith("key:") and len(event) == 5 and "1" <= event[4] <= str(len(LIGHTSHOW_SCENE_KEYS)):
+            ls.auto = False
+            ls.set_scene(LIGHTSHOW_SCENE_KEYS[int(event[4]) - 1])
+        elif event in ("key:a", "key:A"):
+            ls.auto = not ls.auto
+            ls.scene_age = 0
+        elif event in ("key:g", "key:G", "key:t", "key:T"):
+            idx = (THEME_ORDER.index(ls.theme_name) + 1) % len(THEME_ORDER)
+            ls.theme_name = THEME_ORDER[idx]
+        elif event in ("key:b", "key:B"):
+            ls.show_logo = not ls.show_logo
+        elif event in ("key: ", "enter"):
+            ls.trigger_burst()
+
+
+def run_lightshow_cli(arguments: argparse.Namespace) -> None:
+    auto = bool(getattr(arguments, "auto", False)) or getattr(arguments, "command", "") == "spectacle"
+    scene = getattr(arguments, "scene", None) or "torus"
+    theme_name = getattr(arguments, "theme", None)
+    if getattr(arguments, "snapshot", False):
+        ls = LightshowState(scene=scene, theme_name=theme_name, auto=auto)
+        for _ in range(4):
+            ls.step(96, 26)
+        ansi = bool(getattr(arguments, "color", False)) or cli_ansi_enabled()
+        print(render_lightshow_frame(ls, 97, 29, ansi=ansi, fps=22.0))
+        return
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise BuildError(
+            "The interactive spectacle requires a terminal (use --snapshot for a single frame)."
+        )
+    terminal = DashboardTerminal()
+    sys.stdout.write(ANSI_PUSH_TITLE + "\x1b]2;Illumo Spectacle\x07")
+    try:
+        terminal.enter()
+        run_lightshow(
+            terminal,
+            scene=scene,
+            theme_name=theme_name,
+            max_frames=getattr(arguments, "frames", None),
+            auto=auto,
+        )
+    finally:
+        terminal.leave()
+        sys.stdout.write(ANSI_POP_TITLE)
+        sys.stdout.flush()
 
 
 def dashboard_navigate(state: DashboardState, key: str) -> bool:
@@ -4370,7 +6060,7 @@ def dashboard_key_action(state: DashboardState, key: str) -> str | None:
     return None
 
 
-def run_dashboard() -> int:
+def run_dashboard(theme_name: str | None = None) -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print(
             "error: the interactive build console requires a terminal; "
@@ -4379,7 +6069,8 @@ def run_dashboard() -> int:
         )
         return 2
 
-    state = DashboardState()
+    state = DashboardState(theme=resolve_theme(theme_name).key)
+    sidekick = LightshowState(scene="torus", theme_name=state.theme, show_logo=False)
     terminal = DashboardTerminal()
     refresh_dashboard_context(state)
     sys.stdout.write(ANSI_PUSH_TITLE + terminal_progress_signals(None))
@@ -4408,6 +6099,18 @@ def run_dashboard() -> int:
             rendered_rows = len(rendered.splitlines())
             if terminal_size.columns < 56 or rendered_rows > terminal_size.lines:
                 regions.clear()
+            # Wide terminals (>= 126 cols) dock a live 24-bit half-block Reactor beside the console!
+            panel_space = terminal_size.columns - 103
+            if animate and state.reactor_mode != "off" and panel_space >= 24 and rendered_rows >= 14:
+                sidekick.set_scene(state.reactor_mode)
+                panel_w = min(56, panel_space)
+                panel_lines = render_sidekick_panel(
+                    sidekick, panel_w, rendered_rows,
+                    theme=resolve_theme(state.theme), frame=state.frame, ansi=True,
+                )
+                if reveal is not None:
+                    panel_lines = [line if idx < reveal else "" for idx, line in enumerate(panel_lines)]
+                rendered = compose_dashboard_with_sidekick(rendered, panel_lines, gap=2)
             if rendered != last_rendered:
                 if ticked and last_rendered is not None and terminal_size == last_size:
                     # Animation frames overwrite in place; clearing would flicker.
@@ -4430,6 +6133,9 @@ def run_dashboard() -> int:
             if isinstance(event, DashboardMouseEvent):
                 if dashboard_terminal_size() != terminal_size:
                     continue
+                if event.kind == "left" and event.x > 102 and state.reactor_mode != "off":
+                    sidekick.trigger_burst()
+                    continue
                 key = dashboard_mouse_key(state, event, regions)
             else:
                 key = event
@@ -4445,6 +6151,7 @@ def run_dashboard() -> int:
                 ):
                     if DASHBOARD_ITEMS[state.selected][0] == "setting":
                         adjust_dashboard_setting(state, -1 if key == "left" else 1)
+                        sidekick.trigger_burst()
                     continue
                 if key == "key:?":
                     show_toolbox_text("Keyboard shortcuts", dashboard_shortcut_lines(state), terminal)
@@ -4452,6 +6159,27 @@ def run_dashboard() -> int:
                     continue
                 if key == "key:m":
                     state.status, state.status_kind = run_compiler_options(state, terminal), "normal"
+                    last_rendered = None
+                    continue
+                if key in ("key:g", "key:G"):
+                    cycle_dashboard_theme(state, -1 if key == "key:G" else 1)
+                    sidekick.trigger_burst()
+                    last_rendered = None
+                    continue
+                if key in ("key:v", "key:V"):
+                    step = -1 if key == "key:V" else 1
+                    idx = (REACTOR_MODES.index(state.reactor_mode) + step) % len(REACTOR_MODES)
+                    state.reactor_mode = REACTOR_MODES[idx]
+                    label = "Off" if state.reactor_mode == "off" else dict(LIGHTSHOW_SCENES).get(state.reactor_mode, state.reactor_mode)
+                    state.status, state.status_kind = f"Live Reactor: {label} (widen terminal >= 126 cols)", "normal"
+                    last_rendered = None
+                    continue
+                if key in ("key:f", "key:F"):
+                    start_scene = state.reactor_mode if state.reactor_mode in LIGHTSHOW_SCENE_KEYS else "torus"
+                    state.theme = run_lightshow(terminal, scene=start_scene, theme_name=state.theme, auto=True)
+                    state.wave_frame = state.frame
+                    theme = resolve_theme(state.theme)
+                    state.status, state.status_kind = f"Spectacle closed (theme: {theme.name})", "normal"
                     last_rendered = None
                     continue
                 if key == "search":
@@ -5087,8 +6815,42 @@ def repository_statistics_json(
     return json.dumps(payload, indent=2)
 
 
+def _gradient_text_line(text: str, stops: Sequence[RGB] | None = None, *, bold: bool = True) -> str:
+    theme = resolve_theme()
+    span = max(1, len(text) - 1)
+    prefix = ANSI_BOLD if bold else ""
+    parts: list[str] = []
+    for idx, ch in enumerate(text):
+        if ch == " ":
+            parts.append(" ")
+            continue
+        rgb = sample_gradient(stops, idx / span) if stops else theme_color(theme, idx / span)
+        parts.append(f"{prefix}{rgb_fg(rgb)}{ch}")
+    return "".join(parts) + ANSI_RESET
+
+
+_STATS_CATEGORY_GRADIENTS: tuple[tuple[RGB, RGB], ...] = (
+    ((0, 235, 255), (150, 110, 255)),
+    ((52, 238, 152), (168, 255, 112)),
+    ((255, 76, 178), (255, 206, 86)),
+    ((255, 154, 62), (242, 74, 108)),
+    ((72, 186, 255), (146, 128, 255)),
+    ((204, 118, 255), (255, 112, 188)),
+)
+
+
 def print_repository_statistics(statistics: RepositoryStatistics) -> None:
-    print("ILLUMO REPOSITORY STATISTICS")
+    ansi = cli_ansi_enabled()
+    if ansi and terminal_glyphs() is UNICODE_GLYPHS:
+        theme = resolve_theme()
+        for r_idx, row_text in enumerate(BANNER_ROWS):
+            print("  " + "".join(
+                f"{style}{ch}{ANSI_RESET}" if style else ch
+                for ch, style in banner_segments(row_text, r_idx, theme=theme)
+            ))
+        print("  " + _gradient_text_line("REPOSITORY STATISTICS  " + "━" * 44))
+    else:
+        print(_gradient_text_line("ILLUMO REPOSITORY STATISTICS") if ansi else "ILLUMO REPOSITORY STATISTICS")
     print(f"Root: {statistics.root}")
     if statistics.commit is None:
         print("Git: unavailable")
@@ -5136,17 +6898,25 @@ def print_repository_statistics(statistics: RepositoryStatistics) -> None:
         f"{statistics.first_party_physical_lines:,} physical lines"
     )
     glyphs = terminal_glyphs()
-    ansi = sys.stdout.isatty()
     largest = max((category.loc for category in statistics.categories), default=0)
     for index, category in enumerate(statistics.categories):
         cells = round(24 * category.loc / largest) if largest else 0
-        color = f"\x1b[38;5;{GRADIENT_COLORS[index * 2 % len(GRADIENT_COLORS)]}m"
+        if cells:
+            bar_raw = glyphs["block"] * cells
+            bar = (
+                "  " + _gradient_text_line(
+                    bar_raw, _STATS_CATEGORY_GRADIENTS[index % len(_STATS_CATEGORY_GRADIENTS)], bold=False
+                )
+                if ansi else "  " + bar_raw
+            )
+        else:
+            bar = ""
         print(
             f"  {category.label:<24} "
             f"{category.files:>4,} files  "
             f"{category.loc:>8,} LOC  "
             f"{category.physical_lines:>8,} physical"
-            + ("  " + dashboard_style(glyphs["block"] * cells, color, ansi) if cells else "")
+            + bar
         )
     source = (
         "tracked files"
@@ -5591,7 +7361,7 @@ def print_build_summary(
     """Close a successful build with its outputs, so a missing app is obvious."""
     if arguments.dry_run:
         return
-    ansi = sys.stdout.isatty()
+    ansi = cli_ansi_enabled()
     build_directory = resolve_build_directory(arguments.build_dir)
     rows: list[tuple[str, str, str]] = []
     outputs = runtime_outputs(build_directory, arguments.config)
@@ -5616,7 +7386,14 @@ def print_build_summary(
     marks = {"ok": (glyphs["ok"], ANSI_GREEN), "warn": (glyphs["warn"], ANSI_YELLOW), "info": (glyphs["info"], ANSI_DIM)}
     heading = f"{title} in {format_duration(time.monotonic() - started)}"
     print()
-    print(dashboard_style(heading, ANSI_BOLD + ANSI_GREEN, ansi))
+    if ansi:
+        heavy = glyphs["heavy"]
+        print(
+            _gradient_text_line(f"{glyphs['ok']} {heavy * 2} {heading} {heavy * 6}",
+                                ((64, 242, 148), (112, 248, 255), (255, 232, 118)))
+        )
+    else:
+        print(heading)
     label_width = max((len(label) for _kind, label, _detail in rows), default=0)
     for kind, label, detail in rows:
         mark, style = marks[kind]
@@ -6069,9 +7846,60 @@ def create_parser(
         "menu", help="open the interactive terminal build console"
     )
     menu_parser.add_argument(
+        "--theme",
+        choices=THEME_ORDER,
+        default=None,
+        help="24-bit color theme (default: ILLUMO_THEME or illumo)",
+    )
+    menu_parser.add_argument(
         "--snapshot",
         action="store_true",
         help=argparse.SUPPRESS,
+    )
+    menu_parser.add_argument(
+        "--color",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+
+    lightshow_parser = subparsers.add_parser(
+        "lightshow",
+        aliases=["flair", "spectacle"],
+        help="launch the 7-scene 24-bit TrueColor demoscene spectacle (3D Torus, Tunnel, Fireworks, Inferno, CSim Life, Plasma, Hyperwarp)",
+    )
+    lightshow_parser.add_argument(
+        "--scene",
+        choices=LIGHTSHOW_SCENE_KEYS,
+        default="torus",
+        help="starting visualizer scene (default: %(default)s)",
+    )
+    lightshow_parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="auto-cycle through all 7 scenes and themes (default for 'spectacle')",
+    )
+    lightshow_parser.add_argument(
+        "--theme",
+        choices=THEME_ORDER,
+        default=None,
+        help="24-bit color theme (default: ILLUMO_THEME or illumo)",
+    )
+    lightshow_parser.add_argument(
+        "--frames",
+        type=positive_count,
+        default=None,
+        metavar="N",
+        help="stop automatically after N frames",
+    )
+    lightshow_parser.add_argument(
+        "--snapshot",
+        action="store_true",
+        help="print one rendered frame and exit",
+    )
+    lightshow_parser.add_argument(
+        "--color",
+        action="store_true",
+        help="force 24-bit ANSI output with --snapshot",
     )
 
     subparsers.add_parser(
@@ -7297,8 +9125,8 @@ def run_watch_cycle(
         shown = ", ".join(changed[:4]) + (f" and {len(changed) - 4} more" if len(changed) > 4 else "")
         heading += f": {len(changed)} changed ({shown})"
     print()
-    print(dashboard_style(f"{heavy * 2} {heading} ", ANSI_BOLD + ANSI_CYAN, ansi)
-          + dashboard_style(heavy * 8, ANSI_FRAME, ansi), flush=True)
+    banner_line = f"{heavy * 2} {heading} {heavy * 8}"
+    print(_gradient_text_line(banner_line) if ansi else banner_line, flush=True)
     started = time.monotonic()
     ok = True
     for command in commands:
@@ -7724,9 +9552,9 @@ def run_new_project(arguments: argparse.Namespace) -> None:
         raise BuildError(str(err)) from err
 
 
-def _run_interactive_dashboard() -> int:
+def _run_interactive_dashboard(theme_name: str | None = None) -> int:
     try:
-        return run_dashboard()
+        return run_dashboard(theme_name=theme_name)
     except KeyboardInterrupt:
         print("\nBuild console closed.", file=sys.stderr)
         return 130
@@ -7763,15 +9591,18 @@ def main(arguments: Sequence[str] | None = None) -> int:
 
     if parsed.command == "menu":
         if parsed.snapshot:
+            snap_state = DashboardState(theme=resolve_theme(parsed.theme).key)
             print(
                 render_dashboard(
-                    DashboardState(),
+                    snap_state,
                     96,
-                    ansi=False,
+                    ansi=bool(parsed.color),
+                    terminal_rows=36 if parsed.color else None,
+                    frame=12 if parsed.color else None,
                 )
             )
             return 0
-        return _run_interactive_dashboard()
+        return _run_interactive_dashboard(theme_name=parsed.theme)
 
     actions = {
         "_toolbox": run_toolbox_request,
@@ -7791,6 +9622,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
         "docs": run_docs,
         "version": run_version,
         "logs": run_logs,
+        "lightshow": run_lightshow_cli,
+        "flair": run_lightshow_cli,
+        "spectacle": run_lightshow_cli,
         "stats": run_repository_statistics,
         "file-stats": run_source_file_statistics,
         "source-stats": run_source_file_statistics,

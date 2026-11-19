@@ -2378,6 +2378,77 @@ class OrchestratorAuditRegressionTests(unittest.TestCase):
         rendered = build.render_dashboard_progress(progress, 80, 6, ansi=False)
         self.assertIn("Ctrl+C", rendered.splitlines()[-1])
 
+    def test_truecolor_themes_and_lightshow_visualizers(self):
+        # Every built-in TrueColor theme preserves exact text geometry across animated frames,
+        # cosmic nebula backdrop, row flashes, and full-console diagonal shockwaves.
+        state = build.DashboardState(applications=("game",))
+        plain = build.render_dashboard(state, 100, ansi=False, terminal_rows=40)
+        for theme_key in build.THEME_ORDER:
+            state.theme = theme_key
+            state.flash_row, state.flash_frame = 0, 10
+            state.wave_frame = 8
+            styled = build.render_dashboard(state, 100, ansi=True, terminal_rows=40, frame=12)
+            self.assertIn("\x1b[38;2;", styled)
+            self.assertIn("\x1b[48;2;", styled)
+            stripped = "\n".join(build._ANSI_SEQUENCE.sub("", line) for line in styled.splitlines())
+            self.assertEqual(stripped, plain)
+
+        # Wide-screen Live Reactor sidekick composes cleanly beside the dashboard without moving hit regions.
+        sidekick = build.LightshowState(scene="torus", theme_name="synthwave", show_logo=False)
+        panel = build.render_sidekick_panel(sidekick, 36, len(plain.splitlines()),
+                                            theme=build.resolve_theme("synthwave"), frame=12, ansi=True)
+        self.assertEqual(len(panel), len(plain.splitlines()))
+        composed = build.compose_dashboard_with_sidekick(plain, panel, gap=2)
+        self.assertEqual(len(composed.splitlines()), len(plain.splitlines()))
+        self.assertIn("Reactor", build._ANSI_SEQUENCE.sub("", composed.splitlines()[0]))
+
+        # Theme cycling triggers a wave and palette theme selection updates state.theme cleanly.
+        state = build.DashboardState(applications=("game",), theme="illumo", frame=20)
+        next_theme = build.cycle_dashboard_theme(state, 1)
+        self.assertEqual(state.theme, next_theme.key)
+        self.assertEqual(state.wave_frame, 20)
+        self.assertIsNone(build.apply_palette_choice(state, unittest.mock.Mock(), "theme:synthwave"))
+        self.assertEqual(state.theme, "synthwave")
+
+        # All 7 Spectacle scenes (including 3D Torus -> Trefoil -> Cube morphs) step, burst, and render cleanly.
+        for scene in build.LIGHTSHOW_SCENE_KEYS:
+            ls = build.LightshowState(scene=scene, theme_name="prism")
+            ls.step(60, 14)
+            ls.trigger_burst()
+            ls.step(60, 14)
+            if scene == "torus":
+                ls.trigger_burst()
+                ls.step(60, 14)
+            colored = build.render_lightshow_frame(ls, 61, 17, ansi=True, fps=20.0)
+            self.assertIn("\x1b[38;2;", colored)
+            plain_frame = build.render_lightshow_frame(ls, 61, 17, ansi=False, fps=20.0)
+            self.assertEqual(len(plain_frame.splitlines()), 16)
+            self.assertNotIn("\x1b", plain_frame)
+
+        # Auto-Director advances scenes and themes automatically after 95 frames.
+        auto_ls = build.LightshowState(scene="torus", theme_name="illumo", auto=True)
+        auto_ls.scene_age = 94
+        auto_ls.step(40, 10)
+        self.assertNotEqual(auto_ls.scene, "torus")
+        self.assertNotEqual(auto_ls.theme_name, "illumo")
+
+        # Interactive spectacle loop handles scene switches, auto toggle, theme cycle, burst, logo toggle, and exit.
+        events = iter(["right", "key:3", "key:a", "key:g", "key: ", "key:b", "quit"])
+        class FakeLightTerminal:
+            def read_event(self, _timeout=None, **_kw):
+                return next(events)
+        with patch.object(build, "dashboard_terminal_size", return_value=build.os.terminal_size((80, 24))), \
+             contextlib.redirect_stdout(io.StringIO()):
+            chosen = build.run_lightshow(FakeLightTerminal(), scene="torus", theme_name="illumo")
+        self.assertEqual(chosen, build.THEME_ORDER[1])
+
+        # CLI `spectacle --snapshot` and `flair --snapshot` run end-to-end.
+        code, output, errors = self.invoke("spectacle", "--scene", "fireworks", "--theme", "ember", "--snapshot")
+        self.assertEqual(code, 0, errors)
+        self.assertIn("Fireworks", output)
+        self.assertIn("Ember", output)
+        self.assertIn("AUTO", output)
+
 
 if __name__ == "__main__":
     unittest.main()
