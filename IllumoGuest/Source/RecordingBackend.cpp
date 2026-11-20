@@ -89,6 +89,9 @@ GuestRecordingBackend::BeginLayer(RenderLayerId layer)
   const Renderer::FrameContext& context = m_renderer->getFrameContext();
   m_frame.hasCamera = context.active && context.hasWorldMvp;
   m_frame.camera = context.worldMvp;
+  m_frame.hasDebugVelocity = context.active && context.hasDebugVelocity;
+  m_frame.debugVelocity = context.debugVelocity;
+  m_frame.debugVelocityReferenceSpeed = context.debugVelocityReferenceSpeed;
   m_frame.shadowCasters.clear();
   for (const Renderer::ShadowCasterDesc& source :
        m_renderer->getShadowCasters()) {

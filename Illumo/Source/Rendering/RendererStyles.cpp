@@ -730,6 +730,790 @@ void main() {
 }
 )";
 
+static const char* kSobelEdgeFragmentShader = R"(
+#version 330 core
+in vec2 vTexCoord;
+out vec4 FragColor;
+
+uniform sampler2D uColorTexture;
+uniform sampler2D uDepthTexture;
+uniform int uSobelMode;
+uniform int uSobelSource;
+uniform int uHasDepth;
+uniform float uSobelStrength;
+uniform float uSobelThreshold;
+uniform float uSobelThickness;
+uniform int uStoreLumaInAlpha;
+
+float sampleLogDepth(vec2 uv) {
+    float d = texture(uDepthTexture, uv).r;
+    return log2(max(1.0 - d, 1e-5));
+}
+
+void main() {
+    vec2 stepUv = (1.0 / vec2(textureSize(uColorTexture, 0))) * clamp(uSobelThickness, 0.25, 4.0);
+    vec3 center = texture(uColorTexture, vTexCoord).rgb;
+
+    float colorMag = 0.0;
+    if (uSobelSource == 0 || uSobelSource == 2 || uHasDepth == 0) {
+        vec3 tl = texture(uColorTexture, vTexCoord + vec2(-stepUv.x,  stepUv.y)).rgb;
+        vec3 tc = texture(uColorTexture, vTexCoord + vec2(     0.0,   stepUv.y)).rgb;
+        vec3 tr = texture(uColorTexture, vTexCoord + vec2( stepUv.x,  stepUv.y)).rgb;
+        vec3 ml = texture(uColorTexture, vTexCoord + vec2(-stepUv.x,       0.0)).rgb;
+        vec3 mr = texture(uColorTexture, vTexCoord + vec2( stepUv.x,       0.0)).rgb;
+        vec3 bl = texture(uColorTexture, vTexCoord + vec2(-stepUv.x, -stepUv.y)).rgb;
+        vec3 bc = texture(uColorTexture, vTexCoord + vec2(     0.0,  -stepUv.y)).rgb;
+        vec3 br = texture(uColorTexture, vTexCoord + vec2( stepUv.x, -stepUv.y)).rgb;
+
+        vec3 gx = -tl - 2.0 * ml - bl + tr + 2.0 * mr + br;
+        vec3 gy = -tl - 2.0 * tc - tr + bl + 2.0 * bc + br;
+        vec3 magRgb = sqrt(gx * gx + gy * gy);
+        colorMag = length(magRgb) * 0.35;
+    }
+
+    float depthMag = 0.0;
+    if (uHasDepth != 0 && (uSobelSource == 1 || uSobelSource == 2)) {
+        float dtl = sampleLogDepth(vTexCoord + vec2(-stepUv.x,  stepUv.y));
+        float dtc = sampleLogDepth(vTexCoord + vec2(     0.0,   stepUv.y));
+        float dtr = sampleLogDepth(vTexCoord + vec2( stepUv.x,  stepUv.y));
+        float dml = sampleLogDepth(vTexCoord + vec2(-stepUv.x,       0.0));
+        float dmr = sampleLogDepth(vTexCoord + vec2( stepUv.x,       0.0));
+        float dbl = sampleLogDepth(vTexCoord + vec2(-stepUv.x, -stepUv.y));
+        float dbc = sampleLogDepth(vTexCoord + vec2(     0.0,  -stepUv.y));
+        float dbr = sampleLogDepth(vTexCoord + vec2( stepUv.x, -stepUv.y));
+
+        float dgx = -dtl - 2.0 * dml - dbl + dtr + 2.0 * dmr + dbr;
+        float dgy = -dtl - 2.0 * dtc - dtr + dbl + 2.0 * dbc + dbr;
+        depthMag = length(vec2(dgx, dgy)) * 0.25;
+    }
+
+    float combined = (uSobelSource == 1 && uHasDepth != 0)
+        ? depthMag
+        : ((uSobelSource == 2 && uHasDepth != 0) ? max(colorMag, depthMag) : colorMag);
+
+    float thresh = max(uSobelThreshold, 0.001);
+    float edge = smoothstep(thresh, thresh + 0.15, combined);
+    float strength = clamp(uSobelStrength, 0.0, 1.0);
+
+    vec3 outRgb = (uSobelMode == 1)
+        ? vec3(clamp(edge * strength, 0.0, 1.0))
+        : mix(center, vec3(0.04, 0.04, 0.06), clamp(edge * strength, 0.0, 1.0));
+    outRgb = clamp(outRgb, vec3(0.0), vec3(1.0));
+
+    float outAlpha = uStoreLumaInAlpha != 0
+        ? dot(outRgb, vec3(0.299, 0.587, 0.114))
+        : 1.0;
+    FragColor = vec4(outRgb, outAlpha);
+}
+)";
+
+static const char* kMotionFeedbackFragmentShader = R"(
+#version 330 core
+in vec2 vTexCoord;
+layout (location = 0) out vec4 FragColor;
+layout (location = 1) out vec4 FragMeta;
+
+uniform sampler2D uColorTexture;
+uniform sampler2D uVelocityTexture;
+uniform sampler2D uHistoryTexture;
+uniform sampler2D uDepthTexture;
+uniform sampler2D uMetaTexture;
+// uStage: 0 = Accum (RGBA16F phosphor+invDepth, RGBA16F dir/energy/entity),
+//         1 = CopyStore,
+//         2 = MatrixDisplay
+uniform int uStage;
+// uVariant (for uStage == 0/2):
+// 1 = Matrix, 2 = Cascade, 3 = Rain, 4 = Glyph, 5 = ChromaBit
+uniform int uVariant;
+uniform int uHistoryValid;
+uniform int uHasDepth;
+uniform float uFeedbackStrength;
+uniform float uFeedbackSpread;
+uniform float uTime;
+uniform float uDeltaTime;
+uniform float uDecayStep;
+uniform mat4 uPrevFromCurrClip;
+uniform mat4 uHistoryFromCurrClip;
+uniform int uStoreLumaInAlpha;
+
+float hash11(float p) {
+    return fract(sin(p * 127.1 + 311.7) * 43758.5453);
+}
+
+float hash21(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float bayer4x4(ivec2 p) {
+    int x = p.x & 3;
+    int y = p.y & 3;
+    int idx = (y << 2) | x;
+    if (idx == 0)  return  0.0 / 16.0;
+    if (idx == 1)  return  8.0 / 16.0;
+    if (idx == 2)  return  2.0 / 16.0;
+    if (idx == 3)  return 10.0 / 16.0;
+    if (idx == 4)  return 12.0 / 16.0;
+    if (idx == 5)  return  4.0 / 16.0;
+    if (idx == 6)  return 14.0 / 16.0;
+    if (idx == 7)  return  6.0 / 16.0;
+    if (idx == 8)  return  3.0 / 16.0;
+    if (idx == 9)  return 11.0 / 16.0;
+    if (idx == 10) return  1.0 / 16.0;
+    if (idx == 11) return  9.0 / 16.0;
+    if (idx == 12) return 15.0 / 16.0;
+    if (idx == 13) return  7.0 / 16.0;
+    if (idx == 14) return 13.0 / 16.0;
+    return 5.0 / 16.0;
+}
+
+// 16 procedural 3x5 bit-packed tech/hex micro-glyphs (row 0 = bottom, row 4 = top).
+float sampleGlyph3x5(int glyphId, ivec2 sub) {
+    if (sub.x < 0 || sub.x > 2 || sub.y < 0 || sub.y > 4) {
+        return 0.0;
+    }
+    int mask = 0;
+    if (glyphId == 0)       mask = (7 << 12) | (5 << 9) | (5 << 6) | (5 << 3) | 7;
+    else if (glyphId == 1)  mask = (2 << 12) | (6 << 9) | (2 << 6) | (2 << 3) | 7;
+    else if (glyphId == 2)  mask = (7 << 12) | (1 << 9) | (7 << 6) | (4 << 3) | 7;
+    else if (glyphId == 3)  mask = (7 << 12) | (1 << 9) | (7 << 6) | (1 << 3) | 7;
+    else if (glyphId == 4)  mask = (5 << 12) | (5 << 9) | (7 << 6) | (1 << 3) | 1;
+    else if (glyphId == 5)  mask = (7 << 12) | (4 << 9) | (7 << 6) | (1 << 3) | 7;
+    else if (glyphId == 6)  mask = (7 << 12) | (1 << 9) | (2 << 6) | (2 << 3) | 2;
+    else if (glyphId == 7)  mask = (2 << 12) | (5 << 9) | (7 << 6) | (5 << 3) | 5;
+    else if (glyphId == 8)  mask = (7 << 12) | (4 << 9) | (4 << 6) | (4 << 3) | 7;
+    else if (glyphId == 9)  mask = (7 << 12) | (4 << 9) | (6 << 6) | (4 << 3) | 7;
+    else if (glyphId == 10) mask = (7 << 12) | (4 << 9) | (6 << 6) | (4 << 3) | 4;
+    else if (glyphId == 11) mask = (5 << 12) | (5 << 9) | (7 << 6) | (5 << 3) | 5;
+    else if (glyphId == 12) mask = (5 << 12) | (5 << 9) | (2 << 6) | (5 << 3) | 5;
+    else if (glyphId == 13) mask = (0 << 12) | (7 << 9) | (0 << 6) | (7 << 3) | 0;
+    else if (glyphId == 14) mask = (0 << 12) | (2 << 9) | (7 << 6) | (2 << 3) | 0;
+    else                    mask = (7 << 12) | (4 << 9) | (7 << 6) | (4 << 3) | 4;
+    int bit = sub.y * 3 + (2 - sub.x);
+    return float((mask >> bit) & 1);
+}
+
+// Effective wake strength at a sampled meta pixel: either decaying wake energy
+// (.z) or the smoothly decaying live-entity boost (meta.w - 1.0 in [0..1]) when
+// gathering strictly along +dir from behind the entity (never in front of it).
+float sourceWakeEnergy(vec4 meta) {
+    float liveBoost = clamp(meta.w - 1.0, 0.0, 1.0);
+    return max(meta.z, liveBoost);
+}
+
+// Computes an energy-weighted average 2D travel direction (and speed magnitude
+// in .z) across a two-ring star matching the gather reach so trailing chromatic
+// gathers scale smoothly with velocity and never snap while fading out.
+vec3 sampleDominantTrailDirAndSpeed(vec2 uv, vec2 texel, float radiusPx) {
+    vec4 m0 = texture(uMetaTexture, uv);
+    float w0 = sourceWakeEnergy(m0);
+    vec2 accumDir = m0.xy * w0;
+    float accumW = w0;
+
+    vec2 r1 = texel * (radiusPx * 0.5);
+    vec2 r2 = texel * radiusPx;
+    vec4 a1 = texture(uMetaTexture, clamp(uv + vec2( r1.x,  0.0), vec2(0.001), vec2(0.999)));
+    vec4 a2 = texture(uMetaTexture, clamp(uv + vec2(-r1.x,  0.0), vec2(0.001), vec2(0.999)));
+    vec4 a3 = texture(uMetaTexture, clamp(uv + vec2( 0.0,  r1.y), vec2(0.001), vec2(0.999)));
+    vec4 a4 = texture(uMetaTexture, clamp(uv + vec2( 0.0, -r1.y), vec2(0.001), vec2(0.999)));
+    vec4 b1 = texture(uMetaTexture, clamp(uv + vec2( r2.x,  0.0), vec2(0.001), vec2(0.999)));
+    vec4 b2 = texture(uMetaTexture, clamp(uv + vec2(-r2.x,  0.0), vec2(0.001), vec2(0.999)));
+    vec4 b3 = texture(uMetaTexture, clamp(uv + vec2( 0.0,  r2.y), vec2(0.001), vec2(0.999)));
+    vec4 b4 = texture(uMetaTexture, clamp(uv + vec2( 0.0, -r2.y), vec2(0.001), vec2(0.999)));
+
+    float wa1 = sourceWakeEnergy(a1); accumDir += a1.xy * wa1; accumW += wa1;
+    float wa2 = sourceWakeEnergy(a2); accumDir += a2.xy * wa2; accumW += wa2;
+    float wa3 = sourceWakeEnergy(a3); accumDir += a3.xy * wa3; accumW += wa3;
+    float wa4 = sourceWakeEnergy(a4); accumDir += a4.xy * wa4; accumW += wa4;
+    float wb1 = sourceWakeEnergy(b1); accumDir += b1.xy * wb1; accumW += wb1;
+    float wb2 = sourceWakeEnergy(b2); accumDir += b2.xy * wb2; accumW += wb2;
+    float wb3 = sourceWakeEnergy(b3); accumDir += b3.xy * wb3; accumW += wb3;
+    float wb4 = sourceWakeEnergy(b4); accumDir += b4.xy * wb4; accumW += wb4;
+
+    float len = length(accumDir);
+    if (len <= 1e-4) {
+        return vec3(0.0);
+    }
+    float avgSpeed = clamp(len / max(accumW, 1e-4), 0.0, 1.0);
+    return vec3(accumDir / len, avgSpeed);
+}
+
+// Analytical 2D box-filtered coverage for a centered square [-halfSize, +halfSize]^2
+// evaluated at |cellFrac - 0.5| with pixel filter half-width halfPx (in cell units).
+// Remains strictly zero at halfSize == 0 and smoothly attenuates sub-pixel squares.
+float squareCoverage(vec2 centered, float halfSize, float halfPx) {
+    vec2 lo = max(centered - vec2(halfPx), vec2(-halfSize));
+    vec2 hi = min(centered + vec2(halfPx), vec2(halfSize));
+    vec2 cov = clamp((hi - lo) / max(2.0 * halfPx, 1e-4), vec2(0.0), vec2(1.0));
+    return cov.x * cov.y;
+}
+
+void main() {
+    vec4 currSample = texture(uColorTexture, vTexCoord);
+    if (uStage == 1) {
+        // Copy both WorldFeedbackState attachments verbatim into history.
+        FragColor = vec4(clamp(currSample.rgb, vec3(0.0), vec3(1.0)), currSample.a);
+        FragMeta = texture(uMetaTexture, vTexCoord);
+        return;
+    }
+
+    vec3 curr = currSample.rgb;
+    float currDepth = (uHasDepth != 0) ? texture(uDepthTexture, vTexCoord).r : 1.0;
+    float currInvDepth = (uHasDepth != 0) ? clamp(1.0 - currDepth, 0.0, 1.0) : 0.0;
+    float strength = clamp(uFeedbackStrength, 0.0, 1.0);
+    float spread = clamp(uFeedbackSpread, 0.1, 3.0);
+
+    // Subtract 1-frame camera reprojection velocity so panning/orbiting never
+    // tags static world geometry as moving entities and never cancels out a
+    // player moving at the same speed as the following camera.
+    vec2 rawVel = (uHasDepth != 0 && currDepth >= 0.99999)
+        ? vec2(0.0)
+        : texture(uVelocityTexture, vTexCoord).rg;
+    vec2 camVel = vec2(0.0);
+    if (uHasDepth != 0 && currDepth < 0.99999) {
+        vec4 currNdc = vec4(vTexCoord * 2.0 - 1.0, currDepth * 2.0 - 1.0, 1.0);
+        vec4 prevClip = uPrevFromCurrClip * currNdc;
+        if (prevClip.w > 1e-5) {
+            vec2 prevUv = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
+            camVel = vTexCoord - prevUv;
+        }
+    }
+    vec2 vel = rawVel - camVel;
+    float camVelLen = length(camVel);
+    float velNoise = camVelLen * 0.004 + 1e-5;
+    float rawObjLen = length(vel);
+    float velLen = max(0.0, rawObjLen - velNoise);
+    vec2 cleanVel = (rawObjLen > 1e-6 && velLen > 0.0) ? (vel * (velLen / rawObjLen)) : vec2(0.0);
+
+    float dtSec = clamp(uDeltaTime, 1e-5, 0.1);
+    float frames60 = dtSec * 60.0;
+    // True per-second object velocity (in 60Hz-frame units) with camera-pitch Y
+    // compensation so behavior is identical at 30, 60, 240, and 2000+ FPS.
+    float speed60 = (velLen > 1e-6) ? (velLen / frames60) : 0.0;
+    float perceivedSpeed = (velLen > 1e-6)
+        ? (length(vec2(cleanVel.x, cleanVel.y * 1.45)) / frames60)
+        : 0.0;
+    float speedIntensity = smoothstep(0.0012, 0.0080, perceivedSpeed);
+    bool movingNow = speed60 > 0.00030;
+
+    if (uStage == 0) {
+        float decayStep = clamp(uDecayStep, 0.0, 4.0);
+
+        if (uHistoryValid == 0) {
+            vec2 initDir = (movingNow && speedIntensity > 0.001)
+                ? ((cleanVel / velLen) * speedIntensity)
+                : vec2(0.0);
+            float initEntity = movingNow ? (1.0 + speedIntensity) : 0.0;
+            FragColor = vec4(clamp(curr, vec3(0.0), vec3(1.0)), currInvDepth);
+            FragMeta = vec4(initDir, 0.0, initEntity);
+            return;
+        }
+
+        // Reproject current surface into WorldFeedbackHistory so trails stay
+        // anchored to the 3D world when the camera pans or orbits, and freshly
+        // revealed screen edges start clean.
+        vec2 histUv = vTexCoord;
+        float expectedPrevInvDepth = currInvDepth;
+        bool histInBounds = true;
+        if (uHasDepth != 0 && currDepth < 0.99999) {
+            vec4 currNdc = vec4(vTexCoord * 2.0 - 1.0, currDepth * 2.0 - 1.0, 1.0);
+            vec4 histClip = uHistoryFromCurrClip * currNdc;
+            if (histClip.w > 1e-5) {
+                vec3 histNdc = histClip.xyz / histClip.w;
+                histUv = histNdc.xy * 0.5 + 0.5;
+                expectedPrevInvDepth = clamp(1.0 - (histNdc.z * 0.5 + 0.5), 0.0, 1.0);
+                histInBounds = (histUv.x >= 0.001 && histUv.x <= 0.999 &&
+                                histUv.y >= 0.001 && histUv.y <= 0.999);
+            } else {
+                histInBounds = false;
+            }
+        }
+
+        vec3 prevRgb = curr;
+        float prevInvDepth = expectedPrevInvDepth;
+        vec2 prevDir = vec2(0.0);
+        float prevEnergy = 0.0;
+        float prevEntity = 0.0;
+        if (histInBounds) {
+            vec4 prevSample = texture(uHistoryTexture, histUv);
+            vec4 prevMeta = texture(uMetaTexture, histUv);
+            prevRgb = prevSample.rgb;
+            prevInvDepth = prevSample.a;
+            prevDir = prevMeta.xy;
+            prevEnergy = prevMeta.z;
+            prevEntity = prevMeta.w;
+        }
+
+        // Perceptually smooth decay curve driven by CPU-accumulated decayStep
+        // (>= 0.25 60Hz-frame ticks) so 16-bit float history never stalls at
+        // uncapped 1000+ FPS frame rates.
+        float decay = clamp(mix(0.68, 0.95, strength) * smoothstep(0.0, 0.08, strength), 0.0, 0.95);
+        bool doDecay = decayStep > 0.0;
+        float effDecayScalar = doDecay ? pow(max(decay, 1e-4), decayStep) : 1.0;
+        float minStep = mix(0.005, 0.0018, strength) * decayStep;
+
+        // 1. Live moving entity: takes foreground ownership unconditionally (even
+        // when moving directly away from the camera, where its own old wake was
+        // closer in depth). Trail boost scales continuously with speed so subtle
+        // nudges never pop in a full-strength wake.
+        if (movingNow) {
+            vec2 scaledDir = (speedIntensity > 0.001)
+                ? ((cleanVel / velLen) * speedIntensity)
+                : vec2(0.0);
+            FragColor = vec4(clamp(curr, vec3(0.0), vec3(1.0)), currInvDepth);
+            FragMeta = vec4(scaledDir, 0.0, 1.0 + speedIntensity);
+            return;
+        }
+
+        // 2. Resting entity: an entity stopped on this exact pixel (same
+        // reprojected depth, no abrupt silhouette colour flip). Keep
+        // entityState >= 1.0 so cubes stay behind it, while smoothly decaying
+        // its live-boost fraction (entityState - 1.0) on decay ticks so cubes
+        // behind a stopping entity fade out seamlessly at any FPS.
+        float depthTol = max(expectedPrevInvDepth, prevInvDepth) * 0.005 + 3e-5;
+        bool sameDepth = (uHasDepth == 0) || (abs(expectedPrevInvDepth - prevInvDepth) <= depthTol);
+        if (prevEntity >= 0.5 && sameDepth && length(curr - prevRgb) < 0.14) {
+            float liveBoost = max(0.0, prevEntity - 1.0);
+            float nextBoost = liveBoost;
+            if (doDecay && liveBoost > 0.0) {
+                nextBoost = max(0.0, liveBoost * effDecayScalar - minStep * 1.15);
+                if (nextBoost <= 0.001) {
+                    nextBoost = 0.0;
+                }
+            }
+            float prevDirLen = length(prevDir);
+            vec2 heldDir = (nextBoost > 0.0 && prevDirLen > 1e-4)
+                ? ((prevDir / prevDirLen) * nextBoost)
+                : vec2(0.0);
+            FragColor = vec4(clamp(curr, vec3(0.0), vec3(1.0)), currInvDepth);
+            FragMeta = vec4(heldDir, 0.0, 1.0 + nextBoost);
+            return;
+        }
+
+        // 3. World geometry pixel (entity just moved away from here, or ongoing
+        // trail decaying over world geometry).
+        float nextEnergy = prevEnergy;
+        vec2 nextDir = prevDir;
+        vec3 outRgb = curr;
+        float outInvDepth = currInvDepth;
+        bool justSpawned = false;
+
+        if (prevEntity >= 0.5) {
+            // Entity just left this pixel: seed trail energy proportionally to
+            // the entity's actual speed (0 on tiny nudges, smooth up to 1.0).
+            float prevSpeedBoost = clamp(prevEntity - 1.0, 0.0, 1.0);
+            nextEnergy = prevSpeedBoost;
+            outRgb = (prevSpeedBoost > 0.001) ? prevRgb : curr;
+            outInvDepth = (prevSpeedBoost > 0.001) ? prevInvDepth : currInvDepth;
+            justSpawned = prevSpeedBoost > 0.001;
+        }
+
+        if (nextEnergy > 0.0) {
+            if (doDecay) {
+                // On a wake pixel's spawn frame, integrate half a step so low
+                // frame rates (30 FPS) match high frame rates (240+ FPS) in
+                // brightness right behind the entity.
+                float stepUse = justSpawned ? (decayStep * 0.5) : decayStep;
+                float stepDecayScalar = pow(max(decay, 1e-4), stepUse);
+                float stepMin = mix(0.005, 0.0018, strength) * stepUse;
+
+                nextEnergy = max(0.0, nextEnergy * stepDecayScalar - stepMin * 1.15);
+                float channelSplit = clamp((spread - 0.5) * 0.018, 0.0, 0.05) * strength;
+                vec3 decayRgb = clamp(
+                    vec3(decay - channelSplit * 0.5, decay, decay + channelSplit),
+                    vec3(0.0),
+                    vec3(0.96));
+                vec3 effDecay = pow(max(decayRgb, vec3(1e-4)), vec3(stepUse));
+                vec3 delta = prevRgb - curr;
+                vec3 decayed = delta * effDecay;
+                vec3 nextDelta = decayed - sign(decayed) * min(abs(decayed), vec3(stepMin));
+                if (nextEnergy <= 0.001) {
+                    nextEnergy = 0.0;
+                    nextDir = vec2(0.0);
+                    outRgb = curr;
+                    outInvDepth = currInvDepth;
+                } else {
+                    outRgb = curr + nextDelta;
+                    outInvDepth = prevInvDepth;
+                }
+            } else {
+                outRgb = prevRgb;
+                outInvDepth = prevInvDepth;
+            }
+        } else {
+            nextDir = vec2(0.0);
+        }
+
+        FragColor = vec4(clamp(outRgb, vec3(0.0), vec3(1.0)), outInvDepth);
+        FragMeta = vec4(nextDir, nextEnergy, 0.0);
+        return;
+    }
+
+    // uStage == 2: Non-recursive Matrix-family display pass.
+    // Entities (moving objects or resting entities: movingNow or meta.w >= 0.5)
+    // ALWAYS sit cleanly in front of the cubes; world geometry (meta.w < 0.5)
+    // sits behind the cubes even while the camera pans or orbits.
+    vec4 phosphorSample = texture(uHistoryTexture, vTexCoord);
+    vec4 centerMeta = texture(uMetaTexture, vTexCoord);
+    vec3 phosphor = phosphorSample.rgb;
+    bool pixelIsEntity = movingNow || (centerMeta.w >= 0.5);
+
+    vec3 outRgb = curr;
+    if (!pixelIsEntity) {
+        vec2 texSize = vec2(textureSize(uColorTexture, 0));
+        vec2 texel = 1.0 / texSize;
+        vec2 px = vTexCoord * texSize;
+        float centerEnergy = centerMeta.z;
+
+        if (uVariant == 1) {
+            // Matrix: ordered 4x4 Bayer digital block de-rez
+            float cellPx = clamp(floor(3.0 + spread * 2.5 + 0.5), 3.0, 10.0);
+            vec2 cellCoord = floor(px / cellPx);
+            vec2 blockUv = clamp((cellCoord + vec2(0.5)) * cellPx * texel, vec2(0.001), vec2(0.999));
+            vec3 blockPhos = texture(uHistoryTexture, blockUv).rgb;
+            float blockEnergy = texture(uMetaTexture, blockUv).z;
+            if (blockEnergy > 0.01) {
+                float dither = bayer4x4(ivec2(cellCoord));
+                float cellAlive = step(dither * 0.92, blockEnergy);
+                vec2 cellFrac = fract(px / cellPx);
+                float cellBorder = step(0.86, max(cellFrac.x, cellFrac.y));
+                float edgeGlow = smoothstep(0.02, 0.25, blockEnergy) * (1.0 - smoothstep(0.28, 0.78, blockEnergy));
+                vec3 digitalColor = mix(blockPhos, vec3(0.16, 0.96, 0.68), edgeGlow * (0.45 * strength));
+                digitalColor *= (1.0 - cellBorder * 0.28);
+                float mixWeight = clamp(cellAlive * smoothstep(0.01, 0.08, blockEnergy), 0.0, 1.0);
+                outRgb = mix(curr, digitalColor, mixWeight);
+            }
+        } else if (uVariant == 2) {
+            // Cascade: multi-scale quadtree LOD block de-rez (1x -> 2x -> 4x tiles)
+            float finePx = clamp(floor(3.0 + spread * 2.0 + 0.5), 3.0, 8.0);
+            float midPx = finePx * 2.0;
+            float coarsePx = finePx * 4.0;
+
+            vec2 fineCoord = floor(px / finePx);
+            vec2 fineUv = clamp((fineCoord + vec2(0.5)) * finePx * texel, vec2(0.001), vec2(0.999));
+            vec3 finePhos = texture(uHistoryTexture, fineUv).rgb;
+            float fineE = texture(uMetaTexture, fineUv).z;
+
+            vec2 midCoord = floor(px / midPx);
+            vec2 midUv = clamp((midCoord + vec2(0.5)) * midPx * texel, vec2(0.001), vec2(0.999));
+            vec3 midPhos = texture(uHistoryTexture, midUv).rgb;
+            float midE = texture(uMetaTexture, midUv).z;
+
+            vec2 coarseCoord = floor(px / coarsePx);
+            vec2 coarseUv = clamp((coarseCoord + vec2(0.5)) * coarsePx * texel, vec2(0.001), vec2(0.999));
+            vec3 coarsePhos = texture(uHistoryTexture, coarseUv).rgb;
+            float coarseE = texture(uMetaTexture, coarseUv).z;
+
+            if (fineE > 0.45) {
+                vec2 frac1 = fract(px / finePx);
+                float border1 = step(0.86, max(frac1.x, frac1.y));
+                vec3 col1 = finePhos * (1.0 - border1 * 0.22);
+                outRgb = mix(curr, col1, smoothstep(0.02, 0.12, fineE));
+            } else if (midE > 0.18) {
+                float dither2 = bayer4x4(ivec2(midCoord));
+                float alive2 = step(dither2 * 0.78, midE);
+                vec2 frac2 = fract(px / midPx);
+                float border2 = step(0.88, max(frac2.x, frac2.y));
+                vec3 col2 = mix(midPhos, vec3(0.14, 0.94, 0.78), 0.24 * strength);
+                col2 = mix(col2, vec3(0.20, 1.0, 0.85), border2 * 0.35 * strength);
+                outRgb = mix(curr, col2, alive2 * smoothstep(0.02, 0.14, midE));
+            } else if (coarseE > 0.015) {
+                float dither4 = bayer4x4(ivec2(coarseCoord));
+                float alive4 = step(dither4 * 0.88, coarseE * 1.45);
+                vec2 frac4 = fract(px / coarsePx);
+                vec2 edgeDist = min(frac4, vec2(1.0) - frac4);
+                float nearEdge = step(min(edgeDist.x, edgeDist.y), 0.10);
+                float nearCorner = step(max(edgeDist.x, edgeDist.y), 0.32);
+                float bracket = nearEdge * nearCorner;
+                vec3 col4 = mix(coarsePhos, vec3(0.12, 0.90, 0.84), 0.38 * strength);
+                col4 = mix(col4, vec3(0.45, 1.0, 0.95), bracket * 0.72 * strength);
+                outRgb = mix(curr, col4, alive4 * smoothstep(0.015, 0.12, coarseE));
+            }
+        } else if (uVariant == 3) {
+            // Rain: falling digital bit-columns shedding from the phosphor wake
+            float cellPx = clamp(floor(3.0 + spread * 2.4 + 0.5), 3.0, 10.0);
+            vec2 cellCoord = floor(px / cellPx);
+            float colSeed = hash11(cellCoord.x * 19.37 + 3.1);
+            float fallSpeed = 7.0 + colSeed * 11.0;
+            float rainPhase = fract((cellCoord.y + uTime * fallSpeed) * 0.095 + colSeed * 5.7);
+            float dripCells = floor((1.0 - rainPhase) * (1.0 + spread * 1.8));
+            vec2 srcCoord = cellCoord + vec2(0.0, dripCells);
+            vec2 blockUv = clamp((srcCoord + vec2(0.5)) * cellPx * texel, vec2(0.001), vec2(0.999));
+            vec3 blockPhos = texture(uHistoryTexture, blockUv).rgb;
+            float blockE = texture(uMetaTexture, blockUv).z;
+
+            if (blockE > 0.015) {
+                float dither = bayer4x4(ivec2(cellCoord));
+                float streamPulse = smoothstep(0.12, 0.85, 1.0 - rainPhase);
+                float cellAlive = step(dither * 0.90, blockE * (0.55 + 0.75 * streamPulse));
+                vec2 cellFrac = fract(px / cellPx);
+                float cellBorder = step(0.84, max(cellFrac.x, cellFrac.y));
+                float isHead = step(0.86, 1.0 - rainPhase) * step(0.08, blockE);
+                float tailTint = (1.0 - smoothstep(0.25, 0.80, blockE)) * (0.55 * strength);
+                vec3 rainCol = mix(blockPhos, vec3(0.10, 0.98, 0.52), tailTint);
+                rainCol = mix(rainCol, vec3(0.82, 1.0, 0.90), isHead * 0.70 * strength);
+                rainCol *= (0.72 + 0.36 * streamPulse) * (1.0 - cellBorder * 0.34);
+                float mixWeight = clamp(cellAlive * smoothstep(0.015, 0.08, blockE), 0.0, 1.0);
+                outRgb = mix(curr, rainCol, mixWeight);
+            }
+        } else if (uVariant == 4) {
+            // Glyph: procedural 3x5 simulation hex/code micro-glyphs stamped into cells
+            float cellPx = clamp(floor(6.0 + spread * 3.0 + 0.5), 6.0, 16.0);
+            vec2 cellCoord = floor(px / cellPx);
+            vec2 blockUv = clamp((cellCoord + vec2(0.5)) * cellPx * texel, vec2(0.001), vec2(0.999));
+            vec3 blockPhos = texture(uHistoryTexture, blockUv).rgb;
+            float blockE = texture(uMetaTexture, blockUv).z;
+
+            if (blockE > 0.015) {
+                float dither = bayer4x4(ivec2(cellCoord));
+                float cellAlive = step(dither * 0.90, blockE);
+                vec2 cellFrac = fract(px / cellPx);
+                ivec2 sub = ivec2(floor(cellFrac.x * 4.0), floor(cellFrac.y * 6.0));
+                float tick = floor(uTime * 7.0 + hash21(cellCoord) * 16.0);
+                int glyphId = int(floor(hash21(cellCoord + vec2(tick * 0.13, tick * 0.29)) * 16.0)) & 15;
+                float glyphInk = sampleGlyph3x5(glyphId, sub);
+
+                float backWeight = smoothstep(0.35, 0.85, blockE) * 0.72;
+                vec3 backing = mix(curr, blockPhos * 0.58, backWeight);
+                vec3 glyphColor = mix(blockPhos * 1.15 + vec3(0.08, 0.35, 0.25),
+                                      vec3(0.22, 1.0, 0.76),
+                                      (1.0 - smoothstep(0.20, 0.75, blockE)) * (0.65 * strength));
+                vec3 cellColor = mix(backing, glyphColor, glyphInk * clamp(0.45 + 0.55 * strength, 0.0, 1.0));
+                float mixWeight = clamp(cellAlive * smoothstep(0.015, 0.07, blockE), 0.0, 1.0);
+                outRgb = mix(curr, cellColor, mixWeight);
+            }
+        } else if (uVariant == 5) {
+            // ChromaBit: smooth, unidirectional motion-aligned RGB Bayer cubes
+            // strictly behind entities and cleanly in front of world geometry,
+            // smoothly shrinking and fading out to zero.
+            float cellPx = clamp(4.0 + spread * 2.2, 4.0, 10.5);
+            vec2 cellCoord = floor(px / cellPx);
+            vec2 centerPx = (cellCoord + vec2(0.5)) * cellPx;
+            vec2 cellUv = clamp(centerPx * texel, vec2(0.001), vec2(0.999));
+
+            float baseShiftPx = (0.70 + spread * 0.75) * cellPx;
+            vec3 dirAndSpeed = sampleDominantTrailDirAndSpeed(
+                cellUv, texel, max(cellPx * 2.2, baseShiftPx * 1.5));
+            vec2 dir = dirAndSpeed.xy;
+            float avgSpeed = dirAndSpeed.z;
+            float dirLen = length(dir);
+            // Gather strictly along +dir, scaling separation distance smoothly
+            // with movement speed so gentle motion stays tight and subtle while
+            // fast motion fans out cleanly behind the entity.
+            float shiftPx = baseShiftPx * mix(0.28, 1.0, avgSpeed) * smoothstep(0.0, 0.25, dirLen);
+            vec2 uvR = clamp((centerPx + dir * (shiftPx * 0.45)) * texel, vec2(0.001), vec2(0.999));
+            vec2 uvG = clamp((centerPx + dir * (shiftPx * 0.95)) * texel, vec2(0.001), vec2(0.999));
+            vec2 uvB = clamp((centerPx + dir * (shiftPx * 1.45)) * texel, vec2(0.001), vec2(0.999));
+
+            vec4 metaR = texture(uMetaTexture, uvR);
+            vec4 metaG = texture(uMetaTexture, uvG);
+            vec4 metaB = texture(uMetaTexture, uvB);
+
+            float eR = sourceWakeEnergy(metaR);
+            float eG = max(sourceWakeEnergy(metaG), texture(uMetaTexture, cellUv).z);
+            float eB = sourceWakeEnergy(metaB);
+
+            // Silky translucent phosphor mist under the cubes for continuous motion.
+            float mistWeight = smoothstep(0.0, 0.55, centerEnergy) * (0.32 * strength);
+            vec3 baseRgb = mix(curr, phosphor, mistWeight);
+
+            if (max(eR, max(eG, eB)) > 0.002) {
+                vec3 phosR = texture(uHistoryTexture, uvR).rgb;
+                vec3 phosG = texture(uHistoryTexture, uvG).rgb;
+                vec3 phosB = texture(uHistoryTexture, uvB).rgb;
+
+                // Each Bayer cell smoothly fades AND shrinks toward its cell
+                // center over a wide 0.42 energy span so cubes dissolve into
+                // tiny sparks instead of popping off.
+                float dR = bayer4x4(ivec2(cellCoord) + ivec2(1, 0)) * 0.60;
+                float dG = bayer4x4(ivec2(cellCoord)) * 0.60;
+                float dB = bayer4x4(ivec2(cellCoord) + ivec2(0, 1)) * 0.60;
+
+                float lifeR = smoothstep(dR, dR + 0.42, eR) * smoothstep(0.0, 0.55, eR);
+                float lifeG = smoothstep(dG, dG + 0.42, eG) * smoothstep(0.0, 0.55, eG);
+                float lifeB = smoothstep(dB, dB + 0.42, eB) * smoothstep(0.0, 0.55, eB);
+
+                vec2 cellFrac = fract(px / cellPx);
+                vec2 centered = abs(cellFrac - vec2(0.5));
+                float halfPx = 0.60 / max(cellPx, 1.0);
+
+                // Linearly shrink each channel's cube toward its cell center so
+                // the size reduction reads clearly before opacity hits zero,
+                // using analytical box coverage for flicker-free sub-pixel fade.
+                float shapeR = squareCoverage(centered, 0.46 * lifeR, halfPx);
+                float shapeG = squareCoverage(centered, 0.46 * lifeG, halfPx);
+                float shapeB = squareCoverage(centered, 0.46 * lifeB, halfPx);
+
+                float fadeR = 0.5 * (lifeR + sqrt(max(lifeR, 0.0)));
+                float fadeG = 0.5 * (lifeG + sqrt(max(lifeG, 0.0)));
+                float fadeB = 0.5 * (lifeB + sqrt(max(lifeB, 0.0)));
+
+                float maxAlpha = clamp(0.50 + 0.50 * strength, 0.0, 1.0);
+                float wR = shapeR * fadeR * maxAlpha;
+                float wG = shapeG * fadeG * maxAlpha;
+                float wB = shapeB * fadeB * maxAlpha;
+
+                float phase = cellFrac.x * 6.2831853;
+                vec3 ledSmooth = vec3(
+                    1.0 + 0.10 * cos(phase),
+                    1.0 + 0.10 * cos(phase - 2.0943951),
+                    1.0 + 0.10 * cos(phase + 2.0943951));
+                vec3 cellShade = mix(vec3(1.0), ledSmooth, 0.30 * strength);
+
+                float outR = mix(baseRgb.r, clamp(phosR.r * 1.10, 0.0, 1.0) * cellShade.r, wR);
+                float outG = mix(baseRgb.g, clamp(phosG.g * 1.06, 0.0, 1.0) * cellShade.g, wG);
+                float outB = mix(baseRgb.b, clamp(phosB.b * 1.14, 0.0, 1.0) * cellShade.b, wB);
+                outRgb = vec3(outR, outG, outB);
+            } else {
+                outRgb = baseRgb;
+            }
+        } else {
+            outRgb = mix(curr, phosphor, smoothstep(0.01, 0.15, centerEnergy));
+        }
+    }
+
+    outRgb = clamp(outRgb, vec3(0.0), vec3(1.0));
+    float outAlpha = uStoreLumaInAlpha != 0
+        ? dot(outRgb, vec3(0.299, 0.587, 0.114))
+        : 1.0;
+    FragColor = vec4(outRgb, outAlpha);
+    FragMeta = vec4(0.0);
+}
+)";
+
+static const char* kPosterizeFragmentShader = R"(
+#version 330 core
+in vec2 vTexCoord;
+out vec4 FragColor;
+
+uniform sampler2D uColorTexture;
+// 0 = RGB, 1 = Luma (hue-preserving), 2 = HSV
+uniform int uPosterizeMode;
+uniform float uPosterizeLevels;
+uniform float uPosterizeGamma;
+// 0 = Off, 1 = Bayer 4x4, 2 = Bayer 8x8, 3 = Interleaved Gradient Noise
+uniform int uPosterizeDitherMode;
+uniform float uPosterizeDitherAmount;
+uniform float uPosterizeDitherScale;
+uniform float uPosterizeStrength;
+
+float safePow1(float x, float g) {
+    return x > 0.0 ? pow(x, g) : 0.0;
+}
+
+vec3 safePow3(vec3 c, float g) {
+    return vec3(
+        c.r > 0.0 ? pow(c.r, g) : 0.0,
+        c.g > 0.0 ? pow(c.g, g) : 0.0,
+        c.b > 0.0 ? pow(c.b, g) : 0.0);
+}
+
+float bayer4x4Centered(ivec2 p) {
+    int x = p.x & 3;
+    int y = p.y & 3;
+    int xc = x ^ y;
+    int v = ((((xc & 1) << 1) | (y & 1)) << 2) |
+            ((((xc >> 1) & 1) << 1) | ((y >> 1) & 1));
+    return (float(v) + 0.5) / 16.0 - 0.5;
+}
+
+float bayer8x8Centered(ivec2 p) {
+    int x = p.x & 7;
+    int y = p.y & 7;
+    int xc = x ^ y;
+    int v = ((((xc & 1) << 1) | (y & 1)) << 4) |
+            (((((xc >> 1) & 1) << 1) | ((y >> 1) & 1)) << 2) |
+            ((((xc >> 2) & 1) << 1) | ((y >> 2) & 1));
+    return (float(v) + 0.5) / 64.0 - 0.5;
+}
+
+float ignCentered(vec2 p) {
+    float v = fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+    return v - 0.5;
+}
+
+vec3 rgbToHsv(vec3 c) {
+    vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+    vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+    float d = q.x - min(q.w, q.y);
+    float e = 1.0e-6;
+    return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+vec3 hsvToRgb(vec3 c) {
+    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+
+void main() {
+    vec3 orig = clamp(texture(uColorTexture, vTexCoord).rgb, vec3(0.0), vec3(1.0));
+    float levels = clamp(floor(uPosterizeLevels + 0.5), 2.0, 32.0);
+    float steps = max(levels - 1.0, 1.0);
+    float gamma = clamp(uPosterizeGamma, 0.4, 2.5);
+    float invGamma = 1.0 / gamma;
+
+    float ditherOffset = 0.0;
+    float ditherAmt = clamp(uPosterizeDitherAmount, 0.0, 1.5);
+    if (uPosterizeDitherMode > 0 && ditherAmt > 0.0) {
+        float scale = clamp(floor(uPosterizeDitherScale + 0.5), 1.0, 4.0);
+        vec2 texDims = vec2(textureSize(uColorTexture, 0));
+        vec2 cellPos = floor((vTexCoord * texDims) / scale);
+        ivec2 cellCoord = ivec2(cellPos);
+        float sampleDither = 0.0;
+        if (uPosterizeDitherMode == 1) {
+            sampleDither = bayer4x4Centered(cellCoord);
+        } else if (uPosterizeDitherMode == 2) {
+            sampleDither = bayer8x8Centered(cellCoord);
+        } else {
+            sampleDither = ignCentered(cellPos);
+        }
+        ditherOffset = sampleDither * ditherAmt;
+    }
+
+    vec3 posterized = orig;
+    if (uPosterizeMode == 1) {
+        // Luminance-only quantization preserving original hue and chromaticity.
+        float luma = dot(orig, vec3(0.2126, 0.7152, 0.0722));
+        float shapedL = safePow1(clamp(luma, 0.0, 1.0), gamma);
+        float qL = clamp(floor(shapedL * steps + 0.5 + ditherOffset) / steps, 0.0, 1.0);
+        float targetL = safePow1(qL, invGamma);
+        if (luma > 1e-4) {
+            vec3 scaled = orig * (targetL / luma);
+            float maxComp = max(scaled.r, max(scaled.g, scaled.b));
+            if (maxComp > 1.0) {
+                float t = clamp((1.0 - targetL) / max(maxComp - targetL, 1e-4), 0.0, 1.0);
+                scaled = mix(vec3(targetL), scaled, t);
+            }
+            posterized = clamp(scaled, vec3(0.0), vec3(1.0));
+        } else {
+            posterized = vec3(targetL);
+        }
+    } else if (uPosterizeMode == 2) {
+        // Stylized HSV quantization: stepped hue wheel, saturation, and value.
+        vec3 hsv = rgbToHsv(orig);
+        float hueBins = max(floor(levels * 2.0 + 0.5), 6.0);
+        float satSteps = max(floor(levels * 0.5 + 0.5), 1.0);
+        float qH = fract(floor(hsv.x * hueBins + 0.5 + ditherOffset * 0.5) / hueBins);
+        float qS = clamp(floor(hsv.y * satSteps + 0.5 + ditherOffset * 0.5) / satSteps, 0.0, 1.0);
+        float shapedV = safePow1(clamp(hsv.z, 0.0, 1.0), gamma);
+        float qV = clamp(floor(shapedV * steps + 0.5 + ditherOffset) / steps, 0.0, 1.0);
+        float targetV = safePow1(qV, invGamma);
+        posterized = clamp(hsvToRgb(vec3(qH, qS, targetV)), vec3(0.0), vec3(1.0));
+    } else {
+        // Per-channel RGB quantization.
+        vec3 shaped = safePow3(orig, gamma);
+        vec3 q = clamp(floor(shaped * steps + 0.5 + vec3(ditherOffset)) / steps,
+                       vec3(0.0), vec3(1.0));
+        posterized = clamp(safePow3(q, invGamma), vec3(0.0), vec3(1.0));
+    }
+
+    vec3 outRgb = clamp(mix(orig, posterized, clamp(uPosterizeStrength, 0.0, 1.0)),
+                        vec3(0.0), vec3(1.0));
+    FragColor = vec4(outRgb, 1.0);
+}
+)";
+
 static void
 fillCanvasPipeline(PipelineState& ps)
 {
@@ -998,6 +1782,45 @@ Renderer::ensureBuiltinStyles()
     style.shaderHandle = enrollShader(sources);
     style.ready = style.shaderHandle.isValid();
     builtinStyleHandles[renderStyleIndex(RenderStyleId::FxaaResolve)] =
+      createStyle(style);
+  }
+
+  // 3x3 Sobel edge detection post-process pass.
+  {
+    RenderStyle style;
+    fillCanvasPipeline(style.pipeline);
+    ShaderSources sources;
+    sources.vertexSource = kMotionBlurVertexShader;
+    sources.fragmentSource = kSobelEdgeFragmentShader;
+    style.shaderHandle = enrollShader(sources);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::SobelEdge)] =
+      createStyle(style);
+  }
+
+  // Temporal phosphor persistence feedback blend / history copy pass.
+  {
+    RenderStyle style;
+    fillCanvasPipeline(style.pipeline);
+    ShaderSources sources;
+    sources.vertexSource = kMotionBlurVertexShader;
+    sources.fragmentSource = kMotionFeedbackFragmentShader;
+    style.shaderHandle = enrollShader(sources);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::MotionFeedback)] =
+      createStyle(style);
+  }
+
+  // Color quantization / posterization post-process pass.
+  {
+    RenderStyle style;
+    fillCanvasPipeline(style.pipeline);
+    ShaderSources sources;
+    sources.vertexSource = kMotionBlurVertexShader;
+    sources.fragmentSource = kPosterizeFragmentShader;
+    style.shaderHandle = enrollShader(sources);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::Posterize)] =
       createStyle(style);
   }
 

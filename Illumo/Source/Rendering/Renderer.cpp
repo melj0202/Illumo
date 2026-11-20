@@ -194,6 +194,9 @@ Renderer::beginFrameContext(Camera* camera)
   }
   frameContext.active = false;
   frameContext.hasWorldMvp = false;
+  frameContext.hasDebugVelocity = false;
+  frameContext.debugVelocity = { 0.0f, 0.0f, 0.0f };
+  frameContext.debugVelocityReferenceSpeed = 1.0f;
   frameContext.worldCamera = camera;
   frameContext.frameSerial = frameSerial;
   cameraFrustum = BoundsFrustum{};
@@ -220,6 +223,13 @@ Renderer::beginFrameContext(Camera* camera)
                                             frameContext.windowDimensions[1]);
   }
   frameContext.active = true;
+  if (m_hasNextDebugVelocity) {
+    m_hasNextDebugVelocity = false;
+    frameContext.hasDebugVelocity = true;
+    frameContext.debugVelocity = m_nextDebugVelocity;
+    frameContext.debugVelocityReferenceSpeed =
+      m_nextDebugVelocityReferenceSpeed;
+  }
   if (m_hasNextWorldViewProjection) {
     m_hasNextWorldViewProjection = false;
     frameContext.worldMvp = m_nextWorldViewProjection;
@@ -268,6 +278,7 @@ Renderer::endFrameContext()
 {
   frameContext.active = false;
   frameContext.hasWorldMvp = false;
+  frameContext.hasDebugVelocity = false;
   frameContext.worldCamera = nullptr;
   frameContext.uiScale = 1.0f;
   shadowFrameContext.active = false;
@@ -335,6 +346,23 @@ Renderer::setNextWorldViewProjection(const std::array<float, 16>& matrix)
   }
   m_nextWorldViewProjection = matrix;
   m_hasNextWorldViewProjection = true;
+}
+
+void
+Renderer::setNextDebugVelocity(const std::array<float, 3>& velocity,
+                               float referenceSpeed)
+{
+  for (const float value : velocity) {
+    if (!std::isfinite(value)) {
+      return;
+    }
+  }
+  if (!std::isfinite(referenceSpeed) || referenceSpeed <= 0.0f) {
+    return;
+  }
+  m_nextDebugVelocity = velocity;
+  m_nextDebugVelocityReferenceSpeed = referenceSpeed;
+  m_hasNextDebugVelocity = true;
 }
 
 bool
@@ -1586,9 +1614,50 @@ Renderer::useLightUniforms()
 }
 
 void
+Renderer::setFrameDelta(double dtSeconds)
+{
+  if (std::isfinite(dtSeconds) && dtSeconds > 0.0) {
+    m_explicitDeltaSeconds =
+      std::clamp(static_cast<float>(dtSeconds), 1.0e-5f, 0.1f);
+    m_hasExplicitDelta = true;
+  }
+}
+
+void
 Renderer::BeginFrame()
 {
   ILLUMO_PROFILE_ZONE("Renderer.BeginFrame");
+  const std::chrono::steady_clock::time_point now =
+    std::chrono::steady_clock::now();
+  if (!m_hasStartTime) {
+    m_startTime = now;
+    m_lastFrameTime = now;
+    m_hasStartTime = true;
+    m_elapsedSeconds = 0.0f;
+    m_deltaSeconds =
+      m_hasExplicitDelta ? m_explicitDeltaSeconds : (1.0f / 60.0f);
+  } else {
+    const double seconds =
+      std::chrono::duration<double>(now - m_startTime).count();
+    const double dt =
+      std::chrono::duration<double>(now - m_lastFrameTime).count();
+    m_lastFrameTime = now;
+    m_elapsedSeconds = static_cast<float>(std::fmod(seconds, 1000.0));
+    m_deltaSeconds = m_hasExplicitDelta
+                       ? m_explicitDeltaSeconds
+                       : std::clamp(static_cast<float>(dt), 1.0e-5f, 0.1f);
+  }
+  m_hasExplicitDelta = false;
+  // Accumulate decay ticks to >= 0.25 60Hz-frame steps (~240 Hz max) so
+  // 16-bit float feedback targets never lose decay steps to half-float ULP
+  // rounding at uncapped 1000+ FPS frame rates.
+  m_feedbackDecayAccum += m_deltaSeconds * 60.0f;
+  if (m_feedbackDecayAccum >= 0.25f) {
+    m_feedbackDecayStep = std::min(m_feedbackDecayAccum, 4.0f);
+    m_feedbackDecayAccum = 0.0f;
+  } else {
+    m_feedbackDecayStep = 0.0f;
+  }
   m_frameError.clear();
   m_frameRejectedBaseline = _backend->rejectedCommandCount();
   m_recordedStats = RecordedListStats{};
@@ -2229,10 +2298,14 @@ Renderer::executePostProcessPass(const RenderPassDesc& pass,
     const PassInputTargetBinding& binding = pass.inputTargetTextures[i];
     if (!binding.targetName.empty()) {
       PooledRenderTarget target = _renderTargetPool.get(binding.targetName);
-      if (target.isValid() &&
-          binding.attachmentIndex < target.attachments.colorTextures.size()) {
-        TextureHandle tex =
-          target.attachments.colorTextures[binding.attachmentIndex];
+      if (target.isValid()) {
+        TextureHandle tex{};
+        if (binding.bindDepth) {
+          tex = target.attachments.depthStencilTexture;
+        } else if (binding.attachmentIndex <
+                   target.attachments.colorTextures.size()) {
+          tex = target.attachments.colorTextures[binding.attachmentIndex];
+        }
         if (tex.isValid()) {
           pushSetTexture(tex, binding.slot);
           if (!binding.samplerUniformName.empty()) {
@@ -2255,6 +2328,13 @@ Renderer::executePostProcessPass(const RenderPassDesc& pass,
     pushUniformMat4(pass.uniformMat4s[i].name.c_str(),
                     pass.uniformMat4s[i].matrix.data());
   }
+  if (pass.bindTime) {
+    pushUniformFloat("uTime", m_elapsedSeconds);
+    pushUniformFloat("uDeltaTime", m_deltaSeconds);
+    pushUniformFloat("uDecayStep", m_feedbackDecayStep);
+    pushUniformMat4("uPrevFromCurrClip", m_prevFromCurrClip.data());
+    pushUniformMat4("uHistoryFromCurrClip", m_historyFromCurrClip.data());
+  }
 
   ensureFullscreenQuadMesh();
   pushSetMesh(_fullscreenQuadMeshHandle);
@@ -2271,11 +2351,36 @@ Renderer::RenderScene(DrawList* scene, Camera* camera)
   }
 
   beginFrameContext(_camera);
+  static constexpr std::array<float, 16> kIdentityMat4{
+    1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f
+  };
+  m_prevFromCurrClip = kIdentityMat4;
+  m_historyFromCurrClip = kIdentityMat4;
   if (frameContext.hasWorldMvp) {
     m_previousViewProjection =
       m_hasViewProjection ? m_viewProjection : frameContext.worldMvp;
     m_viewProjection = frameContext.worldMvp;
     m_hasViewProjection = true;
+    if (!m_hasFeedbackHistoryViewProjection) {
+      m_feedbackHistoryViewProjection = m_viewProjection;
+      m_hasFeedbackHistoryViewProjection = true;
+    }
+    const glm::mat4 currVp = glm::make_mat4(m_viewProjection.data());
+    if (std::fabs(glm::determinant(currVp)) > 1.0e-6f) {
+      const glm::mat4 invCurrVp = glm::inverse(currVp);
+      const glm::mat4 prevVp = glm::make_mat4(m_previousViewProjection.data());
+      const glm::mat4 histVp =
+        glm::make_mat4(m_feedbackHistoryViewProjection.data());
+      const glm::mat4 prevFromCurr = prevVp * invCurrVp;
+      const glm::mat4 histFromCurr = histVp * invCurrVp;
+      std::memcpy(m_prevFromCurrClip.data(),
+                  glm::value_ptr(prevFromCurr),
+                  16 * sizeof(float));
+      std::memcpy(m_historyFromCurrClip.data(),
+                  glm::value_ptr(histFromCurr),
+                  16 * sizeof(float));
+    }
   }
   resetShadowFrame();
   _currentPassFbo = FramebufferHandle{};
@@ -2393,6 +2498,10 @@ Renderer::RenderScene(DrawList* scene, Camera* camera)
             continue;
           }
 
+          if (pass.skipWithoutFeedbackTick && m_feedbackDecayStep <= 0.0f) {
+            continue;
+          }
+
           FramebufferHandle targetFbo{};
           int targetW = frameContext.windowDimensions[0];
           int targetH = frameContext.windowDimensions[1];
@@ -2461,6 +2570,11 @@ Renderer::RenderScene(DrawList* scene, Camera* camera)
             }
           } else if (pass.type == PassType::PostProcess) {
             executePostProcessPass(pass, { targetW, targetH });
+            if (pass.pooledTargetName == "WorldFeedbackHistory" &&
+                m_hasViewProjection) {
+              m_feedbackHistoryViewProjection = m_viewProjection;
+              m_hasFeedbackHistoryViewProjection = true;
+            }
           } else if (pass.type == PassType::Custom && pass.customExecution) {
             pass.customExecution(this);
           }

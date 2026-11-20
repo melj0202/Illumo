@@ -769,6 +769,69 @@ testDebugOverlayGraphicsPanel()
   }
   std::filesystem::remove(path, error);
 }
+
+static void
+testDebugOverlayAxisCube()
+{
+  testSection("Illumo: DebugOverlay toggles centered axis cube via F8 and "
+              "axis_cube command");
+  const std::filesystem::path path =
+    temporaryEnvironmentPath("debug-overlay-axis-cube");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  int windowDestructions = 0;
+  {
+    Illumo host(headlessConfig(path));
+    setHeadlessFactories(host, &windowDestructions);
+    testTrue(g, host.initialize(), "host initializes");
+    DebugOverlay overlay;
+    testTrue(g, overlay.start(host.context()), "overlay starts");
+
+    CommandRegistry& registry = *host.context().commandRegistry;
+    testTrue(g,
+             registry.HasCommand("axis_cube"),
+             "DebugOverlay registers axis_cube command");
+
+    // F8 enables the transparent axis cube and dispatches it on Debug layer.
+    host.context().inputManager->getKeyQueue().push(
+      InputManager::KeyPressEvent{ KeyCode::F8, InputAction::Press, 0 });
+    host.beginUpdate(0.016);
+    overlay.update(0.016);
+    host.endUpdate();
+
+    DrawList* scene = host.beginRender();
+    overlay.dispatch(*scene);
+    const size_t openDebugCount =
+      scene->drawablesIn(RenderLayerId::Debug).size();
+    host.endRender();
+
+    // Console `axis_cube off` hides the cube and updates showAxisCube.
+    registry.QueueCommand("axis_cube", { "off" });
+    host.beginUpdate(0.016);
+    overlay.update(0.016);
+    host.endUpdate();
+
+    scene = host.beginRender();
+    overlay.dispatch(*scene);
+    const size_t closedDebugCount =
+      scene->drawablesIn(RenderLayerId::Debug).size();
+    host.endRender();
+
+    testTrue(g,
+             openDebugCount == closedDebugCount + 1,
+             "axis cube adds one Debug-layer drawable while enabled");
+    testTrue(g,
+             !host.environment().getVar("showAxisCube").valueAsBool,
+             "axis_cube off clears showAxisCube");
+
+    overlay.stop();
+    testTrue(g,
+             !registry.HasCommand("axis_cube"),
+             "overlay stop unregisters axis_cube command");
+    host.shutdown();
+  }
+  std::filesystem::remove(path, error);
+}
 #endif
 
 static void
@@ -1186,15 +1249,226 @@ testHdrPipelineAndPure2DBypass()
                "5-mip bloom pyramid sized accurately from 640x480 window");
     }
 
-    // Runtime kill-switch hdrEnabled=0 returns immediately to LDR backbuffer.
+    // Enabling Sobel inserts SobelEdge between HdrComposite and FxaaResolve
+    // and binds WorldHdrVelocity depth for silhouette edge detection.
+    host.environment().setVar("sobelEnabled", true);
+    {
+      DrawList* scene = host.beginRender();
+      scene->AddDrawable(&world, RenderLayerId::World);
+      host.endRender();
+      const std::vector<RenderPassDesc>& passes =
+        scene->passesIn(RenderLayerId::World);
+      testEqSize(g, passes.size(), 13u, "HDR + Sobel + FXAA builds 13 passes");
+      if (passes.size() == 13u) {
+        bool bindsDepth = false;
+        for (const PassInputTargetBinding& binding :
+             passes[11].inputTargetTextures) {
+          if (binding.targetName == "WorldHdrVelocity" && binding.bindDepth) {
+            bindsDepth = true;
+          }
+        }
+        testTrue(g,
+                 passes[10].name == "HdrComposite" &&
+                   passes[11].name == "SobelEdge" &&
+                   passes[12].name == "FxaaResolve" && bindsDepth,
+                 "SobelEdge runs before FxaaResolve and binds scene depth");
+      }
+    }
+
+    // Matrix Phosphor FX: mode 1 (Matrix) builds FeedbackAccum +
+    // FeedbackStore (RGBA16F) + FeedbackDisplay, priming history on frame 1 and
+    // reading WorldFeedbackHistory on frame 2; mode 4 (Glyph) binds uTime
+    // and sets uVariant=4 on FeedbackDisplay without adding SobelEdge.
+    host.environment().setVar("sobelEnabled", false);
+    host.environment().setVar("motionFxMode", 1);
+    {
+      DrawList* scene = host.beginRender();
+      scene->AddDrawable(&world, RenderLayerId::World);
+      host.endRender();
+      const std::vector<RenderPassDesc>& passes =
+        scene->passesIn(RenderLayerId::World);
+      testEqSize(
+        g, passes.size(), 15u, "HDR + Phosphor + FXAA builds 15 passes");
+      if (passes.size() == 15u) {
+        int histValid = -1;
+        for (const PassUniformInt& u : passes[11].uniformInts) {
+          if (u.name == "uHistoryValid") {
+            histValid = u.value;
+          }
+        }
+        testTrue(g,
+                 passes[11].name == "FeedbackAccum" &&
+                   passes[12].name == "FeedbackStore" &&
+                   passes[13].name == "FeedbackDisplay" &&
+                   passes[14].name == "FxaaResolve" && histValid == 0 &&
+                   passes[11].targetDesc.colorAttachments.size() == 2u &&
+                   passes[11].targetDesc.colorAttachments[0].format ==
+                     TextureFormat::RGBA16F &&
+                   passes[11].targetDesc.colorAttachments[1].format ==
+                     TextureFormat::RGBA16F &&
+                   passes[12].targetDesc.colorAttachments.size() == 2u &&
+                   passes[12].targetDesc.colorAttachments[0].format ==
+                     TextureFormat::RGBA16F &&
+                   passes[12].targetDesc.colorAttachments[1].format ==
+                     TextureFormat::RGBA16F,
+                 "Phosphor frame 1 primes 2-MRT RGBA16F feedback state");
+      }
+    }
+    {
+      DrawList* scene = host.beginRender();
+      scene->AddDrawable(&world, RenderLayerId::World);
+      host.endRender();
+      const std::vector<RenderPassDesc>& passes =
+        scene->passesIn(RenderLayerId::World);
+      int histValid = -1;
+      bool readsHistory = false;
+      if (passes.size() == 15u) {
+        for (const PassUniformInt& u : passes[11].uniformInts) {
+          if (u.name == "uHistoryValid") {
+            histValid = u.value;
+          }
+        }
+        for (const PassInputTargetBinding& b : passes[11].inputTargetTextures) {
+          if (b.samplerUniformName == "uHistoryTexture" &&
+              b.targetName == "WorldFeedbackHistory") {
+            readsHistory = true;
+          }
+        }
+      }
+      testTrue(g,
+               histValid == 1 && readsHistory &&
+                 passes[12].name == "FeedbackStore" &&
+                 passes[12].skipWithoutFeedbackTick,
+               "Phosphor frame 2 switches to live WorldFeedbackHistory and "
+               "gates FeedbackStore on feedback ticks");
+    }
+    host.environment().setVar("motionFxMode", 4);
+    {
+      DrawList* scene = host.beginRender();
+      scene->AddDrawable(&world, RenderLayerId::World);
+      host.endRender();
+      const std::vector<RenderPassDesc>& passes =
+        scene->passesIn(RenderLayerId::World);
+      int displayVariant = 0;
+      bool displayBindsDepth = false;
+      if (passes.size() == 15u) {
+        for (const PassUniformInt& u : passes[13].uniformInts) {
+          if (u.name == "uVariant") {
+            displayVariant = u.value;
+          }
+        }
+        for (const PassInputTargetBinding& b : passes[13].inputTargetTextures) {
+          if (b.samplerUniformName == "uDepthTexture" &&
+              b.targetName == "WorldHdrVelocity" && b.bindDepth) {
+            displayBindsDepth = true;
+          }
+        }
+      }
+      testTrue(g,
+               passes.size() == 15u && passes[13].name == "FeedbackDisplay" &&
+                 passes[13].bindTime && displayVariant == 4 &&
+                 displayBindsDepth,
+               "FeedbackDisplay binds scene depth and uTime for variant 4");
+    }
+    host.environment().setVar("sobelEnabled", true);
+    host.environment().setVar("motionFxMode", 5);
+    {
+      DrawList* scene = host.beginRender();
+      scene->AddDrawable(&world, RenderLayerId::World);
+      host.endRender();
+      const std::vector<RenderPassDesc>& passes =
+        scene->passesIn(RenderLayerId::World);
+      testTrue(g,
+               passes.size() == 16u && passes[10].name == "HdrComposite" &&
+                 passes[11].name == "SobelEdge" &&
+                 passes[12].name == "FeedbackAccum" &&
+                 passes[13].name == "FeedbackStore" &&
+                 passes[14].name == "FeedbackDisplay" &&
+                 passes[15].name == "FxaaResolve",
+               "SobelEdge runs before Feedback passes when both are enabled");
+    }
+    host.environment().setVar("posterizeEnabled", true);
+    host.environment().setVar("posterizeMode", 1);
+    host.environment().setVar("posterizeLevels", 8);
+    host.environment().setVar("posterizeDitherMode", 2);
+    {
+      DrawList* scene = host.beginRender();
+      scene->AddDrawable(&world, RenderLayerId::World);
+      host.endRender();
+      const std::vector<RenderPassDesc>& passes =
+        scene->passesIn(RenderLayerId::World);
+      int posterMode = -1;
+      int posterDither = -1;
+      float posterLevels = 0.0f;
+      if (passes.size() == 17u) {
+        for (const PassUniformInt& u : passes[16].uniformInts) {
+          if (u.name == "uPosterizeMode") {
+            posterMode = u.value;
+          } else if (u.name == "uPosterizeDitherMode") {
+            posterDither = u.value;
+          }
+        }
+        for (const PassUniformFloat& u : passes[16].uniformFloats) {
+          if (u.name == "uPosterizeLevels") {
+            posterLevels = u.value;
+          }
+        }
+      }
+      testTrue(
+        g,
+        passes.size() == 17u && passes[15].name == "FxaaResolve" &&
+          !passes[15].useScreenTarget &&
+          passes[15].pooledTargetName == "WorldLdrPrePosterize" &&
+          passes[16].name == "Posterize" && passes[16].useScreenTarget &&
+          !passes[16].inputTargetTextures.empty() &&
+          passes[16].inputTargetTextures[0].targetName ==
+            "WorldLdrPrePosterize" &&
+          posterMode == 1 && posterDither == 2 && posterLevels == 8.0f,
+        "Posterize runs after FxaaResolve to screen with configured uniforms");
+    }
+    host.environment().setVar("posterizeEnabled", false);
+    host.environment().setVar("motionFxMode", 0);
+    host.environment().setVar("sobelEnabled", true);
+
+    // Runtime kill-switch hdrEnabled=0 with sobelEnabled=1 runs LDR Sobel;
+    // posterizeEnabled=1 runs LDR Posterize; disabling returns to backbuffer.
     host.environment().setVar("hdrEnabled", false);
+    {
+      DrawList* scene = host.beginRender();
+      scene->AddDrawable(&world, RenderLayerId::World);
+      host.endRender();
+      const std::vector<RenderPassDesc>& passes =
+        scene->passesIn(RenderLayerId::World);
+      testTrue(
+        g,
+        passes.size() == 2u && passes[0].name == "WorldGeomPass" &&
+          passes[1].name == "SobelEdge",
+        "hdrEnabled=0 with sobelEnabled=1 runs WorldGeomPass + SobelEdge");
+    }
+    host.environment().setVar("sobelEnabled", false);
+    host.environment().setVar("posterizeEnabled", true);
+    {
+      DrawList* scene = host.beginRender();
+      scene->AddDrawable(&world, RenderLayerId::World);
+      host.endRender();
+      const std::vector<RenderPassDesc>& passes =
+        scene->passesIn(RenderLayerId::World);
+      testTrue(
+        g,
+        passes.size() == 2u && passes[0].name == "WorldGeomPass" &&
+          passes[1].name == "Posterize" && passes[1].useScreenTarget &&
+          !passes[1].inputTargetTextures.empty() &&
+          passes[1].inputTargetTextures[0].targetName == "WorldColorVelocity",
+        "hdrEnabled=0 with posterizeEnabled=1 runs WorldGeomPass + Posterize");
+    }
+    host.environment().setVar("posterizeEnabled", false);
     {
       DrawList* scene = host.beginRender();
       scene->AddDrawable(&world, RenderLayerId::World);
       host.endRender();
       testTrue(g,
                !scene->hasCustomPasses(RenderLayerId::World),
-               "hdrEnabled=0 bypasses HDR pass chain immediately");
+               "hdrEnabled=0 with post-FX disabled bypasses offscreen passes");
     }
 
     world.releaseResources();
@@ -1249,5 +1523,7 @@ registerIllumoHostTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.Host.DebugOverlayGraphics",
                []() { return runHostCase(testDebugOverlayGraphicsPanel); });
+  registry.add("Illumo.Host.DebugOverlayAxisCube",
+               []() { return runHostCase(testDebugOverlayAxisCube); });
 #endif
 }

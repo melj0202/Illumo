@@ -2416,6 +2416,11 @@ WasmFrameRenderer::dispatch(DrawList& scene)
       !m_state->lifetime.expired()) {
     m_state->renderer.setNextWorldViewProjection(m_state->frame.camera);
   }
+  if (m_state->frame.hasDebugVelocity && !m_state->retired &&
+      !m_state->lifetime.expired()) {
+    m_state->renderer.setNextDebugVelocity(
+      m_state->frame.debugVelocity, m_state->frame.debugVelocityReferenceSpeed);
+  }
   // Host-owned world objects draw before the frame's world batches, which
   // keep today's overlay order on top of them, unless a composition places
   // them (frame v7).

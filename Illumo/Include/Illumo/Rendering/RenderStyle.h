@@ -37,6 +37,12 @@ enum class RenderStyleId : unsigned char
   HdrComposite = 15,
   // Single-pass luma edge-directed anti-aliasing resolve
   FxaaResolve = 16,
+  // 3x3 Sobel edge detection (color, depth, or combined; outline or edges-only)
+  SobelEdge = 17,
+  // Temporal phosphor persistence feedback blend / history copy
+  MotionFeedback = 18,
+  // Color quantization / posterization with optional ordered/IGN dithering
+  Posterize = 19,
   Count
 };
 

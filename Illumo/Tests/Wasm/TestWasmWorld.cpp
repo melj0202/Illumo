@@ -180,7 +180,7 @@ worldFrameValidation()
   meshSky.texture.kind = GuestResourceKind::Mesh;
   std::vector<std::byte> skyVersion6 = encode(worldFrame({ sky }));
   skyVersion6[4] = std::byte{ 6 };
-  skyVersion6.resize(skyVersion6.size() - 8);
+  skyVersion6.resize(skyVersion6.size() - 12);
   testTrue(counters,
            skyRead && skyFrame.worldOperations.size() == 2 &&
              skyFrame.worldOperations[0].texture.slot == 9 &&
@@ -192,10 +192,10 @@ worldFrameValidation()
            "Skybox operations round-trip in v7 only, with id zero and a "
            "texture or none");
 
-  // Version 5: no world section (nor the v7 sections), nothing to apply.
+  // Version 5: no world section (nor v7/v11 sections), nothing to apply.
   std::vector<std::byte> version5 = encode(worldFrame({}));
   version5[4] = std::byte{ 5 };
-  version5.resize(version5.size() - 12);
+  version5.resize(version5.size() - 16);
   testTrue(counters,
            GuestFrame::read(version5, ignored) &&
              ignored.worldOperations.empty(),

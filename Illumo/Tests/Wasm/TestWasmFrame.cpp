@@ -417,6 +417,44 @@ run(const std::string& name)
     invalid = canvas;
     invalid.batches[0].canvasFade[1] = std::numeric_limits<float>::quiet_NaN();
     rejectsFrame(counters, invalid, "Non-finite canvas fade speed rejected");
+
+    // Version 11: optional world-space debug velocity telemetry.
+    GuestFrame velFrame = makeFrame();
+    velFrame.hasDebugVelocity = true;
+    velFrame.debugVelocity = { 1.5f, -0.75f, 2.25f };
+    velFrame.debugVelocityReferenceSpeed = 3.0f;
+    GuestWireWriter velWire;
+    velFrame.write(velWire);
+    testTrue(counters,
+             GuestFrame::read(velWire.data(), accepted) &&
+               accepted.hasDebugVelocity && accepted.debugVelocity[0] == 1.5f &&
+               accepted.debugVelocity[1] == -0.75f &&
+               accepted.debugVelocity[2] == 2.25f &&
+               accepted.debugVelocityReferenceSpeed == 3.0f,
+             "Version 11 debug velocity round-trips");
+    bool velTruncRejected = true;
+    for (std::size_t size = 0; size < velWire.data().size(); ++size) {
+      if (GuestFrame::read(std::span(velWire.data()).first(size), accepted)) {
+        velTruncRejected = false;
+      }
+    }
+    testTrue(counters, velTruncRejected, "Version 11 truncations rejected");
+    invalid = velFrame;
+    invalid.debugVelocityReferenceSpeed = 0.0f;
+    rejectsFrame(counters, invalid, "Zero debug velocity reference rejected");
+    invalid = velFrame;
+    invalid.debugVelocity[0] = std::numeric_limits<float>::quiet_NaN();
+    rejectsFrame(counters, invalid, "Non-finite debug velocity rejected");
+    // Version 10 packets without the v11 tail remain accepted and clear vel.
+    GuestFrame plain = makeFrame();
+    GuestWireWriter plainWire;
+    plain.write(plainWire);
+    std::vector<std::byte> v10Bytes = plainWire.take();
+    v10Bytes[4] = std::byte{ 10 };
+    v10Bytes.resize(v10Bytes.size() - 4);
+    testTrue(counters,
+             GuestFrame::read(v10Bytes, accepted) && !accepted.hasDebugVelocity,
+             "Version 10 frames remain accepted without debug velocity");
     return counters.failures == 0;
   }
   if (name == "CanvasFadeResolve") {
@@ -716,10 +754,10 @@ run(const std::string& name)
     GuestWireWriter version3Wire;
     version3.write(version3Wire);
     std::vector<std::byte> version3Bytes = version3Wire.take();
-    // Rewrite as version 3: drop the empty v4 write, v5 surface, v6 world
-    // and v7 visual and composition sections.
+    // Rewrite as version 3: drop the empty v4 write, v5 surface, v6 world,
+    // v7 visual/composition, and v11 debug velocity flag sections.
     version3Bytes[4] = std::byte{ 3 };
-    version3Bytes.resize(version3Bytes.size() - 20);
+    version3Bytes.resize(version3Bytes.size() - 24);
     testTrue(counters,
              bridge.accept(version3Bytes),
              "Version 3 frames without mesh writes remain accepted");

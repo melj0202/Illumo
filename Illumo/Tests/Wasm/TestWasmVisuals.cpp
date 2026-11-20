@@ -339,10 +339,10 @@ visualFrameValidation()
            "Shared operation, text and entry quotas are enforced and reported "
            "to guests");
 
-  // Version 6: no visual or composition sections.
+  // Version 6: no visual, composition, or v11 debug velocity sections.
   std::vector<std::byte> version6 = encode(visualFrame({}));
   version6[4] = std::byte{ 6 };
-  version6.resize(version6.size() - 8);
+  version6.resize(version6.size() - 12);
   testTrue(counters,
            GuestFrame::read(version6, ignored) &&
              ignored.visualOperations.empty() && ignored.compositions.empty(),

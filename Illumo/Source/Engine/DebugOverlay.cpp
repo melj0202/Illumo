@@ -1,6 +1,7 @@
 #ifndef GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_NONE
 #endif
+#include "AxisCubeOverlay.h"
 #include "DebugOverlayState.h"
 #include "FileTreeOverlay.h"
 #include "GamepadOverlay.h"
@@ -64,6 +65,9 @@ DebugOverlay::start(IllumoContext& context)
   m_graphicsOverlay = std::make_unique<GraphicsSettingsOverlay>();
   m_graphicsOverlay->prepare(ic->renderer, ic->window, ic->camera, ic->envVars);
   m_graphicsOverlay->setDetachAvailable(PixelWindow::isPresentationSupported());
+  m_axisCubeOverlay = std::make_unique<AxisCubeOverlay>();
+  m_axisCubeOverlay->prepare(ic->renderer, ic->window, ic->camera);
+  m_axisCubeOverlay->syncFromEnv(ic->envVars);
 
   // Required for GLString / SplashText screen-space drawing
   GLString::setRenderWindow(ic->window);
@@ -406,6 +410,31 @@ DebugOverlay::registerRendererCommands()
     "graphics [on|off|toggle|window|dock|reset]",
     "Show, hide, pop out, or reset the live graphics test panel (F7)",
     { "on", "off", "toggle", "window", "dock", "reset" });
+
+  ic->commandRegistry->RegisterCommand(
+    "axis_cube",
+    [this](const std::vector<std::string>& args) {
+      if (m_axisCubeOverlay == nullptr) {
+        return;
+      }
+      if (args.size() > 1 || (!args.empty() && args[0] != "on" &&
+                              args[0] != "off" && args[0] != "toggle")) {
+        ic->commandLine->logError("Usage: axis_cube [on|off|toggle]");
+        return;
+      }
+      if (!args.empty()) {
+        const bool nextEnabled = args[0] == "toggle"
+                                   ? !m_axisCubeOverlay->visible()
+                                   : (args[0] == "on");
+        m_axisCubeOverlay->setEnabled(nextEnabled, ic->envVars);
+      }
+      ic->commandLine->logSuccess(
+        std::string("Axis cube overlay: ") +
+        (m_axisCubeOverlay->visible() ? "on" : "off"));
+    },
+    "axis_cube [on|off|toggle]",
+    "Show or hide the transparent centered axis cube overlay (F8)",
+    { "on", "off", "toggle" });
 }
 
 void
@@ -424,6 +453,7 @@ DebugOverlay::unregisterRendererCommands()
   ic->commandRegistry->UnregisterCommand("gamepad");
   ic->commandRegistry->UnregisterCommand("joystick_debug");
   ic->commandRegistry->UnregisterCommand("graphics");
+  ic->commandRegistry->UnregisterCommand("axis_cube");
 }
 
 void
@@ -706,6 +736,9 @@ DebugOverlay::update(double dt)
     m_gamepadOverlay->update(
       dt, ic->envVars, ic->inputManager, ic->commandLine);
   }
+  if (m_axisCubeOverlay != nullptr) {
+    m_axisCubeOverlay->syncFromEnv(ic->envVars);
+  }
   updateDiagnostics(dt);
   updateWatermarkPosition();
   if (rendererDemoEnabled && rendererDemo != nullptr) {
@@ -751,6 +784,16 @@ DebugOverlay::update(double dt)
                                      ic->commandLine->isOpen,
                                      event.modifiers != 0,
                                      ic->commandLine->HasKeyBinding("F7"))) {
+      ic->inputManager->suppressKeyForFrame(key);
+      continue;
+    }
+    if (m_axisCubeOverlay != nullptr &&
+        m_axisCubeOverlay->handleKey(key,
+                                     action,
+                                     ic->commandLine->isOpen,
+                                     event.modifiers != 0,
+                                     ic->commandLine->HasKeyBinding("F8"),
+                                     ic->envVars)) {
       ic->inputManager->suppressKeyForFrame(key);
       continue;
     }
@@ -1350,6 +1393,7 @@ DebugOverlay::stop()
   m_fileTreeOverlay.reset();
   m_gamepadOverlay.reset();
   m_graphicsOverlay.reset();
+  m_axisCubeOverlay.reset();
   if (m_profiler != nullptr) {
     m_profiler->setEnabled(false);
   }
@@ -1397,6 +1441,9 @@ DebugOverlay::dispatch(DrawList& scene)
   // work. Owners rebuild GameVisual primitives inside AppendCommands.
   if (ic->commandLine && ic->commandLine->wantsDraw()) {
     scene.AddDrawable(ic->commandLine, RenderLayerId::UI);
+  }
+  if (m_axisCubeOverlay != nullptr && m_axisCubeOverlay->visible()) {
+    scene.AddDrawable(m_axisCubeOverlay.get(), RenderLayerId::Debug);
   }
   if (m_diagnosticsBackdrop != nullptr && m_diagnosticsBackdrop->isVisible()) {
     scene.AddDrawable(m_diagnosticsBackdrop.get(), RenderLayerId::Debug);

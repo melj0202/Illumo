@@ -35,11 +35,14 @@ public:
     std::array<float, 16> worldMvp{ 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
                                     0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
                                     0.0f, 0.0f, 0.0f, 1.0f };
+    std::array<float, 3> debugVelocity{ 0.0f, 0.0f, 0.0f };
+    float debugVelocityReferenceSpeed = 1.0f;
     Camera* worldCamera = nullptr;
     uint64_t frameSerial = 0;
     float uiScale = 1.0f;
     bool active = false;
     bool hasWorldMvp = false;
+    bool hasDebugVelocity = false;
     bool sceneSnapshotExtraction = true;
   };
 
@@ -278,6 +281,9 @@ private:
   ShadowFrameContext shadowFrameContext;
   std::array<float, 16> m_nextWorldViewProjection{};
   bool m_hasNextWorldViewProjection = false;
+  std::array<float, 3> m_nextDebugVelocity{ 0.0f, 0.0f, 0.0f };
+  float m_nextDebugVelocityReferenceSpeed = 1.0f;
+  bool m_hasNextDebugVelocity = false;
   // The frame block is created on first use and written at most once per
   // RenderScene; its storage stays unchanged until the next frame's write.
   BufferHandle m_frameUniformBuffer{};
@@ -297,7 +303,25 @@ private:
   bool m_hdrLinearWorldTarget = false;
   std::array<float, 16> m_viewProjection{};
   std::array<float, 16> m_previousViewProjection{};
+  std::array<float, 16> m_feedbackHistoryViewProjection{};
+  std::array<float, 16> m_prevFromCurrClip{ 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
+                                            0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+                                            0.0f, 0.0f, 0.0f, 1.0f };
+  std::array<float, 16> m_historyFromCurrClip{ 1.0f, 0.0f, 0.0f, 0.0f,
+                                               0.0f, 1.0f, 0.0f, 0.0f,
+                                               0.0f, 0.0f, 1.0f, 0.0f,
+                                               0.0f, 0.0f, 0.0f, 1.0f };
   bool m_hasViewProjection = false;
+  bool m_hasFeedbackHistoryViewProjection = false;
+  std::chrono::steady_clock::time_point m_startTime{};
+  std::chrono::steady_clock::time_point m_lastFrameTime{};
+  bool m_hasStartTime = false;
+  bool m_hasExplicitDelta = false;
+  float m_explicitDeltaSeconds = 1.0f / 60.0f;
+  float m_elapsedSeconds = 0.0f;
+  float m_deltaSeconds = 1.0f / 60.0f;
+  float m_feedbackDecayAccum = 0.0f;
+  float m_feedbackDecayStep = 1.0f;
   RecordedCommandList* m_recording = nullptr;
 
 public:
@@ -380,6 +404,10 @@ public:
   // context and shadow fitting instead of the camera's. Hosts presenting a
   // world authored elsewhere (a WASM guest) supply the author's camera.
   void setNextWorldViewProjection(const std::array<float, 16>& matrix);
+  // Optional world-space velocity vector and reference full speed for debug
+  // overlays (such as the centered axis cube) during the next RenderScene.
+  void setNextDebugVelocity(const std::array<float, 3>& velocity,
+                            float referenceSpeed);
   bool isWorldBoundsVisible(const AxisAlignedBounds3& bounds) const;
   bool isShadowCasterRelevant(const AxisAlignedBounds3& bounds) const;
   size_t getActiveShadowQuadrant() const { return m_activeShadowQuadrant; }
@@ -539,6 +567,7 @@ public:
   // =========================================================================
 
   void BeginFrame();
+  void setFrameDelta(double dtSeconds);
   void setStrictSubmission(bool enabled) { m_strictSubmission = enabled; }
   const std::string& frameError() const { return m_frameError; }
   void reportFrameError(const std::string& message)

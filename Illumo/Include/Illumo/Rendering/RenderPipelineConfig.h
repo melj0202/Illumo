@@ -37,6 +37,33 @@ struct RenderPipelineConfig
   int bloomMipCount = 5;
   bool fxaaEnabled = true;
   bool canvasBloomEnabled = false;
+  bool sobelEnabled = false;
+  // 0 = Outline overlay over scene, 1 = Edges Only
+  int sobelMode = 0;
+  // 0 = Color, 1 = Depth, 2 = Combined (Color + Depth)
+  int sobelSource = 2;
+  float sobelStrength = 0.85f;
+  float sobelThreshold = 0.12f;
+  float sobelThickness = 1.0f;
+  // Matrix-style temporal phosphor motion effects:
+  // 0 = Off, 1 = Matrix, 2 = Cascade, 3 = Rain, 4 = Glyph, 5 = ChromaBit
+  static constexpr int kMaxMotionFxMode = 5;
+  int motionFxMode = 0;
+  float motionFxStrength = 0.65f;
+  float motionFxSpread = 1.0f;
+  // Posterization / color quantization post-process:
+  bool posterizeEnabled = false;
+  // 0 = RGB, 1 = Luma (hue-preserving), 2 = HSV
+  static constexpr int kMaxPosterizeMode = 2;
+  int posterizeMode = 0;
+  int posterizeLevels = 6;
+  float posterizeGamma = 1.0f;
+  // 0 = Off, 1 = Bayer 4x4, 2 = Bayer 8x8, 3 = Interleaved Gradient Noise
+  static constexpr int kMaxPosterizeDitherMode = 3;
+  int posterizeDitherMode = 0;
+  float posterizeDitherAmount = 0.5f;
+  int posterizeDitherScale = 1;
+  float posterizeStrength = 1.0f;
 
   bool operator==(const RenderPipelineConfig&) const = default;
 
@@ -92,6 +119,23 @@ struct RenderPipelineConfig
       { "bloomMipCount", "5" },
       { "fxaaEnabled", "1" },
       { "canvasBloomEnabled", "0" },
+      { "sobelEnabled", "0" },
+      { "sobelMode", "0" },
+      { "sobelSource", "2" },
+      { "sobelStrength", "0.85" },
+      { "sobelThreshold", "0.12" },
+      { "sobelThickness", "1" },
+      { "motionFxMode", "0" },
+      { "motionFxStrength", "0.65" },
+      { "motionFxSpread", "1" },
+      { "posterizeEnabled", "0" },
+      { "posterizeMode", "0" },
+      { "posterizeLevels", "6" },
+      { "posterizeGamma", "1" },
+      { "posterizeDitherMode", "0" },
+      { "posterizeDitherAmount", "0.5" },
+      { "posterizeDitherScale", "1" },
+      { "posterizeStrength", "1" },
     };
     for (const DefaultEntry& entry : kDefaults) {
       if (environment->getVar(entry.key).value.empty()) {
@@ -203,6 +247,105 @@ struct RenderPipelineConfig
     if (!canvasBloom.value.empty()) {
       config.canvasBloomEnabled = canvasBloom.valueAsBool;
     }
+    const EnvVar& sobel = environment->getVar("sobelEnabled");
+    if (!sobel.value.empty()) {
+      config.sobelEnabled = sobel.valueAsBool;
+    }
+    const EnvVar& sobelModeVar = environment->getVar("sobelMode");
+    if (!sobelModeVar.value.empty()) {
+      config.sobelMode =
+        std::clamp(static_cast<int>(sobelModeVar.valueAsLong), 0, 1);
+    }
+    const EnvVar& sobelSourceVar = environment->getVar("sobelSource");
+    if (!sobelSourceVar.value.empty()) {
+      config.sobelSource =
+        std::clamp(static_cast<int>(sobelSourceVar.valueAsLong), 0, 2);
+    }
+    const EnvVar& sobelStrengthVar = environment->getVar("sobelStrength");
+    if (!sobelStrengthVar.value.empty() &&
+        std::isfinite(sobelStrengthVar.valueAsDouble)) {
+      config.sobelStrength = std::clamp(
+        static_cast<float>(sobelStrengthVar.valueAsDouble), 0.0f, 1.0f);
+    }
+    const EnvVar& sobelThresholdVar = environment->getVar("sobelThreshold");
+    if (!sobelThresholdVar.value.empty() &&
+        std::isfinite(sobelThresholdVar.valueAsDouble)) {
+      config.sobelThreshold = std::clamp(
+        static_cast<float>(sobelThresholdVar.valueAsDouble), 0.005f, 1.0f);
+    }
+    const EnvVar& sobelThicknessVar = environment->getVar("sobelThickness");
+    if (!sobelThicknessVar.value.empty() &&
+        std::isfinite(sobelThicknessVar.valueAsDouble)) {
+      config.sobelThickness = std::clamp(
+        static_cast<float>(sobelThicknessVar.valueAsDouble), 0.25f, 4.0f);
+    }
+    const EnvVar& motionFxModeVar = environment->getVar("motionFxMode");
+    if (!motionFxModeVar.value.empty()) {
+      config.motionFxMode = std::clamp(
+        static_cast<int>(motionFxModeVar.valueAsLong), 0, kMaxMotionFxMode);
+    }
+    const EnvVar& motionFxStrengthVar = environment->getVar("motionFxStrength");
+    if (!motionFxStrengthVar.value.empty() &&
+        std::isfinite(motionFxStrengthVar.valueAsDouble)) {
+      config.motionFxStrength = std::clamp(
+        static_cast<float>(motionFxStrengthVar.valueAsDouble), 0.0f, 1.0f);
+    }
+    const EnvVar& motionFxSpreadVar = environment->getVar("motionFxSpread");
+    if (!motionFxSpreadVar.value.empty() &&
+        std::isfinite(motionFxSpreadVar.valueAsDouble)) {
+      config.motionFxSpread = std::clamp(
+        static_cast<float>(motionFxSpreadVar.valueAsDouble), 0.1f, 3.0f);
+    }
+    const EnvVar& posterizeVar = environment->getVar("posterizeEnabled");
+    if (!posterizeVar.value.empty()) {
+      config.posterizeEnabled = posterizeVar.valueAsBool;
+    }
+    const EnvVar& posterizeModeVar = environment->getVar("posterizeMode");
+    if (!posterizeModeVar.value.empty()) {
+      config.posterizeMode = std::clamp(
+        static_cast<int>(posterizeModeVar.valueAsLong), 0, kMaxPosterizeMode);
+    }
+    const EnvVar& posterizeLevelsVar = environment->getVar("posterizeLevels");
+    if (!posterizeLevelsVar.value.empty() &&
+        posterizeLevelsVar.valueAsLong > 0) {
+      config.posterizeLevels =
+        std::clamp(static_cast<int>(posterizeLevelsVar.valueAsLong), 2, 32);
+    }
+    const EnvVar& posterizeGammaVar = environment->getVar("posterizeGamma");
+    if (!posterizeGammaVar.value.empty() &&
+        std::isfinite(posterizeGammaVar.valueAsDouble)) {
+      config.posterizeGamma = std::clamp(
+        static_cast<float>(posterizeGammaVar.valueAsDouble), 0.4f, 2.5f);
+    }
+    const EnvVar& posterizeDitherModeVar =
+      environment->getVar("posterizeDitherMode");
+    if (!posterizeDitherModeVar.value.empty()) {
+      config.posterizeDitherMode =
+        std::clamp(static_cast<int>(posterizeDitherModeVar.valueAsLong),
+                   0,
+                   kMaxPosterizeDitherMode);
+    }
+    const EnvVar& posterizeDitherAmountVar =
+      environment->getVar("posterizeDitherAmount");
+    if (!posterizeDitherAmountVar.value.empty() &&
+        std::isfinite(posterizeDitherAmountVar.valueAsDouble)) {
+      config.posterizeDitherAmount = std::clamp(
+        static_cast<float>(posterizeDitherAmountVar.valueAsDouble), 0.0f, 1.5f);
+    }
+    const EnvVar& posterizeDitherScaleVar =
+      environment->getVar("posterizeDitherScale");
+    if (!posterizeDitherScaleVar.value.empty() &&
+        posterizeDitherScaleVar.valueAsLong > 0) {
+      config.posterizeDitherScale =
+        std::clamp(static_cast<int>(posterizeDitherScaleVar.valueAsLong), 1, 4);
+    }
+    const EnvVar& posterizeStrengthVar =
+      environment->getVar("posterizeStrength");
+    if (!posterizeStrengthVar.value.empty() &&
+        std::isfinite(posterizeStrengthVar.valueAsDouble)) {
+      config.posterizeStrength = std::clamp(
+        static_cast<float>(posterizeStrengthVar.valueAsDouble), 0.0f, 1.0f);
+    }
     return config;
   }
 
@@ -238,5 +381,42 @@ struct RenderPipelineConfig
                         static_cast<long>(std::clamp(bloomMipCount, 1, 5)));
     environment->setVar("fxaaEnabled", fxaaEnabled);
     environment->setVar("canvasBloomEnabled", canvasBloomEnabled);
+    environment->setVar("sobelEnabled", sobelEnabled);
+    environment->setVar("sobelMode",
+                        static_cast<long>(std::clamp(sobelMode, 0, 1)));
+    environment->setVar("sobelSource",
+                        static_cast<long>(std::clamp(sobelSource, 0, 2)));
+    environment->setVar("sobelStrength",
+                        formatFloat(std::clamp(sobelStrength, 0.0f, 1.0f)));
+    environment->setVar("sobelThreshold",
+                        formatFloat(std::clamp(sobelThreshold, 0.005f, 1.0f)));
+    environment->setVar("sobelThickness",
+                        formatFloat(std::clamp(sobelThickness, 0.25f, 4.0f)));
+    environment->setVar(
+      "motionFxMode",
+      static_cast<long>(std::clamp(motionFxMode, 0, kMaxMotionFxMode)));
+    environment->setVar("motionFxStrength",
+                        formatFloat(std::clamp(motionFxStrength, 0.0f, 1.0f)));
+    environment->setVar("motionFxSpread",
+                        formatFloat(std::clamp(motionFxSpread, 0.1f, 3.0f)));
+    environment->setVar("posterizeEnabled", posterizeEnabled);
+    environment->setVar(
+      "posterizeMode",
+      static_cast<long>(std::clamp(posterizeMode, 0, kMaxPosterizeMode)));
+    environment->setVar("posterizeLevels",
+                        static_cast<long>(std::clamp(posterizeLevels, 2, 32)));
+    environment->setVar("posterizeGamma",
+                        formatFloat(std::clamp(posterizeGamma, 0.4f, 2.5f)));
+    environment->setVar("posterizeDitherMode",
+                        static_cast<long>(std::clamp(
+                          posterizeDitherMode, 0, kMaxPosterizeDitherMode)));
+    environment->setVar(
+      "posterizeDitherAmount",
+      formatFloat(std::clamp(posterizeDitherAmount, 0.0f, 1.5f)));
+    environment->setVar(
+      "posterizeDitherScale",
+      static_cast<long>(std::clamp(posterizeDitherScale, 1, 4)));
+    environment->setVar("posterizeStrength",
+                        formatFloat(std::clamp(posterizeStrength, 0.0f, 1.0f)));
   }
 };

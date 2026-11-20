@@ -25,6 +25,7 @@
 #include <thread>
 #include <vector>
 
+#include "Engine/AxisCubeOverlay.h"
 #include "Engine/DebugOverlayState.h"
 #include "Engine/FileTreeOverlay.h"
 #include "Engine/GamepadOverlay.h"
@@ -1880,10 +1881,11 @@ testGraphicsSettingsOverlay()
                                &wheelDown,
                                false);
   testTrue(g, wheelDown == 0.0, "panel consumes scroll wheel inside bounds");
-  // Expand height so all 29 rows fit without scrolling, then toggle row 18.
+  // Expand height so all 50 rows fit without scrolling (m_firstRow clamps to
+  // 0).
   (void)overlay.updateInWindow(0.016,
                                1280.0f,
-                               900.0f,
+                               1360.0f,
                                moved.x + moved.w - 4.0f,
                                moved.y + moved.h - 4.0f,
                                true,
@@ -1891,28 +1893,137 @@ testGraphicsSettingsOverlay()
                                false);
   (void)overlay.updateInWindow(0.016,
                                1280.0f,
-                               900.0f,
+                               1360.0f,
                                moved.x + moved.w + 20.0f,
-                               moved.y + 740.0f,
+                               moved.y + 1240.0f,
                                true,
                                &scroll,
                                false);
   (void)overlay.updateInWindow(0.016,
                                1280.0f,
-                               900.0f,
+                               1360.0f,
                                moved.x + moved.w + 20.0f,
-                               moved.y + 740.0f,
+                               moved.y + 1240.0f,
                                false,
                                &scroll,
                                false);
 
   const GuiToolRect tall = overlay.panelRect();
+  // Select Rain (choice 0 on row 18: MotionFxSecondary).
+  const float motionFxRowY = tall.y + GuiToolStyle::kTitleHeight + 2.0f +
+                             18.5f * GraphicsSettingsOverlay::kRowHeight;
+  const float rainBtnX = tall.x + GuiToolStyle::kPad + 120.0f;
+  (void)overlay.updateInWindow(
+    0.016, 1280.0f, 1360.0f, rainBtnX, motionFxRowY, true, &scroll, false);
+  (void)overlay.updateInWindow(
+    0.016, 1280.0f, 1360.0f, rainBtnX, motionFxRowY, false, &scroll, false);
+  testEqInt(g,
+            RenderPipelineConfig::fromEnv(&env).motionFxMode,
+            3,
+            "clicking Rain selects Matrix Phosphor FX mode 3 live");
+
+  // Toggle Sobel Edge Filter (row 22) and verify sobelEnabled flips on.
+  const float sobelRowY = tall.y + GuiToolStyle::kTitleHeight + 2.0f +
+                          22.5f * GraphicsSettingsOverlay::kRowHeight;
+  (void)overlay.updateInWindow(
+    0.016, 1280.0f, 1360.0f, tall.x + 24.0f, sobelRowY, true, &scroll, false);
+  (void)overlay.updateInWindow(
+    0.016, 1280.0f, 1360.0f, tall.x + 24.0f, sobelRowY, false, &scroll, false);
+  testTrue(g,
+           RenderPipelineConfig::fromEnv(&env).sobelEnabled,
+           "toggling Sobel row enables sobelEnabled live");
+
+  // Toggle Posterize (row 29), select Luma (row 30 choice 1), scrub Levels
+  // (row 31), and select 4x4 dither (row 33 choice 1).
+  const float posterizeRowY = tall.y + GuiToolStyle::kTitleHeight + 2.0f +
+                              29.5f * GraphicsSettingsOverlay::kRowHeight;
+  (void)overlay.updateInWindow(0.016,
+                               1280.0f,
+                               1360.0f,
+                               tall.x + 24.0f,
+                               posterizeRowY,
+                               true,
+                               &scroll,
+                               false);
+  (void)overlay.updateInWindow(0.016,
+                               1280.0f,
+                               1360.0f,
+                               tall.x + 24.0f,
+                               posterizeRowY,
+                               false,
+                               &scroll,
+                               false);
+  const float posterizeModeRowY = tall.y + GuiToolStyle::kTitleHeight + 2.0f +
+                                  30.5f * GraphicsSettingsOverlay::kRowHeight;
+  const float lumaBtnX = tall.x + GuiToolStyle::kPad + 108.0f + 135.0f;
+  (void)overlay.updateInWindow(
+    0.016, 1280.0f, 1360.0f, lumaBtnX, posterizeModeRowY, true, &scroll, false);
+  (void)overlay.updateInWindow(0.016,
+                               1280.0f,
+                               1360.0f,
+                               lumaBtnX,
+                               posterizeModeRowY,
+                               false,
+                               &scroll,
+                               false);
+  const float posterizeLevelsRowY = tall.y + GuiToolStyle::kTitleHeight + 2.0f +
+                                    31.5f * GraphicsSettingsOverlay::kRowHeight;
+  const float levelsSliderRightX = tall.x + tall.w - 75.0f;
+  (void)overlay.updateInWindow(0.016,
+                               1280.0f,
+                               1360.0f,
+                               levelsSliderRightX,
+                               posterizeLevelsRowY,
+                               true,
+                               &scroll,
+                               false);
+  (void)overlay.updateInWindow(0.016,
+                               1280.0f,
+                               1360.0f,
+                               levelsSliderRightX,
+                               posterizeLevelsRowY,
+                               false,
+                               &scroll,
+                               false);
+  const float posterizeDitherRowY = tall.y + GuiToolStyle::kTitleHeight + 2.0f +
+                                    33.5f * GraphicsSettingsOverlay::kRowHeight;
+  const float dither4x4BtnX = tall.x + GuiToolStyle::kPad + 108.0f + 95.0f;
+  (void)overlay.updateInWindow(0.016,
+                               1280.0f,
+                               1360.0f,
+                               dither4x4BtnX,
+                               posterizeDitherRowY,
+                               true,
+                               &scroll,
+                               false);
+  (void)overlay.updateInWindow(0.016,
+                               1280.0f,
+                               1360.0f,
+                               dither4x4BtnX,
+                               posterizeDitherRowY,
+                               false,
+                               &scroll,
+                               false);
+  const RenderPipelineConfig posterCfg = RenderPipelineConfig::fromEnv(&env);
+  testTrue(g,
+           posterCfg.posterizeEnabled && posterCfg.posterizeMode == 1 &&
+             posterCfg.posterizeLevels > 16 &&
+             posterCfg.posterizeDitherMode == 1,
+           "Posterize controls update enabled, mode, levels, and dither live");
+
+  // Toggle Directional & Spot Shadows (row 39).
   const float shadowsRowY = tall.y + GuiToolStyle::kTitleHeight + 2.0f +
-                            18.5f * GraphicsSettingsOverlay::kRowHeight;
+                            39.5f * GraphicsSettingsOverlay::kRowHeight;
   (void)overlay.updateInWindow(
-    0.016, 1280.0f, 900.0f, tall.x + 24.0f, shadowsRowY, true, &scroll, false);
-  (void)overlay.updateInWindow(
-    0.016, 1280.0f, 900.0f, tall.x + 24.0f, shadowsRowY, false, &scroll, false);
+    0.016, 1280.0f, 1360.0f, tall.x + 24.0f, shadowsRowY, true, &scroll, false);
+  (void)overlay.updateInWindow(0.016,
+                               1280.0f,
+                               1360.0f,
+                               tall.x + 24.0f,
+                               shadowsRowY,
+                               false,
+                               &scroll,
+                               false);
   testTrue(g,
            overlay.shadowOverrideActive() &&
              renderer.getShadowDebugOverrides().active &&
@@ -1921,10 +2032,13 @@ testGraphicsSettingsOverlay()
 
   // Reset defaults restores EnvVars and clears shadow override.
   overlay.resetDefaults();
+  const RenderPipelineConfig resetCfg = RenderPipelineConfig::fromEnv(&env);
   testTrue(g,
            !overlay.shadowOverrideActive() &&
              !renderer.getShadowDebugOverrides().active &&
-             RenderPipelineConfig::fromEnv(&env).exposure == 0.0f,
+             resetCfg.exposure == 0.0f && resetCfg.motionFxMode == 0 &&
+             !resetCfg.posterizeEnabled && resetCfg.posterizeMode == 0 &&
+             resetCfg.posterizeLevels == 6 && resetCfg.posterizeDitherMode == 0,
            "resetDefaults restores pipeline settings and clears override");
 
   // PopOut request and SoftwareCanvas rasterization in detached mode.
@@ -1957,6 +2071,232 @@ testGraphicsSettingsOverlay()
            "Escape closes in-window floating graphics panel");
 }
 
+static void
+testAxisCubeOverlay()
+{
+  testSection("AxisCubeOverlay: centered perspective/ortho cube, colored X/Y/Z "
+              "axes, F8/envvar toggle and token dispatch");
+
+  NullRenderWindow window{ 1280, 720 };
+  EnvVars env(std::filesystem::path{});
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  Camera camera{ glm::vec2(0.0f, 0.0f), 1.0f, &env };
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer{ &window, &env, &camera, &mock, false };
+
+  AxisCubeOverlay overlay;
+  overlay.prepare(&renderer, &window, &camera);
+
+  testTrue(g,
+           !AxisCubeOverlay::isEnabled(nullptr) &&
+             !AxisCubeOverlay::isEnabled(&env) && !overlay.visible(),
+           "axis cube overlay starts disabled by default");
+
+  // F8 toggles only when console is closed, unmodified, and not user-bound.
+  testTrue(g,
+           !overlay.handleKey(
+             KeyCode::F8, InputAction::Press, true, false, false, &env) &&
+             !overlay.handleKey(
+               KeyCode::F8, InputAction::Press, false, true, false, &env) &&
+             !overlay.handleKey(
+               KeyCode::F8, InputAction::Press, false, false, true, &env) &&
+             !overlay.visible(),
+           "F8 yields to console, modifiers, and user bindings");
+  testTrue(g,
+           overlay.handleKey(
+             KeyCode::F8, InputAction::Press, false, false, false, &env) &&
+             overlay.visible() && AxisCubeOverlay::isEnabled(&env),
+           "unmodified F8 enables overlay and syncs showAxisCube");
+  testTrue(g,
+           !overlay.handleKey(
+             KeyCode::Escape, InputAction::Press, false, false, false, &env) &&
+             overlay.visible(),
+           "Escape does not steal focus from the transparent axis cube");
+
+  // Envvar synchronization turns it off and back on.
+  env.setVar("showAxisCube", false);
+  overlay.syncFromEnv(&env);
+  testTrue(g, !overlay.visible(), "syncFromEnv hides overlay");
+  env.setVar("showAxisCube", true);
+  overlay.syncFromEnv(&env);
+  testTrue(g, overlay.visible(), "syncFromEnv shows overlay");
+
+  // Saturn-like isometric perspective camera: eye=(d,d,d), target=(0,0,0),
+  // fov=50 deg, aspect=16/9.
+  const float aspect = 1280.0f / 720.0f;
+  const float iso = 4.5f / std::sqrt(3.0f);
+  const glm::mat4 proj =
+    glm::perspective(glm::radians(50.0f), aspect, 0.1f, 100.0f);
+  const glm::mat4 isoView = glm::lookAt(
+    glm::vec3(iso, iso, iso), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+  const glm::mat4 isoMvp = proj * isoView;
+
+  const AxisCubeOverlay::ViewBasis basis =
+    AxisCubeOverlay::extractViewBasis(isoMvp, aspect);
+  testTrue(g,
+           basis.perspective &&
+             std::fabs(basis.tanHalfFovY - std::tan(glm::radians(25.0f))) <
+               0.002f,
+           "extractViewBasis recovers perspective mode and exact vertical FOV");
+
+  float ox = 0.0f, oy = 0.0f;
+  AxisCubeOverlay::projectPoint(
+    basis, glm::vec3(0.0f), 1280.0f, 720.0f, &ox, &oy);
+  testTrue(g,
+           std::fabs(ox - 640.0f) < 0.01f && std::fabs(oy - 360.0f) < 0.01f,
+           "cube origin projects to exact screen center");
+
+  float xx = 0.0f, xy = 0.0f;
+  float yx = 0.0f, yy = 0.0f;
+  float zx = 0.0f, zy = 0.0f;
+  AxisCubeOverlay::projectPoint(
+    basis, glm::vec3(1.0f, 0.0f, 0.0f), 1280.0f, 720.0f, &xx, &xy);
+  AxisCubeOverlay::projectPoint(
+    basis, glm::vec3(0.0f, 1.0f, 0.0f), 1280.0f, 720.0f, &yx, &yy);
+  AxisCubeOverlay::projectPoint(
+    basis, glm::vec3(0.0f, 0.0f, 1.0f), 1280.0f, 720.0f, &zx, &zy);
+  testTrue(
+    g,
+    xx > 640.0f && xy > 360.0f && std::fabs(yx - 640.0f) < 0.5f &&
+      yy < 360.0f && zx < 640.0f && zy > 360.0f,
+    "isometric axes project +X down-right, +Y straight up, +Z down-left");
+
+  // Translating the camera keeps the extracted orientation and center locked.
+  const glm::vec3 panOffset(14.0f, 0.0f, -9.0f);
+  const glm::mat4 pannedMvp =
+    proj * glm::lookAt(glm::vec3(iso, iso, iso) + panOffset,
+                       panOffset,
+                       glm::vec3(0.0f, 1.0f, 0.0f));
+  const AxisCubeOverlay::ViewBasis pannedBasis =
+    AxisCubeOverlay::extractViewBasis(pannedMvp, aspect);
+  testTrue(g,
+           glm::length(pannedBasis.right - basis.right) < 0.002f &&
+             glm::length(pannedBasis.up - basis.up) < 0.002f &&
+             glm::length(pannedBasis.forward - basis.forward) < 0.002f,
+           "camera translation preserves orientation and screen centering");
+
+  // Orbiting +90 degrees swings +X to down-left and +Z behind to up-left.
+  const glm::mat4 orbitedMvp = proj * glm::lookAt(glm::vec3(iso, iso, -iso),
+                                                  glm::vec3(0.0f),
+                                                  glm::vec3(0.0f, 1.0f, 0.0f));
+  const AxisCubeOverlay::ViewBasis orbitedBasis =
+    AxisCubeOverlay::extractViewBasis(orbitedMvp, aspect);
+  float oxX = 0.0f, oxY = 0.0f;
+  float ozX = 0.0f, ozY = 0.0f;
+  AxisCubeOverlay::projectPoint(
+    orbitedBasis, glm::vec3(1.0f, 0.0f, 0.0f), 1280.0f, 720.0f, &oxX, &oxY);
+  AxisCubeOverlay::projectPoint(
+    orbitedBasis, glm::vec3(0.0f, 0.0f, 1.0f), 1280.0f, 720.0f, &ozX, &ozY);
+  testTrue(g,
+           oxX < 640.0f && oxY > 360.0f && ozX < 640.0f && ozY < 360.0f,
+           "90-degree camera orbit rotates axis cube in exact lockstep");
+
+  // Orthographic camera is detected cleanly and stays centered.
+  const glm::mat4 orthoMvp =
+    glm::ortho(-5.0f * aspect, 5.0f * aspect, -5.0f, 5.0f, -20.0f, 20.0f) *
+    isoView;
+  const AxisCubeOverlay::ViewBasis orthoBasis =
+    AxisCubeOverlay::extractViewBasis(orthoMvp, aspect);
+  float orthoOx = 0.0f, orthoOy = 0.0f;
+  AxisCubeOverlay::projectPoint(
+    orthoBasis, glm::vec3(0.0f), 1280.0f, 720.0f, &orthoOx, &orthoOy);
+  testTrue(g,
+           !orthoBasis.perspective && std::fabs(orthoOx - 640.0f) < 0.01f &&
+             std::fabs(orthoOy - 360.0f) < 0.01f,
+           "orthographic view matrix produces centered orthographic cube");
+
+  // End-to-end RenderScene dispatch with WASM-style worldMvp override.
+  std::array<float, 16> mvpArr{};
+  std::memcpy(mvpArr.data(), &isoMvp[0][0], mvpArr.size() * sizeof(float));
+  renderer.setNextWorldViewProjection(mvpArr);
+  DrawList drawList(&window, &camera);
+  drawList.AddDrawable(&overlay, RenderLayerId::Debug);
+  renderer.RenderScene(&drawList, &camera);
+
+  int translucentFaceQuads = 0;
+  int coloredLines = 0;
+  for (std::size_t i = 0; i < overlay.visual().shapeCount(); ++i) {
+    const ShapePrimitive* shape = overlay.visual().getShape(i);
+    if (shape == nullptr) {
+      continue;
+    }
+    if (shape->kind == ShapeKind::GradientQuad && shape->color.a > 0 &&
+        shape->color.a < 64) {
+      ++translucentFaceQuads;
+    }
+    if (shape->kind == ShapeKind::Line && (shape->color.r != shape->color.g ||
+                                           shape->color.g != shape->color.b)) {
+      ++coloredLines;
+    }
+  }
+  bool hasX = false;
+  bool hasY = false;
+  bool hasZ = false;
+  for (std::size_t i = 0; i < overlay.visual().textCount(); ++i) {
+    const TextPrimitive* txt = overlay.visual().getText(i);
+    if (txt == nullptr) {
+      continue;
+    }
+    hasX = hasX || txt->content == "X";
+    hasY = hasY || txt->content == "Y";
+    hasZ = hasZ || txt->content == "Z";
+  }
+  testTrue(g,
+           translucentFaceQuads == 6 && coloredLines >= 6 && hasX && hasY &&
+             hasZ && mock.getLastNonEmptySubmittedCount() > 0 &&
+             mock.rejectedCommandCount() == 0,
+           "RenderScene dispatches 6 transparent faces, colored X/Y/Z axis "
+           "lines, labels, and valid tokens");
+
+  // Velocity vector math: zero -> center, 50% -> halfway, 100% -> cube
+  // boundary (including diagonals), over-reference -> clamped on cube surface.
+  const glm::vec3 zeroPt =
+    AxisCubeOverlay::computeVelocityCubePoint(glm::vec3(0.0f), 3.0f);
+  const glm::vec3 halfXPt = AxisCubeOverlay::computeVelocityCubePoint(
+    glm::vec3(1.5f, 0.0f, 0.0f), 3.0f);
+  const glm::vec3 fullXPt = AxisCubeOverlay::computeVelocityCubePoint(
+    glm::vec3(3.0f, 0.0f, 0.0f), 3.0f);
+  const float diagSpeed = 3.0f / std::sqrt(2.0f);
+  const glm::vec3 fullDiagPt = AxisCubeOverlay::computeVelocityCubePoint(
+    glm::vec3(diagSpeed, 0.0f, -diagSpeed), 3.0f);
+  const glm::vec3 jumpClampPt = AxisCubeOverlay::computeVelocityCubePoint(
+    glm::vec3(0.0f, 4.5f, 0.0f), 3.0f);
+  testTrue(
+    g,
+    glm::length(zeroPt) < 1.0e-5f && std::fabs(halfXPt.x - 0.25f) < 0.001f &&
+      std::fabs(fullXPt.x - 0.5f) < 0.001f &&
+      std::fabs(fullDiagPt.x - 0.5f) < 0.001f &&
+      std::fabs(fullDiagPt.z + 0.5f) < 0.001f &&
+      std::fabs(jumpClampPt.y - 0.5f) < 0.001f,
+    "computeVelocityCubePoint scales proportionally from center to cube edge");
+
+  // Supplying next-frame debug velocity renders the gold velocity arrow inside
+  // the cube, and clears automatically on the subsequent frame.
+  renderer.setNextWorldViewProjection(mvpArr);
+  renderer.setNextDebugVelocity({ diagSpeed, 0.0f, -diagSpeed }, 3.0f);
+  renderer.RenderScene(&drawList, &camera);
+  int velocityGoldShapes = 0;
+  for (std::size_t i = 0; i < overlay.visual().shapeCount(); ++i) {
+    const ShapePrimitive* shape = overlay.visual().getShape(i);
+    if (shape != nullptr && shape->color.r == 255 && shape->color.g == 224 &&
+        shape->color.b == 48) {
+      ++velocityGoldShapes;
+    }
+  }
+  testTrue(g,
+           overlay.lastVelocity().valid && velocityGoldShapes >= 2 &&
+             mock.rejectedCommandCount() == 0,
+           "setNextDebugVelocity renders velocity arrow inside the cube");
+
+  renderer.setNextWorldViewProjection(mvpArr);
+  renderer.RenderScene(&drawList, &camera);
+  testTrue(g,
+           !overlay.lastVelocity().valid,
+           "debug velocity clears automatically on frames that do not set it");
+}
+
 void
 registerRuntimeUtilityTests(IllumoTestRegistry& registry)
 {
@@ -1970,6 +2310,8 @@ registerRuntimeUtilityTests(IllumoTestRegistry& registry)
   registry.add("Illumo.Debug.GraphicsSettingsOverlay", []() {
     return runRuntimeUtilityCase(testGraphicsSettingsOverlay);
   });
+  registry.add("Illumo.Debug.AxisCubeOverlay",
+               []() { return runRuntimeUtilityCase(testAxisCubeOverlay); });
   registry.add("Illumo.Profiler.Accounting", []() {
     return runRuntimeUtilityCase(testFrameProfilerAccounting);
   });

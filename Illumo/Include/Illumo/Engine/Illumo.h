@@ -123,6 +123,10 @@ private:
   bool m_initialized{ false };
   bool m_pipelineConfigured{ false };
   bool m_hdrFallbackWarned{ false };
+  bool m_feedbackPrimed{ false };
+  bool m_configuredFeedbackPrimed{ false };
+  int m_feedbackWidth{ 0 };
+  int m_feedbackHeight{ 0 };
   ConfiguredPipelineMode m_configuredPipelineMode{
     ConfiguredPipelineMode::None
   };

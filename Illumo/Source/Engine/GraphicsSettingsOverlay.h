@@ -48,7 +48,7 @@ public:
   static constexpr float kRowHeight = 22.0f;
   static constexpr float kFooterHeight = 32.0f;
   static constexpr float kGripSize = 14.0f;
-  static constexpr int kRowCount = 29;
+  static constexpr int kRowCount = 50;
 
   GraphicsSettingsOverlay()
   {
@@ -357,6 +357,23 @@ public:
       m_envVars->setVar("motionBlurAmount", "0.5");
       m_envVars->setVar("motionBlurMax", "0.2");
       m_envVars->setVar("motionBlurSamples", 8);
+      m_envVars->setVar("motionFxMode", 0);
+      m_envVars->setVar("motionFxStrength", "0.65");
+      m_envVars->setVar("motionFxSpread", "1");
+      m_envVars->setVar("sobelEnabled", false);
+      m_envVars->setVar("sobelMode", 0);
+      m_envVars->setVar("sobelSource", 2);
+      m_envVars->setVar("sobelStrength", "0.85");
+      m_envVars->setVar("sobelThreshold", "0.12");
+      m_envVars->setVar("sobelThickness", "1");
+      m_envVars->setVar("posterizeEnabled", false);
+      m_envVars->setVar("posterizeMode", 0);
+      m_envVars->setVar("posterizeLevels", 6);
+      m_envVars->setVar("posterizeGamma", "1");
+      m_envVars->setVar("posterizeDitherMode", 0);
+      m_envVars->setVar("posterizeDitherAmount", "0.5");
+      m_envVars->setVar("posterizeDitherScale", 1);
+      m_envVars->setVar("posterizeStrength", "1");
       m_envVars->setVar("shadowsEnabled", true);
       m_envVars->setVar("shadowPcf", true);
       m_envVars->setVar("shadowCascades", 3);
@@ -421,19 +438,40 @@ private:
     MotionBlurAmount = 13,
     MotionBlurMax = 14,
     MotionBlurSamples = 15,
-    HeaderShadows = 16,
-    ShadowOverride = 17,
-    ShadowsEnabled = 18,
-    ShadowPcf = 19,
-    ShadowCascades = 20,
-    ShadowMapSize = 21,
-    ShadowBias = 22,
-    ShadowSlopeScale = 23,
-    ShadowNormalOffset = 24,
-    HeaderDisplay = 25,
-    Vsync = 26,
-    FpsCap = 27,
-    ShowFps = 28
+    HeaderMotionFx = 16,
+    MotionFxPrimary = 17,
+    MotionFxSecondary = 18,
+    MotionFxStrength = 19,
+    MotionFxSpread = 20,
+    HeaderSobel = 21,
+    SobelEnabled = 22,
+    SobelMode = 23,
+    SobelSource = 24,
+    SobelStrength = 25,
+    SobelThreshold = 26,
+    SobelThickness = 27,
+    HeaderPosterize = 28,
+    PosterizeEnabled = 29,
+    PosterizeMode = 30,
+    PosterizeLevels = 31,
+    PosterizeGamma = 32,
+    PosterizeDitherMode = 33,
+    PosterizeDitherAmount = 34,
+    PosterizeDitherScale = 35,
+    PosterizeStrength = 36,
+    HeaderShadows = 37,
+    ShadowOverride = 38,
+    ShadowsEnabled = 39,
+    ShadowPcf = 40,
+    ShadowCascades = 41,
+    ShadowMapSize = 42,
+    ShadowBias = 43,
+    ShadowSlopeScale = 44,
+    ShadowNormalOffset = 45,
+    HeaderDisplay = 46,
+    Vsync = 47,
+    FpsCap = 48,
+    ShowFps = 49
   };
 
   enum class RowKind : unsigned char
@@ -693,6 +731,9 @@ private:
       case RowId::HeaderHdr:
       case RowId::HeaderBloom:
       case RowId::HeaderMotionBlur:
+      case RowId::HeaderMotionFx:
+      case RowId::HeaderSobel:
+      case RowId::HeaderPosterize:
       case RowId::HeaderShadows:
       case RowId::HeaderDisplay:
         return RowKind::Section;
@@ -701,6 +742,8 @@ private:
       case RowId::BloomEnabled:
       case RowId::CanvasBloom:
       case RowId::MotionBlurEnabled:
+      case RowId::SobelEnabled:
+      case RowId::PosterizeEnabled:
       case RowId::ShadowOverride:
       case RowId::ShadowsEnabled:
       case RowId::ShadowPcf:
@@ -712,6 +755,15 @@ private:
       case RowId::MotionBlurAmount:
       case RowId::MotionBlurMax:
       case RowId::MotionBlurSamples:
+      case RowId::MotionFxStrength:
+      case RowId::MotionFxSpread:
+      case RowId::SobelStrength:
+      case RowId::SobelThreshold:
+      case RowId::SobelThickness:
+      case RowId::PosterizeLevels:
+      case RowId::PosterizeGamma:
+      case RowId::PosterizeDitherAmount:
+      case RowId::PosterizeStrength:
       case RowId::ShadowBias:
       case RowId::ShadowSlopeScale:
       case RowId::ShadowNormalOffset:
@@ -719,6 +771,13 @@ private:
       case RowId::Tonemapper:
       case RowId::TonemapperBright:
       case RowId::BloomMips:
+      case RowId::MotionFxPrimary:
+      case RowId::MotionFxSecondary:
+      case RowId::SobelMode:
+      case RowId::SobelSource:
+      case RowId::PosterizeMode:
+      case RowId::PosterizeDitherMode:
+      case RowId::PosterizeDitherScale:
       case RowId::ShadowCascades:
       case RowId::ShadowMapSize:
       case RowId::FpsCap:
@@ -762,6 +821,48 @@ private:
         return "Max Velocity";
       case RowId::MotionBlurSamples:
         return "Samples";
+      case RowId::HeaderMotionFx:
+        return "MATRIX PHOSPHOR FX";
+      case RowId::MotionFxPrimary:
+        return "Style";
+      case RowId::MotionFxSecondary:
+        return "";
+      case RowId::MotionFxStrength:
+        return "Trail Strength";
+      case RowId::MotionFxSpread:
+        return "Cell Spread";
+      case RowId::HeaderSobel:
+        return "SOBEL EDGE FILTER";
+      case RowId::SobelEnabled:
+        return "Sobel Edge Filter";
+      case RowId::SobelMode:
+        return "Display";
+      case RowId::SobelSource:
+        return "Source";
+      case RowId::SobelStrength:
+        return "Strength";
+      case RowId::SobelThreshold:
+        return "Threshold";
+      case RowId::SobelThickness:
+        return "Thickness";
+      case RowId::HeaderPosterize:
+        return "POSTERIZE / QUANTIZE";
+      case RowId::PosterizeEnabled:
+        return "Posterize";
+      case RowId::PosterizeMode:
+        return "Color Space";
+      case RowId::PosterizeLevels:
+        return "Levels";
+      case RowId::PosterizeGamma:
+        return "Curve Gamma";
+      case RowId::PosterizeDitherMode:
+        return "Dither";
+      case RowId::PosterizeDitherAmount:
+        return "Dither Amount";
+      case RowId::PosterizeDitherScale:
+        return "Dither Scale";
+      case RowId::PosterizeStrength:
+        return "Strength";
       case RowId::HeaderShadows:
         return "SHADOWS";
       case RowId::ShadowOverride:
@@ -801,6 +902,20 @@ private:
         return 4;
       case RowId::BloomMips:
         return 5;
+      case RowId::MotionFxPrimary:
+        return 3;
+      case RowId::MotionFxSecondary:
+        return 3;
+      case RowId::SobelMode:
+        return 2;
+      case RowId::SobelSource:
+        return 3;
+      case RowId::PosterizeMode:
+        return 3;
+      case RowId::PosterizeDitherMode:
+        return 4;
+      case RowId::PosterizeDitherScale:
+        return 4;
       case RowId::ShadowCascades:
         return 3;
       case RowId::ShadowMapSize:
@@ -829,6 +944,46 @@ private:
     if (id == RowId::BloomMips) {
       static constexpr const char* kMips[5] = { "1", "2", "3", "4", "5" };
       return kMips[std::clamp(choiceIndex, 0, 4)];
+    }
+    if (id == RowId::MotionFxPrimary) {
+      static constexpr const char* kFxPrimary[3] = { "Off",
+                                                     "Matrix",
+                                                     "Cascade" };
+      return kFxPrimary[std::clamp(choiceIndex, 0, 2)];
+    }
+    if (id == RowId::MotionFxSecondary) {
+      static constexpr const char* kFxSecondary[3] = { "Rain",
+                                                       "Glyph",
+                                                       "ChromaBit" };
+      return kFxSecondary[std::clamp(choiceIndex, 0, 2)];
+    }
+    if (id == RowId::SobelMode) {
+      static constexpr const char* kSobelModes[2] = { "Outline", "Edges Only" };
+      return kSobelModes[std::clamp(choiceIndex, 0, 1)];
+    }
+    if (id == RowId::SobelSource) {
+      static constexpr const char* kSobelSources[3] = { "Color",
+                                                        "Depth",
+                                                        "Both" };
+      return kSobelSources[std::clamp(choiceIndex, 0, 2)];
+    }
+    if (id == RowId::PosterizeMode) {
+      static constexpr const char* kPosterizeModes[3] = { "RGB",
+                                                          "Luma",
+                                                          "HSV" };
+      return kPosterizeModes[std::clamp(choiceIndex, 0, 2)];
+    }
+    if (id == RowId::PosterizeDitherMode) {
+      static constexpr const char* kDitherModes[4] = {
+        "Off", "4x4", "8x8", "Noise"
+      };
+      return kDitherModes[std::clamp(choiceIndex, 0, 3)];
+    }
+    if (id == RowId::PosterizeDitherScale) {
+      static constexpr const char* kDitherScales[4] = {
+        "1x", "2x", "3x", "4x"
+      };
+      return kDitherScales[std::clamp(choiceIndex, 0, 3)];
     }
     if (id == RowId::ShadowCascades) {
       static constexpr const char* kCascades[3] = { "1", "2", "3" };
@@ -879,6 +1034,10 @@ private:
         return snap.pipeline.canvasBloomEnabled;
       case RowId::MotionBlurEnabled:
         return snap.pipeline.motionBlurEnabled;
+      case RowId::SobelEnabled:
+        return snap.pipeline.sobelEnabled;
+      case RowId::PosterizeEnabled:
+        return snap.pipeline.posterizeEnabled;
       case RowId::ShadowOverride:
         return m_shadowOverrideActive;
       case RowId::ShadowsEnabled:
@@ -923,6 +1082,12 @@ private:
       case RowId::MotionBlurEnabled:
         m_envVars->setVar("motionBlurEnabled", next);
         break;
+      case RowId::SobelEnabled:
+        m_envVars->setVar("sobelEnabled", next);
+        break;
+      case RowId::PosterizeEnabled:
+        m_envVars->setVar("posterizeEnabled", next);
+        break;
       case RowId::ShadowsEnabled:
         m_envVars->setVar("shadowsEnabled", next);
         enableShadowOverrideAndPush();
@@ -956,6 +1121,30 @@ private:
                  : -1;
       case RowId::BloomMips:
         return std::clamp(snap.pipeline.bloomMipCount, 1, 5) - 1;
+      case RowId::MotionFxPrimary:
+        return (snap.pipeline.motionFxMode >= 0 &&
+                snap.pipeline.motionFxMode <= 2)
+                 ? snap.pipeline.motionFxMode
+                 : -1;
+      case RowId::MotionFxSecondary:
+        return (snap.pipeline.motionFxMode >= 3 &&
+                snap.pipeline.motionFxMode <= 5)
+                 ? (snap.pipeline.motionFxMode - 3)
+                 : -1;
+      case RowId::SobelMode:
+        return std::clamp(snap.pipeline.sobelMode, 0, 1);
+      case RowId::SobelSource:
+        return std::clamp(snap.pipeline.sobelSource, 0, 2);
+      case RowId::PosterizeMode:
+        return std::clamp(snap.pipeline.posterizeMode,
+                          0,
+                          RenderPipelineConfig::kMaxPosterizeMode);
+      case RowId::PosterizeDitherMode:
+        return std::clamp(snap.pipeline.posterizeDitherMode,
+                          0,
+                          RenderPipelineConfig::kMaxPosterizeDitherMode);
+      case RowId::PosterizeDitherScale:
+        return std::clamp(snap.pipeline.posterizeDitherScale, 1, 4) - 1;
       case RowId::ShadowCascades:
         return std::clamp(snap.pipeline.shadowCascades, 1, 3) - 1;
       case RowId::ShadowMapSize:
@@ -1005,6 +1194,26 @@ private:
       m_envVars->setVar("tonemapper", std::clamp(choiceIndex, 0, 3) + 3);
     } else if (id == RowId::BloomMips) {
       m_envVars->setVar("bloomMipCount", std::clamp(choiceIndex + 1, 1, 5));
+    } else if (id == RowId::MotionFxPrimary) {
+      m_envVars->setVar("motionFxMode", std::clamp(choiceIndex, 0, 2));
+    } else if (id == RowId::MotionFxSecondary) {
+      m_envVars->setVar("motionFxMode", std::clamp(choiceIndex, 0, 2) + 3);
+    } else if (id == RowId::SobelMode) {
+      m_envVars->setVar("sobelMode", std::clamp(choiceIndex, 0, 1));
+    } else if (id == RowId::SobelSource) {
+      m_envVars->setVar("sobelSource", std::clamp(choiceIndex, 0, 2));
+    } else if (id == RowId::PosterizeMode) {
+      m_envVars->setVar(
+        "posterizeMode",
+        std::clamp(choiceIndex, 0, RenderPipelineConfig::kMaxPosterizeMode));
+    } else if (id == RowId::PosterizeDitherMode) {
+      m_envVars->setVar(
+        "posterizeDitherMode",
+        std::clamp(
+          choiceIndex, 0, RenderPipelineConfig::kMaxPosterizeDitherMode));
+    } else if (id == RowId::PosterizeDitherScale) {
+      m_envVars->setVar("posterizeDitherScale",
+                        std::clamp(choiceIndex + 1, 1, 4));
     } else if (id == RowId::ShadowCascades) {
       m_envVars->setVar("shadowCascades", std::clamp(choiceIndex + 1, 1, 3));
     } else if (id == RowId::ShadowMapSize) {
@@ -1040,6 +1249,42 @@ private:
       case RowId::MotionBlurSamples:
         *minVal = 2.0f;
         *maxVal = 16.0f;
+        return;
+      case RowId::MotionFxStrength:
+        *minVal = 0.0f;
+        *maxVal = 1.0f;
+        return;
+      case RowId::MotionFxSpread:
+        *minVal = 0.10f;
+        *maxVal = 3.00f;
+        return;
+      case RowId::SobelStrength:
+        *minVal = 0.0f;
+        *maxVal = 1.0f;
+        return;
+      case RowId::SobelThreshold:
+        *minVal = 0.01f;
+        *maxVal = 0.50f;
+        return;
+      case RowId::SobelThickness:
+        *minVal = 0.50f;
+        *maxVal = 3.00f;
+        return;
+      case RowId::PosterizeLevels:
+        *minVal = 2.0f;
+        *maxVal = 32.0f;
+        return;
+      case RowId::PosterizeGamma:
+        *minVal = 0.40f;
+        *maxVal = 2.50f;
+        return;
+      case RowId::PosterizeDitherAmount:
+        *minVal = 0.0f;
+        *maxVal = 1.50f;
+        return;
+      case RowId::PosterizeStrength:
+        *minVal = 0.0f;
+        *maxVal = 1.0f;
         return;
       case RowId::ShadowBias:
         *minVal = 0.0f;
@@ -1090,6 +1335,42 @@ private:
         raw = static_cast<float>(snap.pipeline.motionBlurSamples);
         std::snprintf(buf, sizeof(buf), "%d", snap.pipeline.motionBlurSamples);
         break;
+      case RowId::MotionFxStrength:
+        raw = snap.pipeline.motionFxStrength;
+        std::snprintf(buf, sizeof(buf), "%.2f", raw);
+        break;
+      case RowId::MotionFxSpread:
+        raw = snap.pipeline.motionFxSpread;
+        std::snprintf(buf, sizeof(buf), "%.2f", raw);
+        break;
+      case RowId::SobelStrength:
+        raw = snap.pipeline.sobelStrength;
+        std::snprintf(buf, sizeof(buf), "%.2f", raw);
+        break;
+      case RowId::SobelThreshold:
+        raw = snap.pipeline.sobelThreshold;
+        std::snprintf(buf, sizeof(buf), "%.2f", raw);
+        break;
+      case RowId::SobelThickness:
+        raw = snap.pipeline.sobelThickness;
+        std::snprintf(buf, sizeof(buf), "%.2f", raw);
+        break;
+      case RowId::PosterizeLevels:
+        raw = static_cast<float>(snap.pipeline.posterizeLevels);
+        std::snprintf(buf, sizeof(buf), "%d", snap.pipeline.posterizeLevels);
+        break;
+      case RowId::PosterizeGamma:
+        raw = snap.pipeline.posterizeGamma;
+        std::snprintf(buf, sizeof(buf), "%.2f", raw);
+        break;
+      case RowId::PosterizeDitherAmount:
+        raw = snap.pipeline.posterizeDitherAmount;
+        std::snprintf(buf, sizeof(buf), "%.2f", raw);
+        break;
+      case RowId::PosterizeStrength:
+        raw = snap.pipeline.posterizeStrength;
+        std::snprintf(buf, sizeof(buf), "%.2f", raw);
+        break;
       case RowId::ShadowBias:
         raw = snap.pipeline.shadowBias;
         std::snprintf(buf, sizeof(buf), "%.4f", raw);
@@ -1129,10 +1410,20 @@ private:
       m_dirty = true;
       return;
     }
+    if (id == RowId::PosterizeLevels) {
+      const int levels = std::clamp(static_cast<int>(std::lround(raw)), 2, 32);
+      m_envVars->setVar("posterizeLevels", levels);
+      m_dirty = true;
+      return;
+    }
 
     const float quantized =
       (id == RowId::Exposure || id == RowId::MotionBlurAmount ||
-       id == RowId::MotionBlurMax)
+       id == RowId::MotionBlurMax || id == RowId::MotionFxStrength ||
+       id == RowId::MotionFxSpread || id == RowId::SobelStrength ||
+       id == RowId::SobelThreshold || id == RowId::SobelThickness ||
+       id == RowId::PosterizeGamma || id == RowId::PosterizeDitherAmount ||
+       id == RowId::PosterizeStrength)
         ? (std::round(raw * 100.0f) / 100.0f)
         : (std::round(raw * 10000.0f) / 10000.0f);
     const std::string text = RenderPipelineConfig::formatFloat(quantized);
@@ -1149,6 +1440,30 @@ private:
         break;
       case RowId::MotionBlurMax:
         m_envVars->setVar("motionBlurMax", text);
+        break;
+      case RowId::MotionFxStrength:
+        m_envVars->setVar("motionFxStrength", text);
+        break;
+      case RowId::MotionFxSpread:
+        m_envVars->setVar("motionFxSpread", text);
+        break;
+      case RowId::SobelStrength:
+        m_envVars->setVar("sobelStrength", text);
+        break;
+      case RowId::SobelThreshold:
+        m_envVars->setVar("sobelThreshold", text);
+        break;
+      case RowId::SobelThickness:
+        m_envVars->setVar("sobelThickness", text);
+        break;
+      case RowId::PosterizeGamma:
+        m_envVars->setVar("posterizeGamma", text);
+        break;
+      case RowId::PosterizeDitherAmount:
+        m_envVars->setVar("posterizeDitherAmount", text);
+        break;
+      case RowId::PosterizeStrength:
+        m_envVars->setVar("posterizeStrength", text);
         break;
       case RowId::ShadowBias:
         m_envVars->setVar("shadowBias", text);

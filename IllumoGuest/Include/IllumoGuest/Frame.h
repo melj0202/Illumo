@@ -388,8 +388,9 @@ struct GuestFrame
   // Version 7 adds host-retained visuals and compositions. Version 8 adds
   // several worlds per guest (one per scene). Version 9 adds the Canvas
   // batch's shader fade. Version 10 adds punctual world lights and textured
-  // PBR-lite world materials. The host accepts all ten.
-  static constexpr std::uint32_t Version = 10;
+  // PBR-lite world materials. Version 11 adds optional world-space debug
+  // velocity telemetry for host debug overlays. The host accepts all eleven.
+  static constexpr std::uint32_t Version = 11;
   static constexpr float MaximumCanvasFadeClock = 128.0f;
   static constexpr float MaximumCanvasFadeSpeed = 1000.0f;
   static constexpr std::uint32_t MaximumSurfaces = 8;
@@ -401,6 +402,11 @@ struct GuestFrame
   std::array<float, 16> camera{
     1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1
   };
+  // Version 11: optional world-space velocity vector and reference full speed
+  // for host debug overlays (such as the centered axis cube).
+  bool hasDebugVelocity = false;
+  std::array<float, 3> debugVelocity{ 0.0f, 0.0f, 0.0f };
+  float debugVelocityReferenceSpeed = 1.0f;
   std::vector<GuestBatch> batches;
   std::vector<GuestTextureWrite> textureWrites;
   std::vector<GuestShadowCaster> shadowCasters;
@@ -426,6 +432,9 @@ struct GuestFrame
     visualOperations.clear();
     compositions.clear();
     hasCamera = false;
+    hasDebugVelocity = false;
+    debugVelocity = { 0.0f, 0.0f, 0.0f };
+    debugVelocityReferenceSpeed = 1.0f;
   }
 
   static void countInline(const std::vector<GuestBatch>& list,
@@ -1259,6 +1268,11 @@ struct GuestFrame
     for (const GuestComposition& composition : compositions) {
       writeComposition(output, composition);
     }
+    output.u32(hasDebugVelocity ? 1u : 0u);
+    if (hasDebugVelocity) {
+      writeFloats(output, debugVelocity.data(), 3);
+      output.f32(debugVelocityReferenceSpeed);
+    }
   }
 
   // Running totals shared by the main batches and every surface's batches.
@@ -1550,6 +1564,9 @@ struct GuestFrame
     const GuestFrame defaults;
     frame.hasCamera = false;
     frame.camera = defaults.camera;
+    frame.hasDebugVelocity = false;
+    frame.debugVelocity = defaults.debugVelocity;
+    frame.debugVelocityReferenceSpeed = defaults.debugVelocityReferenceSpeed;
     frame.shadowCasters.clear();
     frame.surfaces.clear();
     frame.width = reader.f32();
@@ -1773,6 +1790,24 @@ struct GuestFrame
               frame.compositions[index].target) {
             return false;
           }
+        }
+      }
+    }
+    if (version >= 11) {
+      const std::uint32_t hasVelocity = reader.u32();
+      if (!reader.valid() || hasVelocity > 1u) {
+        return false;
+      }
+      frame.hasDebugVelocity = hasVelocity != 0u;
+      if (frame.hasDebugVelocity) {
+        if (!readFloats(reader, frame.debugVelocity.data(), 3)) {
+          return false;
+        }
+        frame.debugVelocityReferenceSpeed = reader.f32();
+        if (!reader.valid() ||
+            !std::isfinite(frame.debugVelocityReferenceSpeed) ||
+            frame.debugVelocityReferenceSpeed <= 0.0f) {
+          return false;
         }
       }
     }

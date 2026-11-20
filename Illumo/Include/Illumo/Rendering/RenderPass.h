@@ -45,6 +45,7 @@ struct PassInputTargetBinding
   size_t attachmentIndex = 0;
   unsigned int slot = 0;
   std::string samplerUniformName;
+  bool bindDepth = false;
 };
 
 struct PassUniformFloat
@@ -100,6 +101,8 @@ struct RenderPassDesc
   std::vector<PassUniformFloat> uniformFloats;
   std::vector<PassUniformInt> uniformInts;
   std::vector<PassUniformMat4> uniformMat4s;
+  bool bindTime = false;
+  bool skipWithoutFeedbackTick = false;
 
   // CustomPass callback
   std::function<void(Renderer*)> customExecution;

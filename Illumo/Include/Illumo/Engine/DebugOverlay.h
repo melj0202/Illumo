@@ -7,6 +7,7 @@
 
 #include <memory>
 
+class AxisCubeOverlay;
 class DebugOverlayState;
 class FileTreeOverlay;
 class FrameProfiler;
@@ -18,10 +19,10 @@ class SoftwareCanvas;
 
 // The developer overlay of debug-tool builds (ILLUMO_ENABLE_DEBUG_TOOLS): the
 // console and its detached window, the diagnostics and profiler overlays, the
-// `files` browser, the gamepad/joystick debug HUD, the watermark and the
-// renderer demo. The runtime updates it
-// before the program, so console keys come first, and dispatches it after the
-// program, so it draws on top.
+// `files` browser, the gamepad/joystick debug HUD, the transparent centered
+// axis/orientation cube, the watermark and the renderer demo. The runtime
+// updates it before the program, so console keys come first, and dispatches it
+// after the program, so it draws on top.
 class DebugOverlay
 {
 public:
@@ -45,6 +46,7 @@ private:
   std::unique_ptr<FileTreeOverlay> m_fileTreeOverlay;
   std::unique_ptr<GamepadOverlay> m_gamepadOverlay;
   std::unique_ptr<GraphicsSettingsOverlay> m_graphicsOverlay;
+  std::unique_ptr<AxisCubeOverlay> m_axisCubeOverlay;
   void updateDiagnostics(double dt);
   void layoutDiagnostics();
   void updateFrameGraph();

@@ -345,6 +345,9 @@ Illumo::beginUpdate(double dt)
   processGlobalHotkeys();
   m_frameProfiler.mark(FramePhase::Camera);
   m_camera->Update(static_cast<float>(dt));
+  if (m_renderer != nullptr) {
+    m_renderer->setFrameDelta(dt);
+  }
 }
 
 void
@@ -378,6 +381,250 @@ makeBloomMipTargetDesc(int mipIndex)
   return desc;
 }
 
+static void
+appendPhosphorFeedbackPasses(std::vector<RenderPassDesc>* worldPasses,
+                             RenderStyleHandle feedbackStyle,
+                             const std::string& inputColorTarget,
+                             const std::string& velocityTarget,
+                             const char* displayTargetName,
+                             bool hasDepth,
+                             bool storeLumaInAlpha,
+                             bool feedbackPrimed,
+                             int variant,
+                             float strength,
+                             float spread)
+{
+  FramebufferAttachmentDesc stateColor;
+  // Keep temporal colour + invDepth in 16-bit float so exponential decay never
+  // stalls in 8-bit quantization rounding residue.
+  stateColor.format = TextureFormat::RGBA16F;
+  stateColor.filter = TextureFilter::Linear;
+  stateColor.wrap = TextureWrap::ClampToEdge;
+
+  FramebufferAttachmentDesc metaColor;
+  // Attachment 1 stores exact per-pixel travel direction (.xy), scalar trail
+  // energy (.z), and entity foreground state (.w = 0/1/2) without filtering.
+  metaColor.format = TextureFormat::RGBA16F;
+  metaColor.filter = TextureFilter::Nearest;
+  metaColor.wrap = TextureWrap::ClampToEdge;
+
+  PassInputTargetBinding depthIn;
+  depthIn.targetName = velocityTarget;
+  depthIn.slot = 3;
+  depthIn.samplerUniformName = "uDepthTexture";
+  depthIn.bindDepth = true;
+
+  RenderPassDesc accumPass;
+  accumPass.name = "FeedbackAccum";
+  accumPass.type = PassType::PostProcess;
+  accumPass.styleHandle = feedbackStyle;
+  accumPass.bindTime = true;
+  accumPass.useScreenTarget = false;
+  accumPass.pooledTargetName = "WorldFeedbackState";
+  accumPass.targetDesc.name = "WorldFeedbackState";
+  accumPass.targetDesc.windowRelative = true;
+  accumPass.targetDesc.colorAttachments.push_back(stateColor);
+  accumPass.targetDesc.colorAttachments.push_back(metaColor);
+
+  PassInputTargetBinding currIn;
+  currIn.targetName = inputColorTarget;
+  currIn.attachmentIndex = 0;
+  currIn.slot = 0;
+  currIn.samplerUniformName = "uColorTexture";
+  accumPass.inputTargetTextures.push_back(currIn);
+
+  PassInputTargetBinding velIn;
+  velIn.targetName = velocityTarget;
+  velIn.attachmentIndex = 1;
+  velIn.slot = 1;
+  velIn.samplerUniformName = "uVelocityTexture";
+  accumPass.inputTargetTextures.push_back(velIn);
+
+  PassInputTargetBinding histIn;
+  histIn.targetName =
+    feedbackPrimed ? std::string("WorldFeedbackHistory") : inputColorTarget;
+  histIn.attachmentIndex = 0;
+  histIn.slot = 2;
+  histIn.samplerUniformName = "uHistoryTexture";
+  accumPass.inputTargetTextures.push_back(histIn);
+  accumPass.inputTargetTextures.push_back(depthIn);
+
+  PassInputTargetBinding metaHistIn;
+  metaHistIn.targetName =
+    feedbackPrimed ? std::string("WorldFeedbackHistory") : inputColorTarget;
+  metaHistIn.attachmentIndex = feedbackPrimed ? 1 : 0;
+  metaHistIn.slot = 4;
+  metaHistIn.samplerUniformName = "uMetaTexture";
+  accumPass.inputTargetTextures.push_back(metaHistIn);
+
+  accumPass.uniformInts.push_back(PassUniformInt{ "uStage", 0 });
+  accumPass.uniformInts.push_back(PassUniformInt{ "uVariant", variant });
+  accumPass.uniformInts.push_back(
+    PassUniformInt{ "uHistoryValid", feedbackPrimed ? 1 : 0 });
+  accumPass.uniformInts.push_back(
+    PassUniformInt{ "uHasDepth", hasDepth ? 1 : 0 });
+  accumPass.uniformFloats.push_back(
+    PassUniformFloat{ "uFeedbackStrength", strength });
+  accumPass.uniformFloats.push_back(
+    PassUniformFloat{ "uFeedbackSpread", spread });
+  accumPass.uniformInts.push_back(PassUniformInt{ "uStoreLumaInAlpha", 0 });
+  worldPasses->push_back(std::move(accumPass));
+
+  RenderPassDesc storePass;
+  storePass.name = "FeedbackStore";
+  storePass.type = PassType::PostProcess;
+  storePass.styleHandle = feedbackStyle;
+  storePass.skipWithoutFeedbackTick = feedbackPrimed;
+  storePass.useScreenTarget = false;
+  storePass.pooledTargetName = "WorldFeedbackHistory";
+  storePass.targetDesc.name = "WorldFeedbackHistory";
+  storePass.targetDesc.windowRelative = true;
+  storePass.targetDesc.colorAttachments.push_back(stateColor);
+  storePass.targetDesc.colorAttachments.push_back(metaColor);
+
+  PassInputTargetBinding storeColorIn;
+  storeColorIn.targetName = "WorldFeedbackState";
+  storeColorIn.attachmentIndex = 0;
+  storeColorIn.slot = 0;
+  storeColorIn.samplerUniformName = "uColorTexture";
+  storePass.inputTargetTextures.push_back(storeColorIn);
+
+  PassInputTargetBinding storeVelDummy;
+  storeVelDummy.targetName = velocityTarget;
+  storeVelDummy.attachmentIndex = 1;
+  storeVelDummy.slot = 1;
+  storeVelDummy.samplerUniformName = "uVelocityTexture";
+  storePass.inputTargetTextures.push_back(storeVelDummy);
+
+  PassInputTargetBinding storeHistDummy;
+  storeHistDummy.targetName = "WorldFeedbackState";
+  storeHistDummy.attachmentIndex = 0;
+  storeHistDummy.slot = 2;
+  storeHistDummy.samplerUniformName = "uHistoryTexture";
+  storePass.inputTargetTextures.push_back(storeHistDummy);
+  storePass.inputTargetTextures.push_back(depthIn);
+
+  PassInputTargetBinding storeMetaIn;
+  storeMetaIn.targetName = "WorldFeedbackState";
+  storeMetaIn.attachmentIndex = 1;
+  storeMetaIn.slot = 4;
+  storeMetaIn.samplerUniformName = "uMetaTexture";
+  storePass.inputTargetTextures.push_back(storeMetaIn);
+
+  storePass.uniformInts.push_back(PassUniformInt{ "uStage", 1 });
+  storePass.uniformInts.push_back(PassUniformInt{ "uVariant", variant });
+  storePass.uniformInts.push_back(PassUniformInt{ "uHistoryValid", 0 });
+  storePass.uniformInts.push_back(
+    PassUniformInt{ "uHasDepth", hasDepth ? 1 : 0 });
+  storePass.uniformInts.push_back(PassUniformInt{ "uStoreLumaInAlpha", 0 });
+  worldPasses->push_back(std::move(storePass));
+
+  RenderPassDesc displayPass;
+  displayPass.name = "FeedbackDisplay";
+  displayPass.type = PassType::PostProcess;
+  displayPass.styleHandle = feedbackStyle;
+  displayPass.bindTime = true;
+  if (displayTargetName != nullptr) {
+    displayPass.useScreenTarget = false;
+    displayPass.pooledTargetName = displayTargetName;
+    displayPass.targetDesc.name = displayTargetName;
+    displayPass.targetDesc.windowRelative = true;
+    FramebufferAttachmentDesc ldrOut;
+    ldrOut.format = TextureFormat::RGBA8;
+    ldrOut.filter = TextureFilter::Linear;
+    ldrOut.wrap = TextureWrap::ClampToEdge;
+    displayPass.targetDesc.colorAttachments.push_back(ldrOut);
+  } else {
+    displayPass.useScreenTarget = true;
+  }
+
+  PassInputTargetBinding dispCurrIn;
+  dispCurrIn.targetName = inputColorTarget;
+  dispCurrIn.attachmentIndex = 0;
+  dispCurrIn.slot = 0;
+  dispCurrIn.samplerUniformName = "uColorTexture";
+  displayPass.inputTargetTextures.push_back(dispCurrIn);
+
+  PassInputTargetBinding dispVelIn;
+  dispVelIn.targetName = velocityTarget;
+  dispVelIn.attachmentIndex = 1;
+  dispVelIn.slot = 1;
+  dispVelIn.samplerUniformName = "uVelocityTexture";
+  displayPass.inputTargetTextures.push_back(dispVelIn);
+
+  PassInputTargetBinding dispStateIn;
+  dispStateIn.targetName = "WorldFeedbackState";
+  dispStateIn.attachmentIndex = 0;
+  dispStateIn.slot = 2;
+  dispStateIn.samplerUniformName = "uHistoryTexture";
+  displayPass.inputTargetTextures.push_back(dispStateIn);
+  displayPass.inputTargetTextures.push_back(depthIn);
+
+  PassInputTargetBinding dispMetaIn;
+  dispMetaIn.targetName = "WorldFeedbackState";
+  dispMetaIn.attachmentIndex = 1;
+  dispMetaIn.slot = 4;
+  dispMetaIn.samplerUniformName = "uMetaTexture";
+  displayPass.inputTargetTextures.push_back(dispMetaIn);
+
+  displayPass.uniformInts.push_back(PassUniformInt{ "uStage", 2 });
+  displayPass.uniformInts.push_back(PassUniformInt{ "uVariant", variant });
+  displayPass.uniformInts.push_back(PassUniformInt{ "uHistoryValid", 1 });
+  displayPass.uniformInts.push_back(
+    PassUniformInt{ "uHasDepth", hasDepth ? 1 : 0 });
+  displayPass.uniformFloats.push_back(
+    PassUniformFloat{ "uFeedbackStrength", strength });
+  displayPass.uniformFloats.push_back(
+    PassUniformFloat{ "uFeedbackSpread", spread });
+  displayPass.uniformInts.push_back(
+    PassUniformInt{ "uStoreLumaInAlpha", storeLumaInAlpha ? 1 : 0 });
+  worldPasses->push_back(std::move(displayPass));
+}
+
+static void
+appendPosterizePass(std::vector<RenderPassDesc>* worldPasses,
+                    RenderStyleHandle posterizeStyle,
+                    const std::string& inputColorTarget,
+                    const RenderPipelineConfig& pipeline)
+{
+  RenderPassDesc posterizePass;
+  posterizePass.name = "Posterize";
+  posterizePass.type = PassType::PostProcess;
+  posterizePass.useScreenTarget = true;
+  posterizePass.styleHandle = posterizeStyle;
+
+  PassInputTargetBinding colorIn;
+  colorIn.targetName = inputColorTarget;
+  colorIn.attachmentIndex = 0;
+  colorIn.slot = 0;
+  colorIn.samplerUniformName = "uColorTexture";
+  posterizePass.inputTargetTextures.push_back(colorIn);
+
+  posterizePass.uniformInts.push_back(PassUniformInt{
+    "uPosterizeMode",
+    std::clamp(
+      pipeline.posterizeMode, 0, RenderPipelineConfig::kMaxPosterizeMode) });
+  posterizePass.uniformFloats.push_back(PassUniformFloat{
+    "uPosterizeLevels",
+    static_cast<float>(std::clamp(pipeline.posterizeLevels, 2, 32)) });
+  posterizePass.uniformFloats.push_back(PassUniformFloat{
+    "uPosterizeGamma", std::clamp(pipeline.posterizeGamma, 0.4f, 2.5f) });
+  posterizePass.uniformInts.push_back(PassUniformInt{
+    "uPosterizeDitherMode",
+    std::clamp(pipeline.posterizeDitherMode,
+               0,
+               RenderPipelineConfig::kMaxPosterizeDitherMode) });
+  posterizePass.uniformFloats.push_back(
+    PassUniformFloat{ "uPosterizeDitherAmount",
+                      std::clamp(pipeline.posterizeDitherAmount, 0.0f, 1.5f) });
+  posterizePass.uniformFloats.push_back(PassUniformFloat{
+    "uPosterizeDitherScale",
+    static_cast<float>(std::clamp(pipeline.posterizeDitherScale, 1, 4)) });
+  posterizePass.uniformFloats.push_back(PassUniformFloat{
+    "uPosterizeStrength", std::clamp(pipeline.posterizeStrength, 0.0f, 1.0f) });
+  worldPasses->push_back(std::move(posterizePass));
+}
+
 void
 Illumo::configureScenePipeline()
 {
@@ -399,15 +646,35 @@ Illumo::configureScenePipeline()
     }
   }
 
+  const int motionFxMode = std::clamp(
+    pipeline.motionFxMode, 0, RenderPipelineConfig::kMaxMotionFxMode);
+
   ConfiguredPipelineMode mode = ConfiguredPipelineMode::None;
   if (pipeline.hdrEnabled && (has3DWorld || pipeline.canvasBloomEnabled)) {
     mode = ConfiguredPipelineMode::HdrForward;
-  } else if (pipeline.motionBlurEnabled) {
+  } else if (pipeline.motionBlurEnabled || pipeline.sobelEnabled ||
+             motionFxMode > 0 || pipeline.posterizeEnabled) {
     mode = ConfiguredPipelineMode::LdrMotionBlur;
   }
 
+  const std::array<int, 2> winDims =
+    m_window ? m_window->getWindowDimensions()
+             : std::array<int, 2>{ kDefaultWindowWidth, kDefaultWindowHeight };
+  const int safeWinW = std::max(1, winDims[0]);
+  const int safeWinH = std::max(1, winDims[1]);
+  const bool wantsFeedback = (mode == ConfiguredPipelineMode::HdrForward ||
+                              mode == ConfiguredPipelineMode::LdrMotionBlur) &&
+                             motionFxMode > 0;
+  if (!wantsFeedback || safeWinW != m_feedbackWidth ||
+      safeWinH != m_feedbackHeight) {
+    m_feedbackPrimed = false;
+  }
+
   if (m_pipelineConfigured && m_configuredPipelineMode == mode &&
-      m_configuredPipeline == pipeline) {
+      m_configuredPipeline == pipeline &&
+      (!wantsFeedback ||
+       (m_configuredFeedbackPrimed == m_feedbackPrimed &&
+        safeWinW == m_feedbackWidth && safeWinH == m_feedbackHeight))) {
     return;
   }
 
@@ -421,11 +688,26 @@ Illumo::configureScenePipeline()
       m_renderer->getBuiltinStyleHandle(RenderStyleId::BloomUpsample);
     const RenderStyleHandle fxaaStyle =
       m_renderer->getBuiltinStyleHandle(RenderStyleId::FxaaResolve);
+    const RenderStyleHandle sobelStyle =
+      m_renderer->getBuiltinStyleHandle(RenderStyleId::SobelEdge);
+    const RenderStyleHandle feedbackStyle =
+      m_renderer->getBuiltinStyleHandle(RenderStyleId::MotionFeedback);
+    const RenderStyleHandle posterizeStyle =
+      m_renderer->getBuiltinStyleHandle(RenderStyleId::Posterize);
+
+    const bool runPhosphor = (motionFxMode > 0) && feedbackStyle.isValid();
+    const bool runSobel = pipeline.sobelEnabled && sobelStyle.isValid();
+    const bool runFxaa = pipeline.fxaaEnabled && fxaaStyle.isValid();
+    const bool runPosterize =
+      pipeline.posterizeEnabled && posterizeStyle.isValid();
 
     const bool stylesOk =
       compositeStyle.isValid() &&
       (!pipeline.bloomEnabled || (downStyle.isValid() && upStyle.isValid())) &&
-      (!pipeline.fxaaEnabled || fxaaStyle.isValid());
+      (!pipeline.fxaaEnabled || fxaaStyle.isValid()) &&
+      (!pipeline.sobelEnabled || sobelStyle.isValid()) &&
+      (motionFxMode == 0 || feedbackStyle.isValid()) &&
+      (!pipeline.posterizeEnabled || posterizeStyle.isValid());
 
     PooledRenderTargetDesc hdrGeomDesc;
     hdrGeomDesc.name = "WorldHdrVelocity";
@@ -442,12 +724,8 @@ Illumo::configureScenePipeline()
     hdrGeomDesc.colorAttachments.push_back(hdrVelocity);
     hdrGeomDesc.depthStencilFormat = TextureFormat::Depth24;
 
-    const std::array<int, 2> winDims =
-      m_window
-        ? m_window->getWindowDimensions()
-        : std::array<int, 2>{ kDefaultWindowWidth, kDefaultWindowHeight };
     const PooledRenderTarget probe = m_renderer->getRenderTargetPool().acquire(
-      hdrGeomDesc, std::max(1, winDims[0]), std::max(1, winDims[1]));
+      hdrGeomDesc, safeWinW, safeWinH);
 
     if (!stylesOk || !probe.isValid()) {
       if (!m_hdrFallbackWarned) {
@@ -458,6 +736,7 @@ Illumo::configureScenePipeline()
       m_pipelineConfigured = true;
       m_configuredPipelineMode = mode;
       m_configuredPipeline = pipeline;
+      m_configuredFeedbackPrimed = false;
       m_scene->SetDefaultLayerPasses(RenderLayerId::World, {});
       return;
     }
@@ -527,10 +806,15 @@ Illumo::configureScenePipeline()
     compositePass.name = "HdrComposite";
     compositePass.type = PassType::PostProcess;
     compositePass.styleHandle = compositeStyle;
-    if (pipeline.fxaaEnabled) {
+    if (runSobel || runPhosphor || runFxaa || runPosterize) {
+      const char* compositeTargetName =
+        runSobel ? "WorldLdrPreSobel"
+                 : (runPhosphor
+                      ? "WorldLdrPreFx"
+                      : (runFxaa ? "WorldLdrPreFxaa" : "WorldLdrPrePosterize"));
       compositePass.useScreenTarget = false;
-      compositePass.pooledTargetName = "WorldLdrPreFxaa";
-      compositePass.targetDesc.name = "WorldLdrPreFxaa";
+      compositePass.pooledTargetName = compositeTargetName;
+      compositePass.targetDesc.name = compositeTargetName;
       compositePass.targetDesc.windowRelative = true;
       FramebufferAttachmentDesc ldrColor;
       ldrColor.format = TextureFormat::RGBA8;
@@ -582,16 +866,100 @@ Illumo::configureScenePipeline()
       "uTonemapper",
       std::clamp(
         pipeline.tonemapper, 0, RenderPipelineConfig::kMaxTonemapper) });
-    compositePass.uniformInts.push_back(
-      PassUniformInt{ "uStoreLumaInAlpha", pipeline.fxaaEnabled ? 1 : 0 });
+    compositePass.uniformInts.push_back(PassUniformInt{
+      "uStoreLumaInAlpha", (!runSobel && !runPhosphor && runFxaa) ? 1 : 0 });
     worldPasses.push_back(std::move(compositePass));
 
-    if (pipeline.fxaaEnabled) {
+    // Run Sobel before phosphor feedback so outlines stay crisp on entities and
+    // world geometry without outlining individual chromatic trail cubes.
+    if (runSobel) {
+      RenderPassDesc sobelPass;
+      sobelPass.name = "SobelEdge";
+      sobelPass.type = PassType::PostProcess;
+      sobelPass.styleHandle = sobelStyle;
+      if (runPhosphor || runFxaa || runPosterize) {
+        const char* sobelTargetName =
+          runPhosphor ? "WorldLdrPreFx"
+                      : (runFxaa ? "WorldLdrPreFxaa" : "WorldLdrPrePosterize");
+        sobelPass.useScreenTarget = false;
+        sobelPass.pooledTargetName = sobelTargetName;
+        sobelPass.targetDesc.name = sobelTargetName;
+        sobelPass.targetDesc.windowRelative = true;
+        FramebufferAttachmentDesc sobelColor;
+        sobelColor.format = TextureFormat::RGBA8;
+        sobelColor.filter = TextureFilter::Linear;
+        sobelColor.wrap = TextureWrap::ClampToEdge;
+        sobelPass.targetDesc.colorAttachments.push_back(sobelColor);
+      } else {
+        sobelPass.useScreenTarget = true;
+      }
+
+      PassInputTargetBinding colorIn;
+      colorIn.targetName = "WorldLdrPreSobel";
+      colorIn.attachmentIndex = 0;
+      colorIn.slot = 0;
+      colorIn.samplerUniformName = "uColorTexture";
+      sobelPass.inputTargetTextures.push_back(colorIn);
+
+      PassInputTargetBinding depthIn;
+      depthIn.targetName = "WorldHdrVelocity";
+      depthIn.slot = 1;
+      depthIn.samplerUniformName = "uDepthTexture";
+      depthIn.bindDepth = true;
+      sobelPass.inputTargetTextures.push_back(depthIn);
+
+      sobelPass.uniformInts.push_back(
+        PassUniformInt{ "uSobelMode", std::clamp(pipeline.sobelMode, 0, 1) });
+      sobelPass.uniformInts.push_back(PassUniformInt{
+        "uSobelSource", std::clamp(pipeline.sobelSource, 0, 2) });
+      sobelPass.uniformInts.push_back(
+        PassUniformInt{ "uHasDepth", has3DWorld ? 1 : 0 });
+      sobelPass.uniformFloats.push_back(
+        PassUniformFloat{ "uSobelStrength", pipeline.sobelStrength });
+      sobelPass.uniformFloats.push_back(
+        PassUniformFloat{ "uSobelThreshold", pipeline.sobelThreshold });
+      sobelPass.uniformFloats.push_back(
+        PassUniformFloat{ "uSobelThickness", pipeline.sobelThickness });
+      sobelPass.uniformInts.push_back(PassUniformInt{
+        "uStoreLumaInAlpha", (!runPhosphor && runFxaa) ? 1 : 0 });
+      worldPasses.push_back(std::move(sobelPass));
+    }
+
+    if (runPhosphor) {
+      const char* displayTarget =
+        runFxaa ? "WorldLdrPreFxaa"
+                : (runPosterize ? "WorldLdrPrePosterize" : nullptr);
+      appendPhosphorFeedbackPasses(&worldPasses,
+                                   feedbackStyle,
+                                   "WorldLdrPreFx",
+                                   "WorldHdrVelocity",
+                                   displayTarget,
+                                   has3DWorld,
+                                   runFxaa,
+                                   m_feedbackPrimed,
+                                   motionFxMode,
+                                   pipeline.motionFxStrength,
+                                   pipeline.motionFxSpread);
+    }
+
+    if (runFxaa) {
       RenderPassDesc fxaaPass;
       fxaaPass.name = "FxaaResolve";
       fxaaPass.type = PassType::PostProcess;
-      fxaaPass.useScreenTarget = true;
       fxaaPass.styleHandle = fxaaStyle;
+      if (runPosterize) {
+        fxaaPass.useScreenTarget = false;
+        fxaaPass.pooledTargetName = "WorldLdrPrePosterize";
+        fxaaPass.targetDesc.name = "WorldLdrPrePosterize";
+        fxaaPass.targetDesc.windowRelative = true;
+        FramebufferAttachmentDesc fxaaOut;
+        fxaaOut.format = TextureFormat::RGBA8;
+        fxaaOut.filter = TextureFilter::Linear;
+        fxaaOut.wrap = TextureWrap::ClampToEdge;
+        fxaaPass.targetDesc.colorAttachments.push_back(fxaaOut);
+      } else {
+        fxaaPass.useScreenTarget = true;
+      }
 
       PassInputTargetBinding ldrInput;
       ldrInput.targetName = "WorldLdrPreFxaa";
@@ -602,15 +970,44 @@ Illumo::configureScenePipeline()
       worldPasses.push_back(std::move(fxaaPass));
     }
 
+    if (runPosterize) {
+      appendPosterizePass(
+        &worldPasses, posterizeStyle, "WorldLdrPrePosterize", pipeline);
+    }
+
     m_pipelineConfigured = true;
     m_configuredPipelineMode = mode;
     m_configuredPipeline = pipeline;
+    m_configuredFeedbackPrimed = m_feedbackPrimed;
+    m_feedbackWidth = safeWinW;
+    m_feedbackHeight = safeWinH;
     m_scene->SetDefaultLayerPasses(RenderLayerId::World,
                                    std::move(worldPasses));
     return;
   }
 
   if (mode == ConfiguredPipelineMode::LdrMotionBlur) {
+    m_renderer->ensureBuiltinStyles();
+    const RenderStyleHandle sobelStyle =
+      m_renderer->getBuiltinStyleHandle(RenderStyleId::SobelEdge);
+    const RenderStyleHandle feedbackStyle =
+      m_renderer->getBuiltinStyleHandle(RenderStyleId::MotionFeedback);
+    const RenderStyleHandle posterizeStyle =
+      m_renderer->getBuiltinStyleHandle(RenderStyleId::Posterize);
+    const bool runPhosphor = (motionFxMode > 0) && feedbackStyle.isValid();
+    const bool runSobel = pipeline.sobelEnabled && sobelStyle.isValid();
+    const bool runPosterize =
+      pipeline.posterizeEnabled && posterizeStyle.isValid();
+    if (!pipeline.motionBlurEnabled && !runSobel && !runPhosphor &&
+        !runPosterize) {
+      m_pipelineConfigured = true;
+      m_configuredPipelineMode = mode;
+      m_configuredPipeline = pipeline;
+      m_configuredFeedbackPrimed = false;
+      m_scene->SetDefaultLayerPasses(RenderLayerId::World, {});
+      return;
+    }
+
     RenderPassDesc geomPass;
     geomPass.name = "WorldGeomPass";
     geomPass.type = PassType::Draw;
@@ -632,40 +1029,143 @@ Illumo::configureScenePipeline()
     geomPass.clear.clearColorValue = { 0.1f, 0.1f, 0.1f, 1.0f };
     geomPass.clear.clearDepth = true;
 
-    RenderPassDesc postPass;
-    postPass.name = "MotionBlurResolve";
-    postPass.type = PassType::PostProcess;
-    postPass.useScreenTarget = true;
-    postPass.styleHandle =
-      m_renderer->getBuiltinStyleHandle(RenderStyleId::MotionBlur);
-
-    PassInputTargetBinding colorBinding;
-    colorBinding.targetName = "WorldColorVelocity";
-    colorBinding.attachmentIndex = 0;
-    colorBinding.slot = 0;
-    colorBinding.samplerUniformName = "uColorTexture";
-    postPass.inputTargetTextures.push_back(colorBinding);
-
-    PassInputTargetBinding velBinding;
-    velBinding.targetName = "WorldColorVelocity";
-    velBinding.attachmentIndex = 1;
-    velBinding.slot = 1;
-    velBinding.samplerUniformName = "uVelocityTexture";
-    postPass.inputTargetTextures.push_back(velBinding);
-
-    postPass.uniformFloats.push_back(
-      PassUniformFloat{ "uMotionBlurAmount", pipeline.motionBlurAmount });
-    postPass.uniformFloats.push_back(
-      PassUniformFloat{ "uMotionBlurMax", pipeline.motionBlurMax });
-    postPass.uniformInts.push_back(
-      PassUniformInt{ "uMotionBlurSamples", pipeline.motionBlurSamples });
-
     std::vector<RenderPassDesc> worldPasses;
     worldPasses.push_back(std::move(geomPass));
-    worldPasses.push_back(std::move(postPass));
+
+    std::string currentLdrTarget = "WorldColorVelocity";
+    if (pipeline.motionBlurEnabled) {
+      RenderPassDesc postPass;
+      postPass.name = "MotionBlurResolve";
+      postPass.type = PassType::PostProcess;
+      if (runSobel || runPhosphor || runPosterize) {
+        const char* mbTargetName =
+          runSobel ? "WorldLdrPreSobel"
+                   : (runPhosphor ? "WorldLdrPreFx" : "WorldLdrPrePosterize");
+        postPass.useScreenTarget = false;
+        postPass.pooledTargetName = mbTargetName;
+        postPass.targetDesc.name = mbTargetName;
+        postPass.targetDesc.windowRelative = true;
+        FramebufferAttachmentDesc mbColor;
+        mbColor.format = TextureFormat::RGBA8;
+        mbColor.filter = TextureFilter::Linear;
+        mbColor.wrap = TextureWrap::ClampToEdge;
+        postPass.targetDesc.colorAttachments.push_back(mbColor);
+        currentLdrTarget = mbTargetName;
+      } else {
+        postPass.useScreenTarget = true;
+      }
+      postPass.styleHandle =
+        m_renderer->getBuiltinStyleHandle(RenderStyleId::MotionBlur);
+
+      PassInputTargetBinding colorBinding;
+      colorBinding.targetName = "WorldColorVelocity";
+      colorBinding.attachmentIndex = 0;
+      colorBinding.slot = 0;
+      colorBinding.samplerUniformName = "uColorTexture";
+      postPass.inputTargetTextures.push_back(colorBinding);
+
+      PassInputTargetBinding velBinding;
+      velBinding.targetName = "WorldColorVelocity";
+      velBinding.attachmentIndex = 1;
+      velBinding.slot = 1;
+      velBinding.samplerUniformName = "uVelocityTexture";
+      postPass.inputTargetTextures.push_back(velBinding);
+
+      postPass.uniformFloats.push_back(
+        PassUniformFloat{ "uMotionBlurAmount", pipeline.motionBlurAmount });
+      postPass.uniformFloats.push_back(
+        PassUniformFloat{ "uMotionBlurMax", pipeline.motionBlurMax });
+      postPass.uniformInts.push_back(
+        PassUniformInt{ "uMotionBlurSamples", pipeline.motionBlurSamples });
+      worldPasses.push_back(std::move(postPass));
+    }
+
+    if (runSobel) {
+      RenderPassDesc sobelPass;
+      sobelPass.name = "SobelEdge";
+      sobelPass.type = PassType::PostProcess;
+      sobelPass.styleHandle = sobelStyle;
+      if (runPhosphor || runPosterize) {
+        const char* sobelTargetName =
+          runPhosphor ? "WorldLdrPreFx" : "WorldLdrPrePosterize";
+        sobelPass.useScreenTarget = false;
+        sobelPass.pooledTargetName = sobelTargetName;
+        sobelPass.targetDesc.name = sobelTargetName;
+        sobelPass.targetDesc.windowRelative = true;
+        FramebufferAttachmentDesc sobelColor;
+        sobelColor.format = TextureFormat::RGBA8;
+        sobelColor.filter = TextureFilter::Linear;
+        sobelColor.wrap = TextureWrap::ClampToEdge;
+        sobelPass.targetDesc.colorAttachments.push_back(sobelColor);
+      } else {
+        sobelPass.useScreenTarget = true;
+      }
+
+      PassInputTargetBinding colorIn;
+      colorIn.targetName = currentLdrTarget;
+      colorIn.attachmentIndex = 0;
+      colorIn.slot = 0;
+      colorIn.samplerUniformName = "uColorTexture";
+      sobelPass.inputTargetTextures.push_back(colorIn);
+
+      PassInputTargetBinding depthIn;
+      depthIn.targetName = "WorldColorVelocity";
+      depthIn.slot = 1;
+      depthIn.samplerUniformName = "uDepthTexture";
+      depthIn.bindDepth = true;
+      sobelPass.inputTargetTextures.push_back(depthIn);
+
+      sobelPass.uniformInts.push_back(
+        PassUniformInt{ "uSobelMode", std::clamp(pipeline.sobelMode, 0, 1) });
+      sobelPass.uniformInts.push_back(PassUniformInt{
+        "uSobelSource", std::clamp(pipeline.sobelSource, 0, 2) });
+      sobelPass.uniformInts.push_back(
+        PassUniformInt{ "uHasDepth", has3DWorld ? 1 : 0 });
+      sobelPass.uniformFloats.push_back(
+        PassUniformFloat{ "uSobelStrength", pipeline.sobelStrength });
+      sobelPass.uniformFloats.push_back(
+        PassUniformFloat{ "uSobelThreshold", pipeline.sobelThreshold });
+      sobelPass.uniformFloats.push_back(
+        PassUniformFloat{ "uSobelThickness", pipeline.sobelThickness });
+      sobelPass.uniformInts.push_back(PassUniformInt{ "uStoreLumaInAlpha", 0 });
+      worldPasses.push_back(std::move(sobelPass));
+      if (runPhosphor) {
+        currentLdrTarget = "WorldLdrPreFx";
+      } else if (runPosterize) {
+        currentLdrTarget = "WorldLdrPrePosterize";
+      }
+    }
+
+    if (runPhosphor) {
+      const char* displayTarget =
+        runPosterize ? "WorldLdrPrePosterize" : nullptr;
+      appendPhosphorFeedbackPasses(&worldPasses,
+                                   feedbackStyle,
+                                   currentLdrTarget,
+                                   "WorldColorVelocity",
+                                   displayTarget,
+                                   has3DWorld,
+                                   false,
+                                   m_feedbackPrimed,
+                                   motionFxMode,
+                                   pipeline.motionFxStrength,
+                                   pipeline.motionFxSpread);
+      if (runPosterize) {
+        currentLdrTarget = "WorldLdrPrePosterize";
+      }
+    }
+
+    if (runPosterize) {
+      appendPosterizePass(
+        &worldPasses, posterizeStyle, currentLdrTarget, pipeline);
+    }
+
     m_pipelineConfigured = true;
     m_configuredPipelineMode = mode;
     m_configuredPipeline = pipeline;
+    m_configuredFeedbackPrimed = m_feedbackPrimed;
+    m_feedbackWidth = safeWinW;
+    m_feedbackHeight = safeWinH;
     m_scene->SetDefaultLayerPasses(RenderLayerId::World,
                                    std::move(worldPasses));
     return;
@@ -674,6 +1174,7 @@ Illumo::configureScenePipeline()
   m_pipelineConfigured = true;
   m_configuredPipelineMode = mode;
   m_configuredPipeline = pipeline;
+  m_configuredFeedbackPrimed = false;
   m_scene->SetDefaultLayerPasses(RenderLayerId::World, {});
 }
 
@@ -710,6 +1211,11 @@ Illumo::endRender()
   {
     ILLUMO_PROFILE_ZONE("Illumo.RenderScene");
     m_renderer->RenderScene(m_scene.get(), m_camera.get());
+  }
+  if ((m_configuredPipelineMode == ConfiguredPipelineMode::HdrForward ||
+       m_configuredPipelineMode == ConfiguredPipelineMode::LdrMotionBlur) &&
+      m_configuredPipeline.motionFxMode > 0 && !m_feedbackPrimed) {
+    m_feedbackPrimed = true;
   }
   {
     ILLUMO_PROFILE_ZONE("Illumo.EndFrame");
@@ -752,6 +1258,10 @@ Illumo::releaseServices()
   m_initialized = false;
   m_pipelineConfigured = false;
   m_hdrFallbackWarned = false;
+  m_feedbackPrimed = false;
+  m_configuredFeedbackPrimed = false;
+  m_feedbackWidth = 0;
+  m_feedbackHeight = 0;
   m_configuredPipelineMode = ConfiguredPipelineMode::None;
 }
 
