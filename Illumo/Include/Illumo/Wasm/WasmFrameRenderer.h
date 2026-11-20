@@ -27,6 +27,7 @@ struct WasmFrameCounters
   // Frame schema v6: the last frame's world operations and live instances.
   std::uint64_t worldOperations = 0;
   std::uint64_t worldInstances = 0;
+  std::uint64_t worldLights = 0;
   // Frame schema v7: the last frame's visual operations and live visuals.
   std::uint64_t visualOperations = 0;
   std::uint64_t visuals = 0;

@@ -27,4 +27,4 @@ compileGlslProgramCached(GpuShaderCache& cache,
                          GlslProgram* program,
                          std::string* error);
 
-inline constexpr char kGlslProgramCacheFormat[] = "glsl-program-1";
+inline constexpr char kGlslProgramCacheFormat[] = "glsl-program-2";

@@ -2,10 +2,10 @@
 #include <Illumo/Content/SceneInstance.h>
 #include <Illumo/Rendering/AssetManager.h>
 #include <Illumo/Rendering/AssetSource.h>
+#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/Primitives/MeshVisual.h>
 #include <Illumo/Rendering/Primitives/SkyboxVisual.h>
 #include <Illumo/Rendering/RenderWorld.h>
-#include <Illumo/Rendering/DrawList.h>
 #include <Illumo/Rendering/WorldLook.h>
 #include <Illumo/Testing/TestHarness.h>
 #include <Illumo/Testing/TestHelpers.h>
@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <map>
 
 // Serves in-memory bytes by virtual path, like the guest package cache, and
@@ -970,15 +971,20 @@ testInstanceNonCastingShadowReceiver()
   size_t ownDraws = 0;
   size_t drawn = 0;
   renderWithWorld(fixture, instance, world, &ownDraws, &drawn);
+  const size_t maxCasterCascadeDraws =
+    static_cast<size_t>(std::max(1, fixture.renderer.getShadowCascadeCount()));
   testTrue(counters,
            drawn == 2 && world.stats().buckets == 2 &&
-             world.stats().shadowInstances == 1 &&
+             world.stats().shadowInstances >= 1 &&
+             world.stats().shadowInstances <= maxCasterCascadeDraws &&
              fixture.renderer.getShadowCasters().size() == 1,
            "RenderWorld draws non-casting floor with shadows while excluding "
            "it from shadow casters");
 
   instance.setRenderWorld(nullptr);
   renderWithWorld(fixture, instance, world, &ownDraws, &drawn);
+  const size_t maxVisualCascadeDraws =
+    static_cast<size_t>(std::max(1, fixture.renderer.getShadowCascadeCount()));
   size_t shadowDraws = 0;
   size_t shadowTextureBinds = 0;
   bool insideShadowTarget = false;
@@ -997,10 +1003,189 @@ testInstanceNonCastingShadowReceiver()
     }
   }
   testTrue(counters,
-           shadowDraws == 1 && shadowTextureBinds == 2 &&
+           shadowDraws >= 1 && shadowDraws <= maxVisualCascadeDraws &&
+             shadowTextureBinds == 2 &&
              fixture.renderer.getShadowCasters().size() == 1,
            "MeshVisual fallback also receives shadows on non-casting nodes "
            "without registering them as shadow casters");
+  world.releaseResources();
+  return counters.failures;
+}
+
+static bool
+readLightUniforms(const MockBackend& mock, Renderer::LightUniforms* out)
+{
+  const BufferHandle ubo =
+    mock.getBoundUniformBuffer(LightUniformsBindingPoint);
+  if (!ubo.isValid()) {
+    return false;
+  }
+  for (size_t i = 0; i < mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& cmd = mock.getLastNonEmptySubmitted(i);
+    if (cmd.commandType == CommandType::WriteBuffer &&
+        cmd.writeBuffer.handle == ubo &&
+        cmd.writeBuffer.sizeBytes == sizeof(Renderer::LightUniforms) &&
+        cmd.writeBuffer.data != nullptr) {
+      std::memcpy(out, cmd.writeBuffer.data, sizeof(Renderer::LightUniforms));
+      return true;
+    }
+  }
+  return false;
+}
+
+static int
+testInstancePunctualLightsAndPbr()
+{
+  TestCounters counters;
+  HeadlessRenderFixture fixture(640, 480);
+  fixture.mock.Initialize();
+  MemoryAssetSource source;
+  source.files["/app/meshes/box.obj"] =
+    text("v -0.5 -0.5 0\nv 0.5 -0.5 0\nv 0.5 0.5 0\nv -0.5 0.5 0\n"
+         "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\n"
+         "vn 0 0 1\n"
+         "f 1/1/1 2/2/1 3/3/1\nf 1/1/1 3/3/1 4/4/1\n");
+  source.files["/app/tex/albedo.tga"] = solidTga(4, 4, 220);
+  source.files["/app/tex/normal.tga"] = solidTga(4, 4, 128);
+  AssetManager assets(&fixture.renderer, false, &source);
+  RenderWorld world;
+
+  SceneDocument document;
+  document.worldMode = SceneWorldMode::World3D;
+  document.environment.hasSun = true;
+  document.environment.sun.shadows = true;
+  document.assets = {
+    SceneAsset{ "box", SceneAssetType::Mesh, "meshes/box.obj" },
+    SceneAsset{ "albedo", SceneAssetType::Texture, "tex/albedo.tga" },
+    SceneAsset{ "normal", SceneAssetType::Texture, "tex/normal.tga" }
+  };
+
+  SceneMeshRenderer pbrMesh;
+  pbrMesh.asset = "box";
+  pbrMesh.albedoTexture = "albedo";
+  pbrMesh.normalTexture = "normal";
+  pbrMesh.metallic = 0.65f;
+  pbrMesh.roughness = 0.35f;
+  pbrMesh.emissive = Vector3(0.2f, 0.0f, 0.0f);
+
+  SceneNode meshA;
+  meshA.id = "meshA";
+  meshA.transform = Transform3D::fromPosition(Vector3(-1.0f, 0.0f, 0.0f));
+  SceneComponent meshComp;
+  meshComp.value = pbrMesh;
+  meshA.components = { meshComp };
+
+  SceneNode meshB;
+  meshB.id = "meshB";
+  meshB.transform = Transform3D::fromPosition(Vector3(1.0f, 0.0f, 0.0f));
+  meshB.components = { meshComp };
+
+  SceneNode rig;
+  rig.id = "rig";
+  rig.transform = Transform3D::fromPosition(Vector3(0.0f, 3.0f, 0.0f));
+
+  SceneNode pointNode;
+  pointNode.id = "pt";
+  pointNode.parentId = "rig";
+  pointNode.transform = Transform3D::fromPosition(Vector3(2.0f, 0.0f, 0.0f));
+  SceneLight pointLight;
+  pointLight.kind = SceneLightKind::Point;
+  pointLight.color = Vector3(1.0f, 0.8f, 0.5f);
+  pointLight.intensity = 5.0f;
+  pointLight.range = 15.0f;
+  pointLight.shadows = false;
+  SceneComponent ptComp;
+  ptComp.value = pointLight;
+  pointNode.components = { ptComp };
+
+  SceneNode spotNode;
+  spotNode.id = "sp";
+  spotNode.parentId = "rig";
+  spotNode.transform = Transform3D::fromPosition(Vector3(-2.0f, 0.0f, 0.0f));
+  SceneLight spotLight;
+  spotLight.kind = SceneLightKind::Spot;
+  spotLight.color = Vector3(0.5f, 0.8f, 1.0f);
+  spotLight.intensity = 8.0f;
+  spotLight.range = 20.0f;
+  spotLight.innerAngleDegrees = 20.0f;
+  spotLight.outerAngleDegrees = 35.0f;
+  spotLight.shadows = true;
+  SceneComponent spComp;
+  spComp.value = spotLight;
+  spotNode.components = { spComp };
+
+  document.nodes = { meshA, meshB, rig, pointNode, spotNode };
+
+  SceneInstance instance(&assets);
+  instance.setRenderer(&fixture.renderer);
+  instance.setRenderWorld(&world);
+  std::string error;
+  testTrue(counters,
+           instance.load(document, "/app", error) && instance.lighting().lit &&
+             instance.lighting().sourceId.empty(),
+           "point and spot lights preserve the environment sun");
+  testTrue(
+    counters,
+    world.stats().instances == 2 && world.stats().buckets == 1 &&
+      world.stats().lights == 2,
+    "shared PBR meshes share one bucket and register two punctual lights");
+
+  fixture.camera.setProjectionType(ProjectionType::Perspective);
+  fixture.camera.setPerspective(60.0f, 0.1f, 100.0f);
+  fixture.camera.lookAt(
+    Vector3(0.0f, 2.0f, 10.0f), Vector3(0.0f), Vector3(0.0f, 1.0f, 0.0f));
+
+  size_t ownDraws = 0;
+  size_t drawn = 0;
+  renderWithWorld(fixture, instance, world, &ownDraws, &drawn);
+  Renderer::LightUniforms ubo;
+  testTrue(counters,
+           drawn == 2 && world.stats().activeLights == 2 &&
+             readLightUniforms(fixture.mock, &ubo) &&
+             ubo.countsAndFlags[0] == 2,
+           "both punctual lights are active in LightUniforms");
+
+  // Moving the parent rig moves both punctual lights in world space.
+  testTrue(counters,
+           instance.setTransform(
+             "rig", Transform3D::fromPosition(Vector3(4.0f, 5.0f, -1.0f))),
+           "parent rig moves");
+  renderWithWorld(fixture, instance, world, &ownDraws, &drawn);
+  const bool haveMovedUbo = readLightUniforms(fixture.mock, &ubo);
+  bool sawMovedPoint = false;
+  bool sawMovedSpot = false;
+  for (int i = 0; haveMovedUbo && i < ubo.countsAndFlags[0]; ++i) {
+    const Renderer::GpuPunctualLight& gpu =
+      ubo.punctualLights[static_cast<size_t>(i)];
+    if (std::fabs(gpu.positionAndInvRange[0] - 6.0f) < 1e-4f &&
+        std::fabs(gpu.positionAndInvRange[1] - 5.0f) < 1e-4f) {
+      sawMovedPoint = true;
+    }
+    if (std::fabs(gpu.positionAndInvRange[0] - 2.0f) < 1e-4f &&
+        std::fabs(gpu.positionAndInvRange[1] - 5.0f) < 1e-4f) {
+      sawMovedSpot = true;
+    }
+  }
+  testTrue(counters,
+           sawMovedPoint && sawMovedSpot,
+           "punctual lights follow parent transform changes");
+
+  // Hiding and disabling lights updates active count and removes them cleanly.
+  testTrue(counters, instance.setVisible("pt", false), "hide point light");
+  renderWithWorld(fixture, instance, world, &ownDraws, &drawn);
+  testTrue(counters,
+           world.stats().lights == 2 && world.stats().activeLights == 1,
+           "hidden punctual light is excluded from active shading");
+  testTrue(counters, instance.setEnabled("sp", false), "disable spot light");
+  renderWithWorld(fixture, instance, world, &ownDraws, &drawn);
+  testTrue(counters,
+           world.stats().lights == 1 && world.stats().activeLights == 0,
+           "disabled punctual light is removed from RenderWorld");
+
+  testTrue(counters, instance.removeSubtree("rig"), "remove light rig");
+  testTrue(counters,
+           world.stats().lights == 0,
+           "removing subtree destroys remaining punctual lights");
   world.releaseResources();
   return counters.failures;
 }
@@ -1012,6 +1197,8 @@ registerSceneInstanceTests(IllumoTestRegistry& registry)
                []() { return testInstanceRenderWorld(); });
   registry.add("Illumo.Content.InstanceNonCastingShadowReceiver",
                []() { return testInstanceNonCastingShadowReceiver(); });
+  registry.add("Illumo.Content.InstancePunctualLightsAndPbr",
+               []() { return testInstancePunctualLightsAndPbr(); });
   registry.add("Illumo.Content.InstancePrimitives",
                []() { return testInstancePrimitives(); });
   registry.add("Illumo.Content.InstanceEnvironmentLight",

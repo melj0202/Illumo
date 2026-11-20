@@ -97,6 +97,7 @@ private:
     std::array<unsigned char, 4> color{ 0, 0, 0, 0 };
   };
   uint32_t boundFramebufferSlot = 0;
+  std::array<BufferHandle, 36> boundUniformBuffers{};
   std::unordered_map<uint32_t, std::array<unsigned char, 4>> clearColors;
   std::unordered_map<uint32_t, std::deque<PendingReadback>> readbacks;
   int readbackRequestCount = 0;
@@ -112,6 +113,11 @@ private:
       boundFramebufferSlot = command.bindFramebuffer.handle.isValid()
                                ? command.bindFramebuffer.handle.slot
                                : 0;
+    } else if (command.commandType == CommandType::BindUniformBuffer) {
+      if (command.bindUniformBuffer.binding < boundUniformBuffers.size()) {
+        boundUniformBuffers[command.bindUniformBuffer.binding] =
+          command.bindUniformBuffer.handle;
+      }
     } else if (command.commandType == CommandType::ClearColorBuffer ||
                command.commandType == CommandType::ClearScreen ||
                command.commandType == CommandType::ClearAll) {
@@ -149,7 +155,8 @@ private:
       case CommandType::BindUniformBuffer: {
         const BufferRecord* buffer =
           findBuffer(command.bindUniformBuffer.handle);
-        return buffer != nullptr && buffer->usage == BufferUsage::Uniform;
+        return buffer != nullptr && buffer->usage == BufferUsage::Uniform &&
+               command.bindUniformBuffer.binding < 36u;
       }
       case CommandType::SetInstanceStream: {
         const BufferRecord* buffer = findBuffer(command.instanceStream.handle);
@@ -227,6 +234,7 @@ public:
     meshHandles.clear();
     shaderHandles.clear();
     textureHandles.clear();
+    boundUniformBuffers = {};
     shutDown = true;
   }
 
@@ -882,6 +890,12 @@ public:
     return true;
   }
 
+  BufferHandle getBoundUniformBuffer(unsigned int binding) const
+  {
+    return binding < boundUniformBuffers.size() ? boundUniformBuffers[binding]
+                                                : BufferHandle{};
+  }
+
   void resetCounters()
   {
     beginFrameCount = 0;
@@ -896,5 +910,6 @@ public:
     commandQueue.Reset();
     creates.clear();
     rejectedStaleCommands = 0;
+    boundUniformBuffers = {};
   }
 };

@@ -224,6 +224,13 @@ public:
 private:
   struct Record;
   struct AssetSlot;
+  struct WorldBinding;
+  struct CustomMaterialSlot
+  {
+    RenderMaterialId id = 0;
+    RenderMaterialDesc desc;
+    size_t refs = 0;
+  };
   class PickProxy;
 
   AssetManager* m_assets = nullptr;
@@ -233,6 +240,7 @@ private:
   // Shared white materials, shadow-casting and not; colours are per-instance
   // tints so every primitive of a mesh shares one bucket.
   RenderMaterialId m_worldMaterials[2]{};
+  std::vector<CustomMaterialSlot> m_customMaterials;
   SceneInstanceOptions m_options;
   SceneGraph m_graph;
   SceneGraphDrawable m_drawable;
@@ -270,16 +278,20 @@ private:
   // Returns false (changing nothing) when the visual component kinds differ.
   bool reconfigureAttachments(Record& record,
                               const std::vector<SceneComponent>& before);
-  // `worldMesh` and `worldTint` are set when the visual draws a lit mesh
-  // asset, the only kind a render world can draw.
+  // `worldBinding` is populated when the visual draws a lit mesh asset, the
+  // only kind a render world can draw.
   bool configureVisual(MeshVisual& visual,
                        const SceneComponent& component,
                        bool* castShadows,
-                       MeshAssetInfo* worldMesh,
-                       ColorRgba* worldTint);
+                       WorldBinding* worldBinding);
   void applyLightingTo(MeshVisual& visual, bool castShadows) const;
   void applyLightingTo(GroundPlaneVisual& visual) const;
-  // Render world binding of one visual, and of every visual.
+  // Render world binding of one visual, punctual lights, and every node.
+  RenderMaterialId acquireWorldMaterial(const RenderMaterialDesc& desc);
+  void releaseWorldMaterial(RenderMaterialId id);
+  bool resolvePunctualLight(const Record& entry, RenderLightDesc* out) const;
+  void bindWorldLight(Record& entry);
+  void unbindWorldLight(Record& entry);
   void bindWorld(Record& entry, size_t index);
   void unbindWorld(Record& entry);
   void syncWorld();

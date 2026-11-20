@@ -26,6 +26,11 @@ SceneGraphDrawable::AppendShadowCommands(Renderer* renderer)
   ILLUMO_PROFILE_ZONE("SceneGraphDrawable.AppendShadowCommands");
   emit(renderer, Pass::Shadow);
 }
+bool
+SceneGraphDrawable::has3DWorldContent() const
+{
+  return isVisible() && m_graph != nullptr && m_graph->firstNode().isValid();
+}
 
 void
 SceneGraphDrawable::emit(Renderer* renderer, Pass pass)

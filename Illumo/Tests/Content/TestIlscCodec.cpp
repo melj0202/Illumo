@@ -228,7 +228,7 @@ testIlscCanonicalGolden()
   document.nodes = { node };
   const std::string expected = R"({
   "format": "ilsc",
-  "format_version": [2, 0],
+  "format_version": [2, 1],
   "metadata": {
     "title": "",
     "author": "",
@@ -501,6 +501,146 @@ testSceneAssetRefsResolve()
   return counters.failures;
 }
 
+static int
+testIlscV21LightsAndPbr()
+{
+  TestCounters counters;
+  std::string error;
+
+  // Format 2.0 scene remains accepted with 2.1 defaults.
+  const std::string legacyText = R"({
+  "format": "ilsc",
+  "format_version": [2, 0],
+  "assets": [
+    { "id": "m", "type": "mesh", "path": "meshes/a.obj" }
+  ],
+  "nodes": [
+    {
+      "id": "n1",
+      "components": [
+        { "type": "mesh", "asset": "m" },
+        { "type": "light", "kind": "directional", "color": [1, 1, 1], "intensity": 1.0, "shadows": true }
+      ]
+    }
+  ]
+})";
+  SceneDocument legacy;
+  testTrue(counters,
+           IlscCodec::parse(legacyText, legacy, error) &&
+             legacy.formatMinor == 0,
+           "format 2.0 scene parses");
+  const SceneMeshRenderer* legacyMesh =
+    std::get_if<SceneMeshRenderer>(&legacy.nodes[0].components[0].value);
+  const SceneLight* legacyLight =
+    std::get_if<SceneLight>(&legacy.nodes[0].components[1].value);
+  testTrue(counters,
+           legacyMesh != nullptr && legacyMesh->albedoTexture.empty() &&
+             legacyMesh->metallic == 0.0f && legacyMesh->roughness == 0.8f &&
+             legacyLight != nullptr &&
+             legacyLight->kind == SceneLightKind::Directional &&
+             legacyLight->range == 10.0f,
+           "format 2.0 defaults populate 2.1 fields");
+
+  // Format 2.1 round-trip with PBR textures/factors and point/spot lights.
+  SceneDocument doc;
+  doc.worldMode = SceneWorldMode::World3D;
+  SceneAsset meshAsset{ "hull", SceneAssetType::Mesh, "meshes/hull.obj" };
+  SceneAsset albedo{ "albedo", SceneAssetType::Texture, "tex/albedo.png" };
+  SceneAsset normal{ "normal", SceneAssetType::Texture, "tex/normal.png" };
+  SceneAsset orm{ "orm", SceneAssetType::Texture, "tex/orm.png" };
+  SceneAsset emissive{ "emissive",
+                       SceneAssetType::Texture,
+                       "tex/emissive.png" };
+  doc.assets = { meshAsset, albedo, normal, orm, emissive };
+
+  SceneNode hullNode;
+  hullNode.id = "hull";
+  SceneMeshRenderer pbrMesh;
+  pbrMesh.asset = "hull";
+  pbrMesh.albedoTexture = "albedo";
+  pbrMesh.normalTexture = "normal";
+  pbrMesh.ormTexture = "orm";
+  pbrMesh.emissiveTexture = "emissive";
+  pbrMesh.metallic = 0.85f;
+  pbrMesh.roughness = 0.25f;
+  pbrMesh.emissive = Vector3(2.0f, 0.5f, 0.0f);
+  SceneComponent hullComp;
+  hullComp.value = pbrMesh;
+  hullNode.components = { hullComp };
+
+  SceneNode pointNode;
+  pointNode.id = "pt";
+  SceneLight pointLight;
+  pointLight.kind = SceneLightKind::Point;
+  pointLight.color = Vector3(1.0f, 0.8f, 0.6f);
+  pointLight.intensity = 4.0f;
+  pointLight.shadows = false;
+  pointLight.range = 18.5f;
+  SceneComponent ptComp;
+  ptComp.value = pointLight;
+  pointNode.components = { ptComp };
+
+  SceneNode spotNode;
+  spotNode.id = "sp";
+  SceneLight spotLight;
+  spotLight.kind = SceneLightKind::Spot;
+  spotLight.color = Vector3(0.6f, 0.8f, 1.0f);
+  spotLight.intensity = 6.0f;
+  spotLight.shadows = true;
+  spotLight.range = 30.0f;
+  spotLight.innerAngleDegrees = 18.0f;
+  spotLight.outerAngleDegrees = 32.0f;
+  SceneComponent spComp;
+  spComp.value = spotLight;
+  spotNode.components = { spComp };
+
+  doc.nodes = { hullNode, pointNode, spotNode };
+  testTrue(
+    counters, validateSceneDocument(doc, error), "2.1 document validates");
+  const std::string encoded = IlscCodec::encode(doc);
+  SceneDocument roundTripped;
+  testTrue(counters,
+           IlscCodec::parse(encoded, roundTripped, error) &&
+             roundTripped.formatMinor == 1 &&
+             IlscCodec::encode(roundTripped) == encoded &&
+             sceneNodesEqual(roundTripped.nodes[0], hullNode) &&
+             sceneNodesEqual(roundTripped.nodes[1], pointNode) &&
+             sceneNodesEqual(roundTripped.nodes[2], spotNode),
+           "2.1 PBR mesh and point/spot lights round-trip byte-identically");
+
+  // Validation rejections in format 2.1.
+  const std::string v21 = R"({"format":"ilsc","format_version":[2,1],)";
+  const std::vector<std::string> badInputs = {
+    v21 +
+      R"("assets":[{"id":"m","type":"mesh","path":"a.obj"}],"nodes":[{"id":"a","components":[{"type":"mesh","asset":"m","albedo_texture":"m"}]}]})",
+    v21 +
+      R"("assets":[{"id":"m","type":"mesh","path":"a.obj"}],"nodes":[{"id":"a","components":[{"type":"mesh","asset":"m","metallic":1.5}]}]})",
+    v21 +
+      R"("assets":[{"id":"m","type":"mesh","path":"a.obj"}],"nodes":[{"id":"a","components":[{"type":"mesh","asset":"m","roughness":-0.1}]}]})",
+    v21 +
+      R"("assets":[{"id":"m","type":"mesh","path":"a.obj"}],"nodes":[{"id":"a","components":[{"type":"mesh","asset":"m","emissive":[-1,0,0]}]}]})",
+    v21 +
+      R"("nodes":[{"id":"a","components":[{"type":"light","kind":"laser"}]}]})",
+    v21 +
+      R"("nodes":[{"id":"a","components":[{"type":"light","kind":"point","range":0}]}]})",
+    v21 +
+      R"("nodes":[{"id":"a","components":[{"type":"light","kind":"spot","inner_angle_degrees":45,"outer_angle_degrees":30}]}]})",
+    std::string(minimalPrefix()) +
+      R"("assets":[{"id":"m","type":"mesh","path":"a.obj"}],"nodes":[{"id":"a","components":[{"type":"mesh","asset":"m","metallic":0.5}]}]})"
+  };
+  bool allRejected = true;
+  for (const std::string& bad : badInputs) {
+    SceneDocument ignored;
+    std::string badErr;
+    allRejected = allRejected && !IlscCodec::parse(bad, ignored, badErr);
+  }
+  testTrue(
+    counters,
+    allRejected,
+    "invalid 2.1 PBR/light ranges and 2.1 keys in 2.0 files are rejected");
+  return counters.failures;
+}
+
 void
 registerIlscCodecTests(IllumoTestRegistry& registry)
 {
@@ -514,4 +654,6 @@ registerIlscCodecTests(IllumoTestRegistry& registry)
                []() { return testIlscPreservesExtensions(); });
   registry.add("Illumo.Content.SceneAssetRefsResolve",
                []() { return testSceneAssetRefsResolve(); });
+  registry.add("Illumo.Content.IlscV21LightsAndPbr",
+               []() { return testIlscV21LightsAndPbr(); });
 }

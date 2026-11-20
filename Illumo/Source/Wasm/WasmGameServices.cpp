@@ -2,6 +2,7 @@
 #include <Illumo/Platform/Clipboard.h>
 #include <Illumo/Platform/SaveLoad.h>
 #include <Illumo/Rendering/IRenderWindow.h>
+#include <Illumo/Rendering/RenderPipelineConfig.h>
 #include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Services/CommandLine.h>
 #include <Illumo/Services/CommandRegistry.h>
@@ -277,6 +278,18 @@ WasmGameServices::completeDisplay(GuestServices& results)
       if (request.version >= 8u) {
         m_environment->setVar("motionBlurEnabled", request.state.motionBlur);
       }
+      if (request.version >= 9u) {
+        m_environment->setVar("hdrEnabled", request.state.hdr);
+        m_environment->setVar("tonemapper",
+                              static_cast<long>(request.state.tonemapper));
+        m_environment->setVar(
+          "exposure", GuestDisplayState::exposureText(request.state.exposure));
+        m_environment->setVar("bloomEnabled", request.state.bloom);
+        m_environment->setVar(
+          "bloomIntensity",
+          GuestDisplayState::bloomIntensityText(request.state.bloomIntensity));
+        m_environment->setVar("fxaaEnabled", request.state.fxaa);
+      }
     }
     const EnvVar& fps = m_environment->getVar("fps");
     const EnvVar& scale = m_environment->getVar("uiScale");
@@ -326,6 +339,16 @@ WasmGameServices::completeDisplay(GuestServices& results)
       GuestDisplayState::graphicsApiCode(m_window->graphicsApi());
     const EnvVar& motionBlur = m_environment->getVar("motionBlurEnabled");
     actual.motionBlur = !motionBlur.value.empty() && motionBlur.valueAsBool;
+    const RenderPipelineConfig pipeline =
+      RenderPipelineConfig::fromEnv(m_environment);
+    actual.hdr = pipeline.hdrEnabled;
+    actual.tonemapper = static_cast<std::uint32_t>(
+      std::clamp(pipeline.tonemapper, 0, RenderPipelineConfig::kMaxTonemapper));
+    actual.exposure = GuestDisplayState::quantizedExposure(pipeline.exposure);
+    actual.bloom = pipeline.bloomEnabled;
+    actual.bloomIntensity =
+      GuestDisplayState::quantizedBloomIntensity(pipeline.bloomIntensity);
+    actual.fxaa = pipeline.fxaaEnabled;
     // Each completion is written in its request's version, so a version 1
     // guest never sees the trailing field.
     GuestWireWriter payload;

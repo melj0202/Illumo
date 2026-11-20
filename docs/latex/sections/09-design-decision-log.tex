@@ -3450,6 +3450,58 @@ D-R36, D-R37, D-R38 and \pathref{docs/d3d12-backend-plan.md} remain as
 provenance.\\
 \textbf{Supersedes:} D-R36 and the Direct3D 12 clauses of D-R37 and D-R38
 \end{decisionbox}
+
+\subsection*{D-R41 --- Linear HDR forward PBR, 4-quadrant shadow atlas, Karis bloom, AgX and FXAA}
+\begin{decisionbox}[title={D-R41 \quad 2026-11-19}]
+\textbf{Decision:} Generalize named uniform-block reflection in
+\symbolref{IBackend}, \texttt{GLShaderProgram}, \texttt{GlslToSpirv} and
+\texttt{VulkanDevice} (\texttt{FrameUniforms} at binding point~0,
+\texttt{LightUniforms} at binding point~1; cache formats
+\texttt{glsl-program-2} and \texttt{vulkan-pipelines-2}). Upgrade
+\symbolref{RenderWorld} and \symbolref{MeshVisual} to linear multi-light
+Cook--Torrance GGX specular plus energy-conserving diffuse over optional
+sRGB-decoded albedo, NaN-safe screen-space cotangent normal, metallic/roughness
+ORM and linear emissive textures (with renderer-owned $1\times 1$ fallback
+textures), one directional sun, and up to 64 frustum-culled, priority-sorted
+punctual point or spot lights packed in \texttt{LightUniforms} (3,392\,B
+\texttt{std140}). Upgrade \texttt{PassType::ShadowDepth} to a
+$2 \times \texttt{shadowMapSize}$ ($2048\times 2048$ default, clamped to
+\texttt{maxTextureSize()}) \texttt{Depth24} 4-quadrant 2D shadow atlas:
+quadrants 0--2 hold up to three stabilized directional CSM splits and
+quadrant~3 holds the highest-priority shadow-casting spot light, while each
+\symbolref{RenderWorld} bucket owns distinct per-quadrant
+\texttt{shadowBuffers[0..3]}, \texttt{shadowUploads[0..3]} and
+\texttt{shadow[0..3]} recordings. When \texttt{hdrEnabled} is active and
+\texttt{World} contains 3D drawables
+(\texttt{DrawableBase::has3DWorldContent()}, or \texttt{canvasBloomEnabled} is
+set), \symbolref{Illumo::configureScenePipeline} installs
+\texttt{WorldHdrVelocity} (\texttt{RGBA16F} color + \texttt{RG16F} velocity +
+\texttt{Depth24}), a 5-mip Jimenez 13-tap Karis-weighted bloom downsample and
+$3\times 3$ tent upsample chain, \texttt{HdrComposite} (velocity motion blur,
+exposure, and analytical AgX / Reinhard / Clamp tonemapping), and single-pass
+luma \texttt{FxaaResolve} into the sRGB backbuffer before \texttt{UI} and
+\texttt{Debug} draw un-tonemapped overlays.\\
+\textbf{Why:} Single-light LDR Blinn--Phong clipped highlights, lacked normal
+and metallic/roughness material cues, swam or blurred across deep perspective
+frusta with a single shadow map, and had no bloom or highlight rolloff for 3D
+applications built on Illumo.\\
+\textbf{Consequences:} Pure-2D frames bypass offscreen HDR targets completely
+and keep zero host heap allocations on warmed frames
+(\texttt{IllumoGame.Wasm.PackageFrameAllocations}). Writing
+\texttt{FrameUniforms} and \texttt{LightUniforms} once before any pass and
+separating per-quadrant shadow instance buffers keeps
+\texttt{VulkanFrameStats::renderPassBreaks == 0} across full multi-pass HDR
+frames. \texttt{Illumo.Gpu.PbrPunctualLightsParity},
+\texttt{ShadowAtlasParity} and \texttt{HdrBloomAgxParity} match OpenGL~3.3 and
+Vulkan~1.3 within $\le 2$ LSB. At $2560\times 1440$ with 2,000 textured PBR
+instances, 32 dynamic lights, 4-quadrant $2048\times 2048$ shadows, 5-mip
+bloom, AgX and FXAA (\texttt{Illumo.Gpu.HdrForwardBench} and
+\texttt{Illumo.RenderWorld.Bench}), GPU frame time measured 0.607\,ms on
+OpenGL and 0.573\,ms on Vulkan, with 0.274\,ms CPU world emission. Setting
+\texttt{hdrEnabled=0} reverts to direct LDR backbuffer rendering on the next
+frame.\\
+\textbf{Extends:} D-R22, D-R28, D-R33, D-R38, D-R39, D-RP2
+\end{decisionbox}
 \subsection*{D-UI8 --- Liquid, bouncy menu motion}
 \begin{decisionbox}[title={D-UI8 \quad 2026-09-23}]
 \textbf{Decision:} The glass menus move like liquid. A travelling selection
@@ -4078,6 +4130,47 @@ Cases: \texttt{Illumo.Wasm.ProjectServiceDecoder}, \texttt{ProjectDeny},
 \texttt{Projects}, \texttt{Recovery}.\\
 \textbf{Extends:} D-E22, D-E36, D-UI13; \textbf{Refines:} D-E31 (IllEd's
 document is no longer its scene's content), D-E25
+\end{decisionbox}
+
+\subsection*{D-E43 --- Wasm frame schema v10, Display wire v9 and .ilsc format 2.1}
+\begin{decisionbox}[title={D-E43 \quad 2026-11-19}]
+\textbf{Decision:} Bump \texttt{GuestFrame::Version} to~10 while retaining
+version 1--9 decoders. Add world operations \texttt{LightCreate}~(13),
+\texttt{LightUpdate}~(14) and \texttt{LightDestroy}~(15) carrying
+\texttt{GuestWorldLight} (\texttt{point}/\texttt{spot} kind, position,
+direction, color, intensity, range, inner/outer cone cosines, shadow and
+visibility flags; \texttt{maximumWorldLights = 1024} per guest), and extend
+version~10 \texttt{GuestWorldMaterial} records with four optional guest 2D
+texture ids (\texttt{albedoTexture}, \texttt{normalTexture},
+\texttt{metallicRoughnessTexture}, \texttt{emissiveTexture}) plus
+\texttt{metallic}, \texttt{roughness} and \texttt{emissiveFactor}. Bump
+Display wire \texttt{kGuestDisplayVersion} to~9 (keeping versions 1--8 valid)
+to synchronize quantized \texttt{hdr}, \texttt{tonemapper}, \texttt{exposure},
+\texttt{bloom}, \texttt{bloomIntensity} and \texttt{fxaa} settings without
+warmed-frame allocations. Bump \texttt{SceneDocument::kFormatMinor} to~1
+(\texttt{.ilsc} format \texttt{[2, 1]}, reader accepting \texttt{[2, 0]} and
+\texttt{[2, 1]}), adding punctual \texttt{SceneLight} parameters and
+\texttt{SceneMeshRenderer} PBR texture/factor fields bound incrementally by
+\symbolref{SceneInstance} onto \symbolref{IRenderWorld} lights and interned PBR
+material buckets.\\
+\textbf{Why:} Guest applications, \texttt{IllEd}, \texttt{IllMeshViewer} and
+authored \texttt{.ilsc} scenes needed narrow, transactionally validated wire
+and document contracts to author and render D-R41 punctual lights, PBR
+materials and HDR post-processing.\\
+\textbf{Consequences:} Malformed floats, non-positive ranges, inverted cones,
+cubemaps bound as 2D material textures, deletion of textures still referenced
+by live materials, and light counts above 1,024 fail validation transactionally
+(\texttt{Illumo.Wasm.WorldV10Validation}, ASan-clean). Pre-compiled version
+1--9 Wasm packages (including older \texttt{CSim} commits before
+\texttt{ENGINE\_MIN\_COMMIT} moves) and \texttt{.ilsc} 2.0 scenes load
+unchanged. \texttt{IllEd}'s inspector, asset table and clipboard/paste edit and
+preserve PBR textures and punctual lights
+(\texttt{IllEd.Inspector.PbrMeshAndPunctualLights}); \texttt{IllMeshViewer}'s
+Display panel edits HDR/tonemapper/exposure/bloom/FXAA live
+(\texttt{IllMeshViewer.Panels.DisplayEdits}); and
+\pathref{Playground/Scenes/demo.ilsc} exercises dynamic moving point and spot
+lights.\\
+\textbf{Extends:} D-E19, D-E25, D-E30, D-R30, D-R41
 \end{decisionbox}
 
 \subsection*{D-F2 --- Calendar build versions}

@@ -14,6 +14,7 @@ public:
   bool AppendCommands(Renderer* renderer) override;
   void CollectShadowCasters(Renderer* renderer) override;
   void AppendShadowCommands(Renderer* renderer) override;
+  bool has3DWorldContent() const override;
 
 private:
   enum class Pass

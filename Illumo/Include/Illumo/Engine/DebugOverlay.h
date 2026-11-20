@@ -11,6 +11,7 @@ class DebugOverlayState;
 class FileTreeOverlay;
 class FrameProfiler;
 class GamepadOverlay;
+class GraphicsSettingsOverlay;
 class PixelWindow;
 class ProfilerOverlay;
 class SoftwareCanvas;
@@ -43,6 +44,7 @@ private:
   // The `files` browser over IllumoContext::fileTree.
   std::unique_ptr<FileTreeOverlay> m_fileTreeOverlay;
   std::unique_ptr<GamepadOverlay> m_gamepadOverlay;
+  std::unique_ptr<GraphicsSettingsOverlay> m_graphicsOverlay;
   void updateDiagnostics(double dt);
   void layoutDiagnostics();
   void updateFrameGraph();
@@ -60,10 +62,18 @@ private:
   void closeDetachedConsole(bool reopenInGame);
   void updateDetachedConsole();
 
+  void processGraphicsWindowRequest();
+  void detachGraphicsOverlay(int originX, int originY, int width, int height);
+  void closeDetachedGraphicsOverlay(bool reopenInGame);
+  void updateDetachedGraphicsOverlay(double dt);
+
   std::unique_ptr<PixelWindow> m_consoleWindow;
   std::unique_ptr<SoftwareCanvas> m_consoleCanvas;
+  std::unique_ptr<PixelWindow> m_graphicsWindow;
+  std::unique_ptr<SoftwareCanvas> m_graphicsCanvas;
   bool m_consoleMouseDown = false;
   bool m_detachedMouseDown = false;
+  bool m_graphicsDetachedMouseDown = false;
 
   GLString* diagnosticsLabel;
   GLString* memoryLabel;

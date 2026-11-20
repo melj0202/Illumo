@@ -156,6 +156,31 @@ MeshVisual::setMotionBlurMax(float ndcUnits)
 }
 
 void
+MeshVisual::setMetallic(float value)
+{
+  if (std::isfinite(value)) {
+    metallic = std::clamp(value, 0.0f, 1.0f);
+  }
+}
+
+void
+MeshVisual::setRoughness(float value)
+{
+  if (std::isfinite(value)) {
+    roughness = std::clamp(value, 0.045f, 1.0f);
+  }
+}
+
+void
+MeshVisual::setEmissiveFactor(const glm::vec3& value)
+{
+  if (std::isfinite(value.x) && std::isfinite(value.y) &&
+      std::isfinite(value.z)) {
+    emissiveFactor = glm::max(value, glm::vec3(0.0f));
+  }
+}
+
+void
 MeshVisual::clearPrimitives()
 {
   lineVertices.clear();
@@ -862,7 +887,71 @@ MeshVisual::ensureStyles()
   if (litStyle != nullptr && !litMeshStyleHandle.isValid()) {
     litMeshStyleHandle =
       renderer->getBuiltinStyleHandle(RenderStyleId::LitMesh);
+    renderer->ensureLightUniformBuffer();
+    renderer->whiteTexture();
+    renderer->flatNormalTexture();
+    renderer->defaultOrmTexture();
   }
+}
+
+void
+MeshVisual::emitPbrMaterialTokens(Renderer* value, bool bindLightBlock) const
+{
+  if (value == nullptr) {
+    return;
+  }
+  if (bindLightBlock) {
+    value->useLightUniforms();
+  }
+  const bool hasCustomTextures =
+    albedoTexture.isValid() || normalTexture.isValid() ||
+    metallicRoughnessTexture.isValid() || emissiveTexture.isValid();
+  if (!bindLightBlock && !hasCustomTextures) {
+    value->pushUniformVec4(
+      WorldLook::kMaterialFactorsUniform, 0.0f, 0.8f, 0.0f, 0.0f);
+    value->pushUniformVec3(WorldLook::kEmissiveFactorUniform, 0.0f, 0.0f, 0.0f);
+    return;
+  }
+  const TextureHandle white = value->whiteTexture();
+  const TextureHandle flatNormal = value->flatNormalTexture();
+  const TextureHandle defaultOrm = value->defaultOrmTexture();
+  const TextureHandle albedoTex =
+    albedoTexture.isValid() ? albedoTexture : white;
+  const TextureHandle normalTex =
+    normalTexture.isValid() ? normalTexture : flatNormal;
+  const TextureHandle ormTex =
+    metallicRoughnessTexture.isValid() ? metallicRoughnessTexture : defaultOrm;
+  const TextureHandle emissiveTex =
+    emissiveTexture.isValid() ? emissiveTexture : white;
+  const bool texturesBound = albedoTex.isValid() && normalTex.isValid() &&
+                             ormTex.isValid() && emissiveTex.isValid();
+  if (texturesBound) {
+    value->pushSetTexture(
+      albedoTex, static_cast<unsigned int>(WorldLook::kAlbedoTextureUnit));
+    value->pushUniformInt(WorldLook::kAlbedoMapUniform,
+                          WorldLook::kAlbedoTextureUnit);
+    value->pushSetTexture(
+      normalTex, static_cast<unsigned int>(WorldLook::kNormalTextureUnit));
+    value->pushUniformInt(WorldLook::kNormalMapUniform,
+                          WorldLook::kNormalTextureUnit);
+    value->pushSetTexture(
+      ormTex, static_cast<unsigned int>(WorldLook::kOrmTextureUnit));
+    value->pushUniformInt(WorldLook::kOrmMapUniform,
+                          WorldLook::kOrmTextureUnit);
+    value->pushSetTexture(
+      emissiveTex, static_cast<unsigned int>(WorldLook::kEmissiveTextureUnit));
+    value->pushUniformInt(WorldLook::kEmissiveMapUniform,
+                          WorldLook::kEmissiveTextureUnit);
+  }
+  value->pushUniformVec4(WorldLook::kMaterialFactorsUniform,
+                         std::clamp(metallic, 0.0f, 1.0f),
+                         std::clamp(roughness, 0.045f, 1.0f),
+                         normalTexture.isValid() ? 1.0f : 0.0f,
+                         texturesBound ? 1.0f : 0.0f);
+  value->pushUniformVec3(WorldLook::kEmissiveFactorUniform,
+                         std::max(emissiveFactor.x, 0.0f),
+                         std::max(emissiveFactor.y, 0.0f),
+                         std::max(emissiveFactor.z, 0.0f));
 }
 
 bool
@@ -995,8 +1084,15 @@ void
 MeshVisual::collectShadowCasterWithWorld(Renderer* value,
                                          const glm::mat4& nodeWorld)
 {
-  if (!isVisible() || !lightingEnabled || !shadowsEnabled || !castsShadows ||
-      !prepareForCommands(value)) {
+  if (value == nullptr) {
+    return;
+  }
+  const Renderer::ShadowDebugOverrides& shadowOverrides =
+    value->getShadowDebugOverrides();
+  const bool activeShadowsEnabled =
+    shadowOverrides.active ? shadowOverrides.shadowsEnabled : shadowsEnabled;
+  if (!isVisible() || !lightingEnabled || !activeShadowsEnabled ||
+      !castsShadows || !prepareForCommands(value)) {
     return;
   }
 
@@ -1015,7 +1111,9 @@ MeshVisual::collectShadowCasterWithWorld(Renderer* value,
   caster.lightDirection = { lightDirection.x,
                             lightDirection.y,
                             lightDirection.z };
-  caster.mapSize = shadowMapSize;
+  caster.mapSize = shadowOverrides.active
+                     ? std::max(shadowOverrides.shadowMapSize, 64)
+                     : shadowMapSize;
   caster.minimumRadius = shadowRadius;
   caster.lightDistance = lightDistance;
   caster.casterDistance = shadowCasterDistance;
@@ -1026,8 +1124,15 @@ void
 MeshVisual::appendShadowCommandsWithWorld(Renderer* value,
                                           const glm::mat4& nodeWorld)
 {
-  if (!isVisible() || !lightingEnabled || !shadowsEnabled || !castsShadows ||
-      value == nullptr) {
+  if (value == nullptr) {
+    return;
+  }
+  const Renderer::ShadowDebugOverrides& shadowOverrides =
+    value->getShadowDebugOverrides();
+  const bool activeShadowsEnabled =
+    shadowOverrides.active ? shadowOverrides.shadowsEnabled : shadowsEnabled;
+  if (!isVisible() || !lightingEnabled || !activeShadowsEnabled ||
+      !castsShadows) {
     return;
   }
 
@@ -1115,8 +1220,22 @@ MeshVisual::appendCommandsWithWorld(Renderer* value,
   const glm::mat4 previousMvp =
     previousMvpUsable ? previousColoredMvp : coloredMvp;
 
+  const Renderer::ShadowDebugOverrides& shadowOverrides =
+    value->getShadowDebugOverrides();
+  const bool activeShadowsEnabled =
+    shadowOverrides.active ? shadowOverrides.shadowsEnabled : shadowsEnabled;
+  const bool activeShadowPcf =
+    shadowOverrides.active ? shadowOverrides.shadowPcf : shadowPcfEnabled;
+  const float activeShadowBias =
+    shadowOverrides.active ? shadowOverrides.shadowBias : shadowBias;
+  const float activeShadowSlopeScale = shadowOverrides.active
+                                         ? shadowOverrides.shadowSlopeScale
+                                         : shadowSlopeScale;
+  const float activeShadowNormalOffset = shadowOverrides.active
+                                           ? shadowOverrides.shadowNormalOffset
+                                           : shadowNormalOffset;
   const Renderer::ShadowFrameContext& shadow = value->getShadowFrameContext();
-  const bool shadowMapBound = lightingEnabled && shadowsEnabled &&
+  const bool shadowMapBound = lightingEnabled && activeShadowsEnabled &&
                               shadow.active && shadow.depthTexture.isValid();
   glm::mat4 lightSpaceMatrix(1.0f);
   glm::vec3 activeLightDirection = lightDirection;
@@ -1167,13 +1286,13 @@ MeshVisual::appendCommandsWithWorld(Renderer* value,
                              ambientColor.z);
       value->pushUniformInt(WorldLook::kShadowsEnabledUniform,
                             shadowMapBound ? 1 : 0);
-      value->pushUniformFloat(WorldLook::kShadowBiasUniform, shadowBias);
+      value->pushUniformFloat(WorldLook::kShadowBiasUniform, activeShadowBias);
       value->pushUniformFloat(WorldLook::kShadowSlopeScaleUniform,
-                              shadowSlopeScale);
+                              activeShadowSlopeScale);
       value->pushUniformFloat(WorldLook::kShadowNormalOffsetUniform,
-                              shadowNormalOffset);
+                              activeShadowNormalOffset);
       value->pushUniformInt(WorldLook::kShadowPcfUniform,
-                            shadowPcfEnabled ? 1 : 0);
+                            activeShadowPcf ? 1 : 0);
       value->pushUniformMat4(WorldLook::kPrevMvpUniform,
                              glm::value_ptr(previousMvp));
       value->pushUniformInt(WorldLook::kMotionBlurEnabledUniform,
@@ -1182,6 +1301,7 @@ MeshVisual::appendCommandsWithWorld(Renderer* value,
                               motionBlurAmount);
       value->pushUniformFloat(WorldLook::kMotionBlurMaxUniform, motionBlurMax);
       value->pushUniformVec4(WorldLook::kTintUniform, 1.0f, 1.0f, 1.0f, 1.0f);
+      emitPbrMaterialTokens(value, true);
 
       if (shadowMapBound) {
         value->pushSetTexture(shadow.depthTexture,
@@ -1227,13 +1347,13 @@ MeshVisual::appendCommandsWithWorld(Renderer* value,
                            lightingEnabled ? ambientColor.z : 1.0f);
     value->pushUniformInt(WorldLook::kShadowsEnabledUniform,
                           lightingEnabled && shadowMapBound ? 1 : 0);
-    value->pushUniformFloat(WorldLook::kShadowBiasUniform, shadowBias);
+    value->pushUniformFloat(WorldLook::kShadowBiasUniform, activeShadowBias);
     value->pushUniformFloat(WorldLook::kShadowSlopeScaleUniform,
-                            shadowSlopeScale);
+                            activeShadowSlopeScale);
     value->pushUniformFloat(WorldLook::kShadowNormalOffsetUniform,
-                            shadowNormalOffset);
+                            activeShadowNormalOffset);
     value->pushUniformInt(WorldLook::kShadowPcfUniform,
-                          shadowPcfEnabled ? 1 : 0);
+                          activeShadowPcf ? 1 : 0);
     value->pushUniformMat4(WorldLook::kPrevMvpUniform,
                            glm::value_ptr(previousMvp));
     value->pushUniformInt(WorldLook::kMotionBlurEnabledUniform,
@@ -1246,6 +1366,7 @@ MeshVisual::appendCommandsWithWorld(Renderer* value,
                            static_cast<float>(meshAssetTint.g) / 255.0f,
                            static_cast<float>(meshAssetTint.b) / 255.0f,
                            static_cast<float>(meshAssetTint.a) / 255.0f);
+    emitPbrMaterialTokens(value, lightingEnabled);
     if (lightingEnabled && shadowMapBound) {
       value->pushSetTexture(shadow.depthTexture, WorldLook::kShadowTextureUnit);
       value->pushUniformInt(WorldLook::kShadowMapUniform,

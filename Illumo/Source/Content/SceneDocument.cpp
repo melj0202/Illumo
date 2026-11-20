@@ -96,7 +96,14 @@ sceneComponentsEqual(const SceneComponent& a, const SceneComponent& b)
         std::get_if<SceneMeshRenderer>(&a.value)) {
     const SceneMeshRenderer& right = std::get<SceneMeshRenderer>(b.value);
     return left->asset == right.asset && sameColor(left->tint, right.tint) &&
-           left->castShadows == right.castShadows;
+           left->castShadows == right.castShadows &&
+           left->albedoTexture == right.albedoTexture &&
+           left->normalTexture == right.normalTexture &&
+           left->ormTexture == right.ormTexture &&
+           left->emissiveTexture == right.emissiveTexture &&
+           left->metallic == right.metallic &&
+           left->roughness == right.roughness &&
+           left->emissive == right.emissive;
   }
   if (const SceneSprite* left = std::get_if<SceneSprite>(&a.value)) {
     const SceneSprite& right = std::get<SceneSprite>(b.value);
@@ -111,7 +118,10 @@ sceneComponentsEqual(const SceneComponent& a, const SceneComponent& b)
   if (const SceneLight* left = std::get_if<SceneLight>(&a.value)) {
     const SceneLight& right = std::get<SceneLight>(b.value);
     return left->color == right.color && left->intensity == right.intensity &&
-           left->shadows == right.shadows;
+           left->shadows == right.shadows && left->kind == right.kind &&
+           left->range == right.range &&
+           left->innerAngleDegrees == right.innerAngleDegrees &&
+           left->outerAngleDegrees == right.outerAngleDegrees;
   }
   if (const SceneCamera* left = std::get_if<SceneCamera>(&a.value)) {
     const SceneCamera& right = std::get<SceneCamera>(b.value);
@@ -245,6 +255,35 @@ parseScenePrimitiveShape(std::string_view text, ScenePrimitiveShape& shape)
   for (const ScenePrimitiveShape candidate : shapes) {
     if (text == scenePrimitiveShapeName(candidate)) {
       shape = candidate;
+      return true;
+    }
+  }
+  return false;
+}
+
+const char*
+sceneLightKindName(SceneLightKind kind)
+{
+  switch (kind) {
+    case SceneLightKind::Directional:
+      return "directional";
+    case SceneLightKind::Point:
+      return "point";
+    case SceneLightKind::Spot:
+      return "spot";
+  }
+  return "directional";
+}
+
+bool
+parseSceneLightKind(std::string_view text, SceneLightKind& kind)
+{
+  const SceneLightKind kinds[] = { SceneLightKind::Directional,
+                                   SceneLightKind::Point,
+                                   SceneLightKind::Spot };
+  for (const SceneLightKind candidate : kinds) {
+    if (text == sceneLightKindName(candidate)) {
+      kind = candidate;
       return true;
     }
   }
@@ -395,6 +434,23 @@ validateComponent(const SceneDocument& document,
           document, assets, mesh->asset, { SceneAssetType::Mesh })) {
       return fail(error, "mesh component must name a mesh asset");
     }
+    const std::string* textureRefs[] = { &mesh->albedoTexture,
+                                         &mesh->normalTexture,
+                                         &mesh->ormTexture,
+                                         &mesh->emissiveTexture };
+    for (const std::string* texRef : textureRefs) {
+      if (!texRef->empty() &&
+          !assetHasType(
+            document, assets, *texRef, { SceneAssetType::Texture })) {
+        return fail(error, "mesh PBR texture slots must name a texture asset");
+      }
+    }
+    if (!inRange(mesh->metallic, 0.0f, 1.0f) ||
+        !inRange(mesh->roughness, 0.0f, 1.0f) ||
+        !vectorInRange(mesh->emissive, 0.0f, 100.0f)) {
+      return fail(error,
+                  "mesh PBR metallic, roughness or emissive is out of range");
+    }
     return true;
   }
   if (const SceneSprite* sprite = std::get_if<SceneSprite>(&component.value)) {
@@ -425,8 +481,14 @@ validateComponent(const SceneDocument& document,
   }
   if (const SceneLight* light = std::get_if<SceneLight>(&component.value)) {
     if (!vectorInRange(light->color, 0.0f, 16.0f) ||
-        !inRange(light->intensity, 0.0f, 100.0f)) {
-      return fail(error, "light color or intensity is out of range");
+        !inRange(light->intensity, 0.0f, 100.0f) ||
+        !inRange(light->range, 1.0e-3f, 1.0e5f) ||
+        !inRange(light->innerAngleDegrees, 0.1f, 179.0f) ||
+        !inRange(light->outerAngleDegrees, 0.1f, 179.0f) ||
+        light->innerAngleDegrees > light->outerAngleDegrees) {
+      return fail(error,
+                  "light color, intensity, range or cone angles are out of "
+                  "range");
     }
     return true;
   }

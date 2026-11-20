@@ -66,6 +66,7 @@ SkyboxVisual::prepare(Renderer* renderer)
     releaseMesh();
   }
   m_renderer = renderer;
+  m_renderer->ensureLightUniformBuffer();
   if (!m_cubeMesh.isValid()) {
     m_cubeMesh = m_renderer->enrollMesh(kSkyboxUnitCubeVertices.data(),
                                         sizeof(kSkyboxUnitCubeVertices),
@@ -134,6 +135,7 @@ SkyboxVisual::AppendCommands(Renderer* renderer)
   if (!renderer->bindStyle(RenderStyleId::Skybox)) {
     return false;
   }
+  (void)renderer->useLightUniforms();
 
   renderer->pushSetTexture(m_cubemap, 0);
   renderer->pushUniformInt("uSkybox", 0);

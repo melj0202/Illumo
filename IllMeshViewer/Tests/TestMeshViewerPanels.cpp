@@ -163,6 +163,34 @@ testDisplayEdits()
              0.02f,
            "the Ambient slider sets the ambient brightness");
 
+  // Scroll down to Post-processing and verify HDR / Tonemapper / Exposure.
+  fixture.window.mouseX = x;
+  fixture.window.mouseY = y;
+  *fixture.input.getMouseScrollOffset() = -8.0;
+  fixture.module.update(0.016);
+  *fixture.input.getMouseScrollOffset() = 0.0;
+  testTrue(counters,
+           display->controlPointForTesting("HDR", 0.0f, &x, &y),
+           "the Display panel exposes HDR post-processing controls");
+  fixture.click(x, y);
+  testTrue(counters,
+           fixture.env.getVar("hdrEnabled").value == "0" &&
+             !display->settings().hdr,
+           "the HDR toggle writes hdrEnabled");
+  display->controlPointForTesting("Tonemapper", 0.0f, &x, &y);
+  fixture.click(x, y);
+  testTrue(counters,
+           fixture.env.getVar("tonemapper").value == "3" &&
+             display->settings().tonemapper == 3,
+           "the Tonemapper choice cycles AgX -> Khronos Neutral");
+  display->controlPointForTesting("Exposure", 0.75f, &x, &y);
+  fixture.click(x, y);
+  testTrue(counters,
+           std::fabs(fixture.env.getVar("exposure").valueAsDouble - 2.0) <
+               0.1 &&
+             std::fabs(display->settings().exposure - 2.0f) < 0.1f,
+           "the Exposure slider sets stops in [-4, 4]");
+
   MeshViewerInfoPanel* info = fixture.module.infoPanel();
   testTrue(counters,
            fixture.module.loadMeshFromMemory(

@@ -102,6 +102,13 @@ struct SceneMeshRenderer
   std::string asset;
   ColorRgba tint{ 255, 255, 255, 255 };
   bool castShadows = true;
+  std::string albedoTexture;
+  std::string normalTexture;
+  std::string ormTexture;
+  std::string emissiveTexture;
+  float metallic = 0.0f;
+  float roughness = 0.8f;
+  Vector3 emissive{ 0.0f, 0.0f, 0.0f };
 };
 
 enum class SceneSpriteFacing
@@ -131,14 +138,26 @@ struct SceneSprite
   bool flipY = false;
 };
 
-// Directional light. It shines along the node's local -Y axis, so an
-// unrotated light points straight down; the first enabled light in preorder
-// replaces the environment sun.
+enum class SceneLightKind
+{
+  Directional,
+  Point,
+  Spot
+};
+
+// Light component. Directional and Spot lights shine along the node's local
+// -Y axis, so an unrotated light points straight down; the first enabled
+// Directional light in preorder replaces the environment sun, while Point and
+// Spot lights populate the forward punctual light set.
 struct SceneLight
 {
   Vector3 color{ 1.0f, 1.0f, 1.0f };
   float intensity = 1.0f;
   bool shadows = true;
+  SceneLightKind kind = SceneLightKind::Directional;
+  float range = 10.0f;
+  float innerAngleDegrees = 25.0f;
+  float outerAngleDegrees = 35.0f;
 };
 
 enum class SceneProjection
@@ -276,7 +295,7 @@ struct SceneExtension
 struct SceneDocument
 {
   static constexpr int kFormatMajor = 2;
-  static constexpr int kFormatMinor = 0;
+  static constexpr int kFormatMinor = 1;
   static constexpr std::size_t kMaximumNodes = 262144;
   static constexpr std::size_t kMaximumAssets = 65536;
   static constexpr std::size_t kMaximumComponents = 16;
@@ -328,3 +347,7 @@ const char*
 scenePrimitiveShapeName(ScenePrimitiveShape shape);
 bool
 parseScenePrimitiveShape(std::string_view text, ScenePrimitiveShape& shape);
+const char*
+sceneLightKindName(SceneLightKind kind);
+bool
+parseSceneLightKind(std::string_view text, SceneLightKind& kind);

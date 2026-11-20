@@ -182,6 +182,29 @@ struct WasmFrameRenderer::State
         state.appendShadowCommands(renderer);
       }
     }
+    bool has3DWorldContent() const override
+    {
+      if (layer != GuestLayer::World || !isVisible() || state.retired ||
+          state.lifetime.expired()) {
+        return false;
+      }
+      if (state.worldComposed) {
+        const HostWorld* active = state.shown();
+        if (active != nullptr && active->world != nullptr &&
+            active->world->has3DWorldContent()) {
+          return true;
+        }
+      }
+      for (std::size_t i = 0; i < state.frame.batches.size(); ++i) {
+        const GuestBatch& b = state.frame.batches[i];
+        if (b.layer == GuestLayer::World &&
+            (b.style == GuestBatchStyle::LitMesh ||
+             b.style == GuestBatchStyle::Skybox)) {
+          return true;
+        }
+      }
+      return false;
+    }
     State& state;
     GuestLayer layer;
   };
@@ -419,6 +442,15 @@ struct WasmFrameRenderer::State
           error = "Invalid guest texture authority";
           return false;
         }
+      }
+      if (batch.style == GuestBatchStyle::LitMesh ||
+          batch.style == GuestBatchStyle::Skybox) {
+        renderer.ensureLightUniformBuffer();
+      }
+      if (batch.style == GuestBatchStyle::LitMesh) {
+        renderer.whiteTexture();
+        renderer.flatNormalTexture();
+        renderer.defaultOrmTexture();
       }
       if (batch.retained()) {
         if (!prepareRetained(batch, ready)) {
@@ -714,12 +746,19 @@ struct WasmFrameRenderer::State
   static constexpr std::size_t kWorldMaterials = 4096;
   static constexpr std::size_t kWorlds = 8;
 
+  struct WorldMaterial
+  {
+    std::size_t users = 0;
+    std::array<std::shared_ptr<const Texture>, 4> textures{};
+  };
+
   struct HostWorld
   {
     std::uint32_t id = 0;
     std::unique_ptr<RenderWorld> world = std::make_unique<RenderWorld>();
     std::unordered_map<std::uint32_t, WorldInstance> instances;
-    std::unordered_map<std::uint32_t, std::size_t> materialUsers;
+    std::unordered_map<std::uint32_t, WorldMaterial> materials;
+    std::unordered_set<std::uint32_t> lights;
     // Keeps the sky's cubemap alive while the world shows it.
     std::shared_ptr<const Texture> sky;
   };
@@ -753,6 +792,14 @@ struct WasmFrameRenderer::State
     }
     return total;
   }
+  std::size_t lightTotal() const
+  {
+    std::size_t total = 0;
+    for (const std::unique_ptr<HostWorld>& hosted : worlds) {
+      total += hosted->lights.size();
+    }
+    return total;
+  }
   void releaseWorld(HostWorld& hosted)
   {
     if (!lifetime.expired()) {
@@ -772,8 +819,10 @@ struct WasmFrameRenderer::State
     std::unordered_map<std::uint32_t, long long> userDelta;
     std::unordered_map<std::uint32_t, WorldInstance> created;
     std::unordered_set<std::uint32_t> destroyed;
+    std::unordered_map<std::uint32_t, bool> lights;
     std::size_t instances = 0;
     std::size_t materialCount = 0;
+    std::size_t lightCount = 0;
   };
   // Retained across frames: clearing keeps the containers' buckets.
   struct FramePlan
@@ -782,6 +831,7 @@ struct WasmFrameRenderer::State
     std::size_t used = 0;
     std::size_t instances = 0;
     std::size_t materials = 0;
+    std::size_t lights = 0;
     std::size_t liveWorlds = 0;
   };
 
@@ -808,8 +858,10 @@ struct WasmFrameRenderer::State
     plan.userDelta.clear();
     plan.created.clear();
     plan.destroyed.clear();
+    plan.lights.clear();
     plan.instances = live != nullptr ? live->instances.size() : 0;
-    plan.materialCount = live != nullptr ? live->materialUsers.size() : 0;
+    plan.materialCount = live != nullptr ? live->materials.size() : 0;
+    plan.lightCount = live != nullptr ? live->lights.size() : 0;
   }
 
   static bool plannedMaterial(const WorldPlan& plan, std::uint32_t id)
@@ -818,7 +870,34 @@ struct WasmFrameRenderer::State
       plan.materials.find(id);
     return found != plan.materials.end()
              ? found->second
-             : plan.live != nullptr && plan.live->materialUsers.contains(id);
+             : plan.live != nullptr && plan.live->materials.contains(id);
+  }
+
+  static bool plannedLight(const WorldPlan& plan, std::uint32_t id)
+  {
+    std::unordered_map<std::uint32_t, bool>::const_iterator found =
+      plan.lights.find(id);
+    return found != plan.lights.end()
+             ? found->second
+             : plan.live != nullptr && plan.live->lights.contains(id);
+  }
+
+  bool validMaterialTextures(const GuestWorldMaterial& material) const
+  {
+    const GuestResourceId ids[4] = { material.albedoTexture,
+                                     material.normalTexture,
+                                     material.metallicRoughnessTexture,
+                                     material.emissiveTexture };
+    for (const GuestResourceId& id : ids) {
+      if (id.owner == 0) {
+        continue;
+      }
+      const std::shared_ptr<const Texture> tex = textures.resolve(id);
+      if (!tex || tex->cubemap) {
+        return false;
+      }
+    }
+    return true;
   }
 
   // The material of a live or planned instance, or zero when there is none.
@@ -852,8 +931,9 @@ struct WasmFrameRenderer::State
     plan.used = 0;
     plan.instances = instanceTotal();
     plan.materials = 0;
+    plan.lights = lightTotal();
     for (const std::unique_ptr<HostWorld>& hosted : worlds) {
-      plan.materials += hosted->materialUsers.size();
+      plan.materials += hosted->materials.size();
     }
     plan.liveWorlds = worlds.size();
     meshes.assign(operations.size(), nullptr);
@@ -882,27 +962,30 @@ struct WasmFrameRenderer::State
           valid = doomed.exists;
           plan.instances -= doomed.instances;
           plan.materials -= doomed.materialCount;
+          plan.lights -= doomed.lightCount;
           plan.liveWorlds -= 1;
           resetPlan(doomed, nullptr);
           break;
         }
         case GuestWorldOp::MaterialCreate:
           valid = valid && !plannedMaterial(*target, id) &&
-                  plan.materials < kWorldMaterials;
+                  plan.materials < kWorldMaterials &&
+                  validMaterialTextures(operation.material);
           target->materials[id] = true;
           target->materialCount += 1;
           plan.materials += 1;
           break;
         case GuestWorldOp::MaterialUpdate:
-          valid = valid && plannedMaterial(*target, id);
+          valid = valid && plannedMaterial(*target, id) &&
+                  validMaterialTextures(operation.material);
           break;
         case GuestWorldOp::MaterialDestroy: {
           long long users = target->userDelta[id];
           if (target->live != nullptr) {
-            std::unordered_map<std::uint32_t, std::size_t>::const_iterator
-              live = target->live->materialUsers.find(id);
-            if (live != target->live->materialUsers.end()) {
-              users += static_cast<long long>(live->second);
+            std::unordered_map<std::uint32_t, WorldMaterial>::const_iterator
+              live = target->live->materials.find(id);
+            if (live != target->live->materials.end()) {
+              users += static_cast<long long>(live->second.users);
             }
           }
           valid = valid && plannedMaterial(*target, id) && users == 0;
@@ -954,6 +1037,22 @@ struct WasmFrameRenderer::State
             valid = sky && sky->cubemap;
           }
           break;
+        case GuestWorldOp::LightCreate:
+          valid = valid && !plannedLight(*target, id) &&
+                  plan.lights < limits.maximumWorldLights;
+          target->lights[id] = true;
+          target->lightCount += 1;
+          plan.lights += 1;
+          break;
+        case GuestWorldOp::LightUpdate:
+          valid = valid && plannedLight(*target, id);
+          break;
+        case GuestWorldOp::LightDestroy:
+          valid = valid && plannedLight(*target, id);
+          target->lights[id] = false;
+          target->lightCount -= 1;
+          plan.lights -= 1;
+          break;
       }
       if (!valid) {
         error = "Invalid guest world operation " + std::to_string(index) +
@@ -964,13 +1063,53 @@ struct WasmFrameRenderer::State
     }
     return true;
   }
-  static RenderMaterialDesc worldMaterial(const GuestWorldMaterial& material)
+  RenderMaterialDesc worldMaterial(
+    const GuestWorldMaterial& material,
+    std::array<std::shared_ptr<const Texture>, 4>* outLeases) const
   {
+    const GuestResourceId ids[4] = { material.albedoTexture,
+                                     material.normalTexture,
+                                     material.metallicRoughnessTexture,
+                                     material.emissiveTexture };
+    std::array<std::shared_ptr<const Texture>, 4> resolved{};
+    for (std::size_t i = 0; i < 4; ++i) {
+      if (ids[i].owner != 0) {
+        resolved[i] = textures.resolve(ids[i]);
+      }
+    }
     RenderMaterialDesc desc;
     desc.tint = material.tint;
     desc.receivesShadow = material.receivesShadow;
     desc.castsShadow = material.castsShadow;
     desc.blend = material.blend;
+    desc.albedoTexture = resolved[0] ? resolved[0]->handle : TextureHandle{};
+    desc.normalTexture = resolved[1] ? resolved[1]->handle : TextureHandle{};
+    desc.metallicRoughnessTexture =
+      resolved[2] ? resolved[2]->handle : TextureHandle{};
+    desc.emissiveTexture = resolved[3] ? resolved[3]->handle : TextureHandle{};
+    desc.metallic = material.metallic;
+    desc.roughness = material.roughness;
+    desc.emissiveFactor = material.emissiveFactor;
+    if (outLeases != nullptr) {
+      *outLeases = std::move(resolved);
+    }
+    return desc;
+  }
+
+  static RenderLightDesc worldLight(const GuestWorldLight& light)
+  {
+    RenderLightDesc desc;
+    desc.kind =
+      light.kind == 1u ? RenderLightKind::Spot : RenderLightKind::Point;
+    desc.position = light.position;
+    desc.direction = light.direction;
+    desc.color = light.color;
+    desc.intensity = light.intensity;
+    desc.range = light.range;
+    desc.innerConeCos = light.innerCos;
+    desc.outerConeCos = light.outerCos;
+    desc.castsShadow = light.castsShadow;
+    desc.visible = light.visible;
     return desc;
   }
 
@@ -1021,16 +1160,23 @@ struct WasmFrameRenderer::State
       }
       RenderWorld& world = *current->world;
       switch (operation.op) {
-        case GuestWorldOp::MaterialCreate:
-          applied = world.createMaterial(id, worldMaterial(operation.material));
-          current->materialUsers[id] = 0;
+        case GuestWorldOp::MaterialCreate: {
+          WorldMaterial entry;
+          applied = world.createMaterial(
+            id, worldMaterial(operation.material, &entry.textures));
+          current->materials[id] = std::move(entry);
           break;
-        case GuestWorldOp::MaterialUpdate:
-          applied = world.updateMaterial(id, worldMaterial(operation.material));
+        }
+        case GuestWorldOp::MaterialUpdate: {
+          std::array<std::shared_ptr<const Texture>, 4> leases{};
+          applied = world.updateMaterial(
+            id, worldMaterial(operation.material, &leases));
+          current->materials[id].textures = std::move(leases);
           break;
+        }
         case GuestWorldOp::MaterialDestroy:
           applied = world.destroyMaterial(id);
-          current->materialUsers.erase(id);
+          current->materials.erase(id);
           break;
         case GuestWorldOp::InstanceCreate: {
           const RetainedMesh::Upload& upload = *meshes[index]->upload;
@@ -1047,7 +1193,7 @@ struct WasmFrameRenderer::State
           applied = world.createInstance(id, desc);
           current->instances[id] =
             WorldInstance{ operation.materialId, meshes[index] };
-          current->materialUsers[operation.materialId] += 1;
+          current->materials[operation.materialId].users += 1;
           break;
         }
         case GuestWorldOp::InstanceUpdate:
@@ -1062,7 +1208,7 @@ struct WasmFrameRenderer::State
           std::unordered_map<std::uint32_t, WorldInstance>::iterator found =
             current->instances.find(id);
           if (found != current->instances.end()) {
-            current->materialUsers[found->second.material] -= 1;
+            current->materials[found->second.material].users -= 1;
             current->instances.erase(found);
           }
           break;
@@ -1093,6 +1239,17 @@ struct WasmFrameRenderer::State
           applied = world.setSkybox(
             { current->sky ? current->sky->handle : TextureHandle{},
               operation.tint });
+          break;
+        case GuestWorldOp::LightCreate:
+          applied = world.createLight(id, worldLight(operation.light));
+          current->lights.insert(id);
+          break;
+        case GuestWorldOp::LightUpdate:
+          applied = world.updateLight(id, worldLight(operation.light));
+          break;
+        case GuestWorldOp::LightDestroy:
+          applied = world.destroyLight(id);
+          current->lights.erase(id);
           break;
         default:
           break;
@@ -1409,6 +1566,7 @@ struct WasmFrameRenderer::State
     }
     counters.worldOperations = frame.worldOperations.size();
     counters.worldInstances = instanceTotal();
+    counters.worldLights = lightTotal();
     counters.visualOperations = frame.visualOperations.size();
     counters.visuals = visuals.visualCount();
   }
@@ -1620,6 +1778,37 @@ struct WasmFrameRenderer::State
                              lighting.tint[1],
                              lighting.tint[2],
                              lighting.tint[3]);
+    renderer.useLightUniforms();
+    const TextureHandle white = renderer.whiteTexture();
+    const TextureHandle flatNormal = renderer.flatNormalTexture();
+    const TextureHandle defaultOrm = renderer.defaultOrmTexture();
+    const bool texturesBound =
+      white.isValid() && flatNormal.isValid() && defaultOrm.isValid();
+    if (texturesBound) {
+      renderer.pushSetTexture(
+        white, static_cast<unsigned int>(WorldLook::kAlbedoTextureUnit));
+      renderer.pushUniformInt(WorldLook::kAlbedoMapUniform,
+                              WorldLook::kAlbedoTextureUnit);
+      renderer.pushSetTexture(
+        flatNormal, static_cast<unsigned int>(WorldLook::kNormalTextureUnit));
+      renderer.pushUniformInt(WorldLook::kNormalMapUniform,
+                              WorldLook::kNormalTextureUnit);
+      renderer.pushSetTexture(
+        defaultOrm, static_cast<unsigned int>(WorldLook::kOrmTextureUnit));
+      renderer.pushUniformInt(WorldLook::kOrmMapUniform,
+                              WorldLook::kOrmTextureUnit);
+      renderer.pushSetTexture(
+        white, static_cast<unsigned int>(WorldLook::kEmissiveTextureUnit));
+      renderer.pushUniformInt(WorldLook::kEmissiveMapUniform,
+                              WorldLook::kEmissiveTextureUnit);
+    }
+    renderer.pushUniformVec4(WorldLook::kMaterialFactorsUniform,
+                             0.0f,
+                             0.8f,
+                             0.0f,
+                             texturesBound ? 1.0f : 0.0f);
+    renderer.pushUniformVec3(
+      WorldLook::kEmissiveFactorUniform, 0.0f, 0.0f, 0.0f);
     if (shadowed) {
       renderer.pushSetTexture(shadow.depthTexture,
                               WorldLook::kShadowTextureUnit);
@@ -1635,6 +1824,7 @@ struct WasmFrameRenderer::State
                     const PreparedBatch& payload,
                     MeshHandle mesh)
   {
+    (void)renderer.useLightUniforms();
     const std::array<float, 4>& tint = batch.lighting.tint;
     renderer.pushSetTexture(payload.texture->handle, 0);
     renderer.pushUniformInt("uSkybox", 0);

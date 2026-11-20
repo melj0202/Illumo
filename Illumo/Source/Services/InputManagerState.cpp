@@ -47,6 +47,9 @@ InputManager::isKeyReleased(KeyCode key)
 bool
 InputManager::isMouseButtonReleased(KeyCode mouseButton)
 {
+  if (m_mouseSuppressed) {
+    return false;
+  }
   return isKeyReleased(mouseButton);
 }
 

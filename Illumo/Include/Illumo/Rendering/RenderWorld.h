@@ -2,13 +2,13 @@
 #include <Illumo/Rendering/Drawable.h>
 #include <Illumo/Rendering/IRenderWorld.h>
 #include <Illumo/Rendering/RecordedCommandList.h>
+#include <Illumo/Rendering/Renderer.h>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
 #include <vector>
-
-class Renderer;
 
 // Persistent, flat world render objects drawn as one World-layer drawable.
 // Instances that share a mesh range and material form a bucket; each bucket
@@ -35,6 +35,8 @@ public:
     // Of those, instances whose records were rebuilt and uploaded in the last
     // frame; the rest drew from what their buffer already held.
     size_t uploadedInstances = 0;
+    size_t lights = 0;
+    size_t activeLights = 0;
   };
 
   RenderWorld();
@@ -65,11 +67,18 @@ public:
   // translation removed, so no per-frame camera data is needed.
   bool setSkybox(const RenderSkyboxDesc& skybox) override;
   bool hasSkybox() const { return m_skybox.cubemap.isValid(); }
+  bool createLight(RenderLightId id, const RenderLightDesc& desc) override;
+  bool updateLight(RenderLightId id, const RenderLightDesc& desc) override;
+  bool destroyLight(RenderLightId id) override;
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
   void CollectShadowCasters(Renderer* renderer) override;
   void AppendShadowCommands(Renderer* renderer) override;
+  bool has3DWorldContent() const override
+  {
+    return isVisible() && (m_stats.instances > 0 || m_skybox.cubemap.isValid());
+  }
 
   const Stats& stats() const { return m_stats; }
 
@@ -86,6 +95,14 @@ private:
     RenderMaterialDesc desc;
     size_t users = 0;
   };
+  struct LightCandidate
+  {
+    RenderLightId id = 0;
+    float score = 0.0f;
+    RenderLightDesc desc;
+  };
+  static bool betterLightCandidate(const LightCandidate& left,
+                                   const LightCandidate& right);
   struct Instance
   {
     RenderInstanceId id = 0;
@@ -136,14 +153,15 @@ private:
     uint64_t revision = 1;
     uint64_t movedFrame = 0;
     PassUpload colorUpload;
-    PassUpload shadowUpload;
+    std::array<PassUpload, Renderer::kShadowAtlasQuadrants> shadowUploads;
     size_t capacity = 0;
     BufferHandle colorBuffer{};
-    BufferHandle shadowBuffer{};
+    std::array<BufferHandle, Renderer::kShadowAtlasQuadrants> shadowBuffers{};
     std::vector<GpuInstance> colorStaging;
-    std::vector<GpuInstance> shadowStaging;
+    std::array<std::vector<GpuInstance>, Renderer::kShadowAtlasQuadrants>
+      shadowStaging;
     RecordedCommandList color;
-    RecordedCommandList shadow;
+    std::array<RecordedCommandList, Renderer::kShadowAtlasQuadrants> shadow;
     size_t colorDraw = 0;
     size_t shadowDraw = 0;
     bool dirty = true;
@@ -179,8 +197,14 @@ private:
   // this frame's shared state is already bound.
   void drawColor(Renderer* renderer, Bucket& bucket, bool& bound);
   void drawSkybox(Renderer* renderer);
+  void gatherLights(Renderer* renderer);
+  RenderEnvironment effectiveEnvironment(const Renderer* renderer) const;
 
   std::unordered_map<RenderMaterialId, Material> m_materials;
+  std::unordered_map<RenderLightId, RenderLightDesc> m_lights;
+  std::vector<LightCandidate> m_lightCandidates;
+  std::array<Renderer::GpuPunctualLight, Renderer::kMaximumForwardLights>
+    m_packedLights{};
   std::vector<Instance> m_instances;
   std::vector<size_t> m_freeInstances;
   std::unordered_map<RenderInstanceId, size_t> m_instanceSlots;
@@ -197,6 +221,7 @@ private:
   Renderer* m_renderer = nullptr;
   uint64_t m_frame = 0;
   uint64_t m_preparedSerial = 0;
+  uint64_t m_shadowOverrideRevision = 0;
   bool m_ready = false;
   bool m_unsupportedReported = false;
   Stats m_stats;

@@ -1,4 +1,5 @@
 #version 330 core
+#include <illumo/pbr_lighting.glsl>
 
 // mesh_lit_frag.glsl for instanced draws. Lighting math is identical; the
 // light-space matrix and whether this frame has a shadow map come from the
@@ -33,90 +34,130 @@ uniform float uShadowNormalOffset;
 uniform int uShadowPcf;
 uniform int uMotionBlurEnabled;
 uniform vec4 uTint;
+uniform sampler2D uAlbedoMap;
+uniform sampler2D uNormalMap;
+uniform sampler2D uOrmMap;
+uniform sampler2D uEmissiveMap;
+uniform vec4 uMaterialFactors;
+uniform vec3 uEmissiveFactor;
 
 float calculateShadow(vec3 fragPos, vec3 normal, vec3 lightDir)
 {
     if (uShadowsEnabled == 0 || uShadowState.x < 0.5) {
         return 0.0;
     }
-
-    float nDotL = dot(normal, lightDir);
-    if (nDotL <= 0.0) {
-        return 1.0;
-    }
-
-    vec2 mapSize = vec2(textureSize(uShadowMap, 0));
-    vec2 texelSize = 1.0 / mapSize;
-    float invHalfExtent = length(vec3(
-        uLightSpace[0].x, uLightSpace[1].x, uLightSpace[2].x));
-    float worldTexel =
-        invHalfExtent > 1e-5 ? 2.0 / (invHalfExtent * mapSize.x) : 0.0;
-
-    float sinTheta = sqrt(max(1.0 - nDotL * nDotL, 0.0));
-    float pcfTexelRadius = uShadowPcf > 0 ? 2.5 : 1.25;
-    float minTexelOffset =
-        uShadowNormalOffset > 0.0 ? pcfTexelRadius * worldTexel : 0.0;
-    vec3 offsetPos =
-        fragPos + normal * (max(uShadowNormalOffset, minTexelOffset) * sinTheta);
-
-    vec4 lightClip = uLightSpace * vec4(offsetPos, 1.0);
-    vec3 projCoords = lightClip.xyz / lightClip.w;
-    projCoords = projCoords * 0.5 + 0.5;
-
-    if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 ||
-        projCoords.y < 0.0 || projCoords.y > 1.0) {
-        return 0.0;
-    }
-
-    float currentDepth = projCoords.z;
-    float invHalfDepthSpan = length(vec3(
-        uLightSpace[0].z, uLightSpace[1].z, uLightSpace[2].z));
-    const float kReferenceDepthSpan = 16.0;
-    float depthScale = invHalfDepthSpan > 1e-5
-        ? (0.5 * kReferenceDepthSpan * invHalfDepthSpan)
-        : 1.0;
-    float tanTheta = min(sinTheta / max(nDotL, 0.1), 3.0);
-    float bias = (uShadowBias + uShadowSlopeScale * (1.0 - nDotL) +
-        uShadowBias * tanTheta) * depthScale;
-
-    if (uShadowPcf <= 0) {
-        float pcfDepth = texture(uShadowMap, projCoords.xy).r;
-        return currentDepth - bias > pcfDepth ? 1.0 : 0.0;
-    }
-
-    vec2 texelPos = projCoords.xy * mapSize - 0.5;
-    vec2 baseTexel = floor(texelPos);
-    vec2 frac = texelPos - baseTexel;
-    vec2 baseUv = (baseTexel + 0.5) * texelSize;
-    vec4 wx = vec4(1.0 - frac.x, 1.0, 1.0, frac.x);
-    vec4 wy = vec4(1.0 - frac.y, 1.0, 1.0, frac.y);
-
-    float shadow = 0.0;
-    for (int ix = 0; ix < 4; ++ix) {
-        for (int iy = 0; iy < 4; ++iy) {
-            vec2 sampleUv =
-                baseUv + vec2(float(ix - 1), float(iy - 1)) * texelSize;
-            float pcfDepth = texture(uShadowMap, sampleUv).r;
-            float occluded = currentDepth - bias > pcfDepth ? 1.0 : 0.0;
-            shadow += occluded * wx[ix] * wy[iy];
-        }
-    }
-    return shadow / 9.0;
+    return illumoCalculateDirectionalShadow(
+        uShadowMap,
+        fragPos,
+        normal,
+        lightDir,
+        vCurrentClip.w,
+        uLightSpace,
+        uShadowBias,
+        uShadowSlopeScale,
+        uShadowNormalOffset,
+        uShadowPcf);
 }
 
 void main()
 {
-    vec3 norm = normalize(vNormal);
-    vec3 lightDir = normalize(uLightDir);
+    float nLenSq = dot(vNormal, vNormal);
+    vec3 geomN = nLenSq > 1e-8 ? (vNormal * inversesqrt(nLenSq)) : vec3(0.0, 1.0, 0.0);
 
-    vec3 ambient = uAmbientColor;
-    float diff = max(dot(norm, lightDir), 0.0);
-    vec3 diffuse = diff * uLightColor;
-    float shadow = calculateShadow(vFragPos, norm, lightDir);
+    vec4 srgbBase = vColor * uTint;
+    vec4 albedoTex = vec4(1.0);
+    vec3 ormTex = vec3(1.0);
+    vec3 emissiveTex = vec3(1.0);
+    float metallic = 0.0;
+    float roughness = 0.8;
+    vec3 N = geomN;
 
-    vec3 lighting = ambient + (1.0 - shadow) * diffuse;
-    vec4 baseColor = vColor * uTint;
-    FragColor = vec4(lighting * baseColor.rgb, baseColor.a);
+    if (uMaterialFactors.w >= 0.5) {
+        albedoTex = texture(uAlbedoMap, vTexCoord);
+        ormTex = texture(uOrmMap, vTexCoord).rgb;
+        emissiveTex = texture(uEmissiveMap, vTexCoord).rgb;
+        metallic = clamp(uMaterialFactors.x * ormTex.b, 0.0, 1.0);
+        roughness = clamp(uMaterialFactors.y * ormTex.g, 0.045, 1.0);
+        if (uMaterialFactors.z > 0.5) {
+            N = illumoPerturbNormal(geomN, vFragPos, vTexCoord, texture(uNormalMap, vTexCoord).rgb);
+        }
+    }
+
+    vec3 albedo = illumoSrgbToLinear(srgbBase.rgb) * illumoSrgbToLinear(albedoTex.rgb);
+    float alpha = srgbBase.a * albedoTex.a;
+    float ao = clamp(ormTex.r, 0.0, 1.0);
+    vec3 V = illumoResolveViewVector(vFragPos, N);
+
+    float lDirLenSq = dot(uLightDir, uLightDir);
+    vec3 sunDir = lDirLenSq > 1e-8 ? (uLightDir * inversesqrt(lDirLenSq)) : vec3(0.0, 1.0, 0.0);
+    float shadow = calculateShadow(vFragPos, geomN, sunDir);
+
+    vec3 radiance = ao * max(uAmbientColor, vec3(0.0)) * albedo;
+    radiance += (1.0 - shadow) * illumoEvaluateDirectLight(
+        N, V, sunDir, max(uLightColor, vec3(0.0)), albedo, metallic, roughness);
+
+    int punctualCount = clamp(uLightCountsAndFlags.x, 0, 64);
+    for (int i = 0; i < punctualCount; ++i) {
+        IllumoPunctualLight light = uPunctualLights[i];
+        vec3 toLight = light.positionAndInvRange.xyz - vFragPos;
+        float distSq = dot(toLight, toLight);
+        float invRange = light.positionAndInvRange.w;
+        float rangeRatio2 = distSq * (invRange * invRange);
+        if (rangeRatio2 >= 1.0) {
+            continue;
+        }
+        float dist = sqrt(max(distSq, 1e-8));
+        vec3 L = dist > 1e-4 ? (toLight / dist) : vec3(0.0, 1.0, 0.0);
+        float window = max(1.0 - rangeRatio2 * rangeRatio2, 0.0);
+        float attenuation = (window * window) / max(distSq, 0.01);
+        float outerCos = light.radianceAndOuterCos.w;
+        if (outerCos > -1.5) {
+            float cd = dot(-L, light.directionAndAngleScale.xyz);
+            float spot = clamp((cd - outerCos) * light.directionAndAngleScale.w, 0.0, 1.0);
+            attenuation *= spot * spot;
+        }
+        if (attenuation > 0.0) {
+            float spotShadow = 0.0;
+            if (uShadowsEnabled != 0 && uShadowState.x >= 0.5 &&
+                (uLightCountsAndFlags.w & 4) != 0 &&
+                i == uLightCountsAndFlags.z) {
+                float spotNDotL = dot(geomN, L);
+                spotShadow = spotNDotL > 0.0
+                    ? illumoSampleShadowQuadrant(
+                        uShadowMap,
+                        vFragPos,
+                        geomN,
+                        spotNDotL,
+                        uAtlasLightMatrices[3],
+                        3,
+                        uShadowBias,
+                        uShadowSlopeScale,
+                        uShadowNormalOffset,
+                        uShadowPcf,
+                        true)
+                    : 1.0;
+            }
+            if (spotShadow < 1.0) {
+                radiance += (1.0 - spotShadow) * illumoEvaluateDirectLight(
+                    N,
+                    V,
+                    L,
+                    light.radianceAndOuterCos.rgb * attenuation,
+                    albedo,
+                    metallic,
+                    roughness);
+            }
+        }
+    }
+
+    if (uMaterialFactors.w >= 0.5) {
+        radiance += illumoSrgbToLinear(emissiveTex) * max(uEmissiveFactor, vec3(0.0));
+    }
+
+    vec3 outRgb = (uLightCountsAndFlags.w & 2) != 0
+        ? max(radiance, vec3(0.0))
+        : illumoLinearToSrgb(clamp(radiance, 0.0, 1.0));
+    FragColor = vec4(outRgb, alpha);
 
     if (uMotionBlurEnabled != 0) {
         vec2 currentNdc = vCurrentClip.xy / max(abs(vCurrentClip.w), 1e-5);

@@ -69,7 +69,7 @@ VulkanDevice::initialize(IRenderWindow* window,
     { reinterpret_cast<const unsigned char*>(identity), sizeof(identity) },
     { properties.pipelineCacheUUID, VK_UUID_SIZE },
   };
-  m_pipelineCacheKey = GpuShaderCache::key("vulkan-pipelines-1", keyParts);
+  m_pipelineCacheKey = GpuShaderCache::key("vulkan-pipelines-2", keyParts);
   std::vector<unsigned char> saved;
   m_shaderCache.load(m_pipelineCacheKey, &saved);
   VkPipelineCacheCreateInfo cache{};

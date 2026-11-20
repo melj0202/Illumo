@@ -3,8 +3,10 @@
 #include <Illumo/Rendering/IRenderWorld.h>
 #include <IllumoGuest/Frame.h>
 #include <IllumoGuest/RecordingBackend.h>
+#include <array>
 #include <deque>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // IRenderWorld for a guest granted HostRender: every call is validated with
@@ -37,6 +39,9 @@ public:
   // recorder, each frame it is drawn). Only changes travel, as a frame v7
   // Skybox operation. A cubemap without a ready host copy shows no sky.
   bool setSkybox(const RenderSkyboxDesc& skybox) override;
+  bool createLight(RenderLightId id, const RenderLightDesc& desc) override;
+  bool updateLight(RenderLightId id, const RenderLightDesc& desc) override;
+  bool destroyLight(RenderLightId id) override;
   // Starts a frame with no sky.
   void beginFrame() { m_skyShown = false; }
 
@@ -49,21 +54,35 @@ public:
   std::size_t waitingInstances() const { return m_waiting.size(); }
 
 private:
+  struct MaterialState
+  {
+    RenderMaterialDesc desc;
+    std::array<GuestResourceId, 4> sentTextures = { GuestResourceId{},
+                                                    GuestResourceId{},
+                                                    GuestResourceId{},
+                                                    GuestResourceId{} };
+    std::size_t users = 0;
+  };
   struct Instance
   {
     RenderInstanceDesc desc;
     bool waiting = false;
   };
+  GuestWorldMaterial buildWireMaterial(
+    const RenderMaterialDesc& desc,
+    std::array<GuestResourceId, 4>* outIds) const;
+  bool validMaterial(const RenderMaterialDesc& desc) const;
   GuestWorldOperation createOperation(RenderInstanceId id,
                                       const RenderInstanceDesc& desc,
                                       const GuestResourceId& mesh) const;
 
   const GuestRecordingBackend& m_backend;
-  // Material id to the number of instances using it, waiting ones included.
-  std::unordered_map<RenderMaterialId, std::size_t> m_materials;
+  std::unordered_map<RenderMaterialId, MaterialState> m_materials;
+  std::unordered_set<RenderLightId> m_lights;
   std::unordered_map<RenderInstanceId, Instance> m_instances;
   std::deque<GuestWorldOperation> m_queue;
   std::vector<RenderInstanceId> m_waiting;
+  std::uint64_t m_checkedTextureEpoch = 0;
   // This frame's sky, and the one the host last received.
   bool m_skyShown = false;
   GuestResourceId m_sky;

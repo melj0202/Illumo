@@ -1541,8 +1541,12 @@ testMeshVisualNonCastingStillReceivesShadows()
       shadowTextureBinds += 1;
     }
   }
-  testEqSize(
-    g, shadowDraws, 1u, "non-casting floor is excluded from depth pass");
+  const size_t expectedShadowDraws =
+    static_cast<size_t>(std::max(1, renderer.getShadowCascadeCount()));
+  testEqSize(g,
+             shadowDraws,
+             expectedShadowDraws,
+             "non-casting floor is excluded from depth pass");
   testEqSize(g,
              shadowTextureBinds,
              2u,

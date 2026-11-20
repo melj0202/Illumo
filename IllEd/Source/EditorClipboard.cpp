@@ -46,6 +46,10 @@ EditorClipboard::copy(const SceneInstance& scene,
         const SceneSprite* sprite = std::get_if<SceneSprite>(&component.value);
         if (mesh != nullptr) {
           addReferencedAsset(scene, mesh->asset, fragment);
+          addReferencedAsset(scene, mesh->albedoTexture, fragment);
+          addReferencedAsset(scene, mesh->normalTexture, fragment);
+          addReferencedAsset(scene, mesh->ormTexture, fragment);
+          addReferencedAsset(scene, mesh->emissiveTexture, fragment);
         }
         if (sprite != nullptr) {
           addReferencedAsset(scene, sprite->texture, fragment);

@@ -4,6 +4,7 @@
 #include <Illumo/Gui/GuiMenuShell.h>
 #include <Illumo/Gui/PanelSurfaces.h>
 #include <Illumo/Rendering/IRenderWindow.h>
+#include <Illumo/Rendering/RenderPipelineConfig.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <Illumo/Services/InputManager.h>
 #include <Illumo/Services/Logger.h>
@@ -300,6 +301,15 @@ MeshViewerScene::displaySettings() const
         settings.lightDirection[axis] = static_cast<float>(value.valueAsDouble);
       }
     }
+    const RenderPipelineConfig pipeline =
+      RenderPipelineConfig::fromEnv(ic->envVars);
+    settings.hdr = pipeline.hdrEnabled;
+    settings.tonemapper =
+      std::clamp(pipeline.tonemapper, 0, RenderPipelineConfig::kMaxTonemapper);
+    settings.exposure = pipeline.exposure;
+    settings.bloom = pipeline.bloomEnabled;
+    settings.bloomIntensity = pipeline.bloomIntensity;
+    settings.fxaa = pipeline.fxaaEnabled;
   }
   return settings;
 }

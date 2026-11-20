@@ -73,6 +73,14 @@ testConfigDefaults()
              "motionBlurAmount is 0.5");
     testTrue(
       g, env.getVar("motionBlurMax").value == "0.2", "motionBlurMax is 0.2");
+    testTrue(g, env.getVar("hdrEnabled").value == "1", "hdrEnabled is 1");
+    testTrue(g, env.getVar("tonemapper").value == "2", "tonemapper is 2 (AgX)");
+    testTrue(g, env.getVar("exposure").value == "0", "exposure is 0");
+    testTrue(g, env.getVar("bloomEnabled").value == "1", "bloomEnabled is 1");
+    testTrue(g,
+             env.getVar("bloomIntensity").value == "0.04",
+             "bloomIntensity is 0.04");
+    testTrue(g, env.getVar("fxaaEnabled").value == "1", "fxaaEnabled is 1");
   }
   std::filesystem::remove(path, error);
 }

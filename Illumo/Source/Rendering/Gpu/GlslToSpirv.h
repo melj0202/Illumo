@@ -47,13 +47,15 @@ enum class GlslBindingKind : unsigned char
   SamplerCube,
 };
 
-// One descriptor of set 0. Samplers index GlslProgram::samplerNames.
+// One descriptor of set 0. Samplers index GlslProgram::samplerNames;
+// NamedBlock entries record their OpenGL UBO binding point in blockSlot.
 struct GlslBinding
 {
   GlslBindingKind kind = GlslBindingKind::DefaultBlock;
   unsigned binding = 0;
   unsigned size = 0;
   unsigned sampler = 0;
+  unsigned blockSlot = 0;
   std::string name;
 };
 

@@ -53,6 +53,12 @@ MeshViewerConfig::ApplyDefaults(IEnvVars* environment)
     { "motionBlurEnabled", "1" },
     { "motionBlurAmount", "0.5" },
     { "motionBlurMax", "0.2" },
+    { "hdrEnabled", "1" },
+    { "tonemapper", "2" },
+    { "exposure", "0" },
+    { "bloomEnabled", "1" },
+    { "bloomIntensity", "0.04" },
+    { "fxaaEnabled", "1" },
   };
   for (const DefaultValue& defaultValue : defaults) {
     if (environment->getVar(defaultValue.name).value.empty()) {

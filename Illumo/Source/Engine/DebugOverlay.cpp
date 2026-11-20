@@ -4,6 +4,7 @@
 #include "DebugOverlayState.h"
 #include "FileTreeOverlay.h"
 #include "GamepadOverlay.h"
+#include "GraphicsSettingsOverlay.h"
 #include "Platform/PixelWindow.h"
 #include "ProfilerOverlay.h"
 #include <GLFW/glfw3.h>
@@ -60,6 +61,9 @@ DebugOverlay::start(IllumoContext& context)
   m_fileTreeOverlay->prepare(ic->renderer, ic->window, ic->camera);
   m_gamepadOverlay = std::make_unique<GamepadOverlay>();
   m_gamepadOverlay->prepare(ic->renderer, ic->window, ic->camera);
+  m_graphicsOverlay = std::make_unique<GraphicsSettingsOverlay>();
+  m_graphicsOverlay->prepare(ic->renderer, ic->window, ic->camera, ic->envVars);
+  m_graphicsOverlay->setDetachAvailable(PixelWindow::isPresentationSupported());
 
   // Required for GLString / SplashText screen-space drawing
   GLString::setRenderWindow(ic->window);
@@ -349,6 +353,59 @@ DebugOverlay::registerRendererCommands()
     "joystick_debug [on|off|toggle]",
     "Show or hide the gamepad and joystick debug overlay",
     { "on", "off", "toggle" });
+
+  ic->commandRegistry->RegisterCommand(
+    "graphics",
+    [this](const std::vector<std::string>& args) {
+      if (m_graphicsOverlay == nullptr) {
+        return;
+      }
+      if (args.size() > 1 ||
+          (!args.empty() && args[0] != "on" && args[0] != "off" &&
+           args[0] != "toggle" && args[0] != "window" && args[0] != "dock" &&
+           args[0] != "reset")) {
+        ic->commandLine->logError(
+          "Usage: graphics [on|off|toggle|window|dock|reset]");
+        return;
+      }
+      if (!args.empty()) {
+        if (args[0] == "on") {
+          m_graphicsOverlay->setOpen(true);
+        } else if (args[0] == "off") {
+          if (m_graphicsOverlay->isDetached()) {
+            closeDetachedGraphicsOverlay(false);
+          } else {
+            m_graphicsOverlay->setOpen(false);
+          }
+        } else if (args[0] == "toggle") {
+          m_graphicsOverlay->toggle();
+          processGraphicsWindowRequest();
+        } else if (args[0] == "window") {
+          if (!PixelWindow::isPresentationSupported()) {
+            ic->commandLine->logError(
+              "Separate windows are not supported on this platform");
+            return;
+          }
+          const float scale =
+            ic->renderer != nullptr ? ic->renderer->getUiScale() : 1.0f;
+          m_graphicsOverlay->requestDetach(scale);
+          processGraphicsWindowRequest();
+        } else if (args[0] == "dock") {
+          closeDetachedGraphicsOverlay(true);
+        } else if (args[0] == "reset") {
+          m_graphicsOverlay->resetDefaults();
+          ic->commandLine->logSuccess("Graphics settings reset to defaults");
+          return;
+        }
+      }
+      const char* state = m_graphicsOverlay->isDetached()
+                            ? "window"
+                            : (m_graphicsOverlay->isOpen() ? "on" : "off");
+      ic->commandLine->logSuccess(std::string("Graphics panel: ") + state);
+    },
+    "graphics [on|off|toggle|window|dock|reset]",
+    "Show, hide, pop out, or reset the live graphics test panel (F7)",
+    { "on", "off", "toggle", "window", "dock", "reset" });
 }
 
 void
@@ -366,6 +423,7 @@ DebugOverlay::unregisterRendererCommands()
   ic->commandRegistry->UnregisterCommand("asset_reload");
   ic->commandRegistry->UnregisterCommand("gamepad");
   ic->commandRegistry->UnregisterCommand("joystick_debug");
+  ic->commandRegistry->UnregisterCommand("graphics");
 }
 
 void
@@ -687,6 +745,15 @@ DebugOverlay::update(double dt)
       ic->inputManager->suppressKeyForFrame(key);
       continue;
     }
+    if (m_graphicsOverlay != nullptr &&
+        m_graphicsOverlay->handleKey(key,
+                                     action,
+                                     ic->commandLine->isOpen,
+                                     event.modifiers != 0,
+                                     ic->commandLine->HasKeyBinding("F7"))) {
+      ic->inputManager->suppressKeyForFrame(key);
+      continue;
+    }
 
     if (key == KeyCode::Grave && action == InputAction::Press) {
       // With the console in its own window, the console key sends it back
@@ -796,11 +863,41 @@ DebugOverlay::update(double dt)
   updateDetachedConsole();
   processConsoleWindowRequest();
 
+  if (m_graphicsOverlay != nullptr) {
+    ILLUMO_PROFILE_ZONE("DebugOverlay.graphicsOverlay");
+    const std::array<int, 2> dimensions = ic->window->getWindowDimensions();
+    const float rawScale =
+      ic->renderer != nullptr ? ic->renderer->getUiScale() : 1.0f;
+    const float scale = rawScale > 0.0f ? rawScale : 1.0f;
+    const std::array<double, 2> mouseCoords =
+      ic->inputManager->getMousePosition();
+    const bool leftDown =
+      ic->inputManager->isMouseButtonPressed(KeyCode::MouseLeft);
+    double* scroll = ic->inputManager->getMouseScrollOffset();
+    const bool consumed = m_graphicsOverlay->updateInWindow(
+      dt,
+      static_cast<float>(dimensions[0]) / scale,
+      static_cast<float>(dimensions[1]) / scale,
+      static_cast<float>(mouseCoords[0]) / scale,
+      static_cast<float>(mouseCoords[1]) / scale,
+      leftDown,
+      scroll,
+      ic->commandLine->isOpen);
+    if (consumed) {
+      ic->inputManager->suppressMouseForFrame();
+    }
+  }
+
+  processGraphicsWindowRequest();
+  updateDetachedGraphicsOverlay(dt);
+  processGraphicsWindowRequest();
+
   // Execute command queue
   if (ic->commandRegistry != nullptr) {
     ILLUMO_PROFILE_ZONE("DebugOverlay.executeCommands");
     ic->commandRegistry->ExecuteQueue();
   }
+  processGraphicsWindowRequest();
 }
 
 void
@@ -1039,11 +1136,212 @@ DebugOverlay::updateDetachedConsole()
 }
 
 void
+DebugOverlay::processGraphicsWindowRequest()
+{
+  if (m_graphicsOverlay == nullptr) {
+    return;
+  }
+  const GraphicsSettingsOverlay::WindowRequest request =
+    m_graphicsOverlay->takeWindowRequest();
+  switch (request.kind) {
+    case GraphicsSettingsOverlay::WindowRequestKind::Detach:
+      detachGraphicsOverlay(
+        request.originX, request.originY, request.width, request.height);
+      break;
+    case GraphicsSettingsOverlay::WindowRequestKind::Dock:
+      closeDetachedGraphicsOverlay(true);
+      break;
+    case GraphicsSettingsOverlay::WindowRequestKind::Close:
+      closeDetachedGraphicsOverlay(false);
+      break;
+    case GraphicsSettingsOverlay::WindowRequestKind::None:
+    default:
+      break;
+  }
+}
+
+void
+DebugOverlay::detachGraphicsOverlay(int originX,
+                                    int originY,
+                                    int width,
+                                    int height)
+{
+  if (m_graphicsOverlay == nullptr) {
+    return;
+  }
+  if (m_graphicsWindow != nullptr) {
+    m_graphicsWindow->focus();
+    return;
+  }
+  int windowX = 0;
+  int windowY = 0;
+  GLFWwindow* mainWindow = ic->window->getWindowInstance();
+  if (mainWindow != nullptr) {
+    glfwGetWindowPos(mainWindow, &windowX, &windowY);
+  }
+  const int clientWidth =
+    std::max(static_cast<int>(GraphicsSettingsOverlay::kMinWidth), width);
+  const int clientHeight =
+    std::max(static_cast<int>(GraphicsSettingsOverlay::kMinHeight), height);
+  std::string error;
+  const std::string appTitle = ic->commandLine != nullptr
+                                 ? ic->commandLine->getApplicationName()
+                                 : std::string("Illumo");
+  m_graphicsWindow = PixelWindow::create(appTitle + " graphics",
+                                         windowX + originX,
+                                         std::max(windowY + originY, 32),
+                                         clientWidth,
+                                         clientHeight,
+                                         &error);
+  if (m_graphicsWindow == nullptr) {
+    if (ic->commandLine != nullptr) {
+      ic->commandLine->logError("Could not pop out graphics panel: " + error);
+    }
+    return;
+  }
+  m_graphicsWindow->setMinimumSize(
+    static_cast<int>(GraphicsSettingsOverlay::kMinWidth),
+    static_cast<int>(GraphicsSettingsOverlay::kMinHeight));
+  if (m_graphicsCanvas == nullptr) {
+    m_graphicsCanvas = std::make_unique<SoftwareCanvas>();
+  }
+  int actualWidth = clientWidth;
+  int actualHeight = clientHeight;
+  m_graphicsWindow->clientSize(&actualWidth, &actualHeight);
+  m_graphicsDetachedMouseDown = false;
+  m_graphicsOverlay->setDetached(true, actualWidth, actualHeight);
+}
+
+void
+DebugOverlay::closeDetachedGraphicsOverlay(bool reopenInGame)
+{
+  if (m_graphicsOverlay == nullptr) {
+    m_graphicsWindow.reset();
+    m_graphicsDetachedMouseDown = false;
+    return;
+  }
+  if (m_graphicsWindow == nullptr && !m_graphicsOverlay->isDetached()) {
+    if (reopenInGame) {
+      m_graphicsOverlay->setOpen(true);
+    }
+    return;
+  }
+  m_graphicsWindow.reset();
+  m_graphicsDetachedMouseDown = false;
+  m_graphicsOverlay->setDetached(false, 0, 0);
+  m_graphicsOverlay->setOpen(reopenInGame);
+  if (ic != nullptr && ic->window != nullptr) {
+    GLFWwindow* mainWindow = ic->window->getWindowInstance();
+    if (mainWindow != nullptr) {
+      glfwFocusWindow(mainWindow);
+    }
+  }
+}
+
+void
+DebugOverlay::updateDetachedGraphicsOverlay(double dt)
+{
+  if (m_graphicsWindow == nullptr || m_graphicsOverlay == nullptr) {
+    return;
+  }
+  ILLUMO_PROFILE_ZONE("DebugOverlay.updateDetachedGraphics");
+  if (m_graphicsWindow->isCloseRequested()) {
+    closeDetachedGraphicsOverlay(false);
+    return;
+  }
+  m_graphicsOverlay->tickDetached(dt);
+
+  const std::vector<PixelWindow::Event> events = m_graphicsWindow->takeEvents();
+  for (const PixelWindow::Event& event : events) {
+    if (m_graphicsWindow == nullptr || !m_graphicsOverlay->isDetached()) {
+      break;
+    }
+    switch (event.kind) {
+      case PixelWindow::EventKind::Key:
+        if (event.key == KeyCode::F7 && event.action == InputAction::Press &&
+            event.modifiers == 0 &&
+            (ic->commandLine == nullptr ||
+             !ic->commandLine->HasKeyBinding("F7"))) {
+          closeDetachedGraphicsOverlay(false);
+        } else if (ic->commandLine != nullptr && event.key >= KeyCode::F1 &&
+                   event.key <= KeyCode::F12) {
+          const std::string keyName =
+            "F" + std::to_string(static_cast<int>(event.key) -
+                                 static_cast<int>(KeyCode::F1) + 1);
+          if (event.action == InputAction::Press &&
+              ic->commandLine->HasKeyBinding(keyName)) {
+            ic->commandLine->RunKeyBinding(keyName);
+          }
+        }
+        break;
+      case PixelWindow::EventKind::MouseButton:
+        if (event.key != KeyCode::MouseLeft) {
+          break;
+        }
+        if (event.action == InputAction::Press) {
+          m_graphicsDetachedMouseDown = true;
+          m_graphicsOverlay->handleDetachedMousePress(event.x, event.y);
+        } else if (event.action == InputAction::Release) {
+          m_graphicsDetachedMouseDown = false;
+          m_graphicsOverlay->handleDetachedMouseRelease();
+        }
+        break;
+      case PixelWindow::EventKind::MouseMove:
+        m_graphicsOverlay->handleDetachedMouseMove(
+          event.x, event.y, m_graphicsDetachedMouseDown);
+        break;
+      case PixelWindow::EventKind::Scroll:
+        m_graphicsOverlay->handleDetachedScroll(event.scroll);
+        break;
+      default:
+        break;
+    }
+  }
+  if (m_graphicsWindow == nullptr || !m_graphicsOverlay->isDetached()) {
+    return;
+  }
+
+  int width = 0;
+  int height = 0;
+  m_graphicsWindow->clientSize(&width, &height);
+  if (width <= 0 || height <= 0) {
+    return;
+  }
+  m_graphicsOverlay->setDetachedSize(width, height);
+  const bool resized =
+    m_graphicsCanvas->width() != width || m_graphicsCanvas->height() != height;
+  if (resized) {
+    m_graphicsCanvas->resize(width, height);
+  }
+  const bool rebuilt = m_graphicsOverlay->composeDetached();
+  if (rebuilt || resized) {
+    ILLUMO_PROFILE_ZONE("DebugOverlay.drawDetachedGraphics");
+    m_graphicsCanvas->clear(GuiToolPalette::panel);
+    m_graphicsCanvas->draw(m_graphicsOverlay->visual());
+    m_graphicsWindow->takeRepaintRequest();
+    m_graphicsWindow->present(m_graphicsCanvas->pixels(), width, height);
+  } else if (m_graphicsWindow->takeRepaintRequest()) {
+    m_graphicsWindow->present(m_graphicsCanvas->pixels(), width, height);
+  }
+}
+
+void
 DebugOverlay::stop()
 {
   if (ic != nullptr && ic->commandLine != nullptr) {
     closeDetachedConsole(false);
     ic->commandLine->setDetachAvailable(false);
+  }
+  closeDetachedGraphicsOverlay(false);
+  m_graphicsWindow.reset();
+  m_graphicsCanvas.reset();
+  if (m_graphicsOverlay != nullptr) {
+    m_graphicsOverlay->setDetachAvailable(false);
+    if (ic != nullptr && ic->renderer != nullptr) {
+      Renderer::ShadowDebugOverrides cleared{};
+      cleared.active = false;
+      ic->renderer->setShadowDebugOverrides(cleared);
+    }
   }
   m_consoleWindow.reset();
   m_consoleCanvas.reset();
@@ -1051,6 +1349,7 @@ DebugOverlay::stop()
   m_profilerOverlay.reset();
   m_fileTreeOverlay.reset();
   m_gamepadOverlay.reset();
+  m_graphicsOverlay.reset();
   if (m_profiler != nullptr) {
     m_profiler->setEnabled(false);
   }
@@ -1119,6 +1418,10 @@ DebugOverlay::dispatch(DrawList& scene)
   }
   if (m_gamepadOverlay != nullptr && m_gamepadOverlay->visible()) {
     m_gamepadOverlay->dispatch(scene);
+  }
+  if (m_graphicsOverlay != nullptr && m_graphicsOverlay->wantsInWindowDraw()) {
+    m_graphicsOverlay->flushPendingCompose();
+    scene.AddDrawable(&m_graphicsOverlay->visual(), RenderLayerId::Debug);
   }
   if (watermarkLabel && watermarkLabel->isVisible()) {
     scene.AddDrawable(watermarkLabel, RenderLayerId::Debug);

@@ -28,6 +28,15 @@ enum class RenderStyleId : unsigned char
   CanvasFade = 11,
   // Analytical unbounded implicit ground plane with procedural checkerboard
   GroundPlane = 12,
+  // Jimenez 13-tap bilinear downsample (with optional mip-0 Karis firefly
+  // weight)
+  BloomDownsample = 13,
+  // 3x3 tent filter additive upsample across HDR bloom mip pyramid
+  BloomUpsample = 14,
+  // Linear HDR composite: velocity motion blur, bloom mix, exposure, tonemapper
+  HdrComposite = 15,
+  // Single-pass luma edge-directed anti-aliasing resolve
+  FxaaResolve = 16,
   Count
 };
 

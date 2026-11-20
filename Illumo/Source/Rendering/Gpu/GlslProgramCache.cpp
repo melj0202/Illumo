@@ -122,6 +122,7 @@ serializeGlslProgram(const GlslProgram& program,
     writer.u32(binding.binding);
     writer.u32(binding.size);
     writer.u32(binding.sampler);
+    writer.u32(binding.blockSlot);
     writer.text(binding.name);
   }
   writer.u32(static_cast<std::uint32_t>(program.uniforms.size()));
@@ -154,7 +155,7 @@ deserializeGlslProgram(const std::vector<unsigned char>& bytes,
   GlslProgram parsed;
   std::uint32_t count = 0u;
   if (!reader.words(&parsed.vertexSpirv) ||
-      !reader.words(&parsed.fragmentSpirv) || !reader.count(17u, &count)) {
+      !reader.words(&parsed.fragmentSpirv) || !reader.count(21u, &count)) {
     return false;
   }
   parsed.bindings.resize(count);
@@ -163,7 +164,8 @@ deserializeGlslProgram(const std::vector<unsigned char>& bytes,
     if (!reader.u8(&kind) ||
         kind > static_cast<unsigned char>(GlslBindingKind::SamplerCube) ||
         !reader.u32(&binding.binding) || !reader.u32(&binding.size) ||
-        !reader.u32(&binding.sampler) || !reader.text(&binding.name)) {
+        !reader.u32(&binding.sampler) || !reader.u32(&binding.blockSlot) ||
+        !reader.text(&binding.name)) {
       return false;
     }
     binding.kind = static_cast<GlslBindingKind>(kind);

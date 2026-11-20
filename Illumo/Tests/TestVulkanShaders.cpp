@@ -9,7 +9,9 @@
 #include "Rendering/Gpu/GpuTexels.h"
 #include "Rendering/UniformNameTable.h"
 #include <Illumo/Foundation/BuildInfo.h>
+#include <Illumo/Rendering/IBackend.h>
 #include <Illumo/Rendering/ShaderPreprocessor.h>
+#include <Illumo/Testing/MockBackend.h>
 #include <Illumo/Testing/TestHelpers.h>
 #include <Illumo/Testing/TestRegistry.h>
 #include <array>
@@ -41,6 +43,17 @@ findBinding(const GlslProgram& program, GlslBindingKind kind)
 {
   for (const GlslBinding& binding : program.bindings) {
     if (binding.kind == kind) {
+      return &binding;
+    }
+  }
+  return nullptr;
+}
+
+static const GlslBinding*
+findNamedBlock(const GlslProgram& program, const std::string& name)
+{
+  for (const GlslBinding& binding : program.bindings) {
+    if (binding.kind == GlslBindingKind::NamedBlock && binding.name == name) {
       return &binding;
     }
   }
@@ -323,7 +336,8 @@ sameProgram(const GlslProgram& left, const GlslProgram& right)
     const GlslBinding& a = left.bindings[index];
     const GlslBinding& b = right.bindings[index];
     if (a.kind != b.kind || a.binding != b.binding || a.size != b.size ||
-        a.sampler != b.sampler || a.name != b.name) {
+        a.sampler != b.sampler || a.blockSlot != b.blockSlot ||
+        a.name != b.name) {
       return false;
     }
   }
@@ -568,12 +582,110 @@ testTexelConversion()
   return counters.failures;
 }
 
+static int
+testNamedUniformBlocks()
+{
+  TestCounters counters;
+  testSection("Vulkan GLSL: named UBO binding table and MockBackend slots");
+  testTrue(counters,
+           namedUniformBlockBinding(FrameUniformsBlockName) == 0 &&
+             namedUniformBlockBinding(LightUniformsBlockName) == 1 &&
+             namedUniformBlockBinding("CustomBlock") == -1 &&
+             namedUniformBlockBinding(nullptr) == -1,
+           "canonical UBO names map to binding points 0 and 1");
+  if (!initializeGlslCompiler()) {
+    testTrue(counters, false, "the compiler starts");
+    return counters.failures;
+  }
+  const std::string vertex =
+    "#version 330 core\n"
+    "layout (location = 0) in vec3 aPos;\n"
+    "layout (std140) uniform FrameUniforms { mat4 uVP; };\n"
+    "void main() { gl_Position = uVP * vec4(aPos, 1.0); }\n";
+  const std::string fragment =
+    "#version 330 core\n"
+    "layout (std140) uniform FrameUniforms { mat4 uVP; };\n"
+    "layout (std140) uniform LightUniforms { vec4 uLight0; vec4 uLight1; };\n"
+    "layout (std140) uniform CustomBlock { vec4 uExtra; };\n"
+    "uniform float uExposure;\n"
+    "layout (location = 0) out vec4 FragColor;\n"
+    "void main() {\n"
+    "  FragColor = (uLight0 + uLight1 + uExtra) * uExposure + uVP[0];\n"
+    "}\n";
+  GlslProgram program;
+  std::string error;
+  const bool compiled = compileGlslProgram(vertex, fragment, &program, &error);
+  testTrue(counters, compiled, ("multi-UBO shader compiles: " + error).c_str());
+  if (compiled) {
+    const GlslBinding* frameBlock =
+      findNamedBlock(program, FrameUniformsBlockName);
+    const GlslBinding* lightBlock =
+      findNamedBlock(program, LightUniformsBlockName);
+    const GlslBinding* customBlock = findNamedBlock(program, "CustomBlock");
+    const GlslBinding* defaultBlock =
+      findBinding(program, GlslBindingKind::DefaultBlock);
+    testTrue(counters,
+             frameBlock != nullptr && lightBlock != nullptr &&
+               customBlock != nullptr && defaultBlock != nullptr,
+             "all named blocks and the default block are reflected");
+    if (frameBlock != nullptr && lightBlock != nullptr &&
+        customBlock != nullptr && defaultBlock != nullptr) {
+      testTrue(counters,
+               frameBlock->blockSlot == FrameUniformsBindingPoint &&
+                 lightBlock->blockSlot == LightUniformsBindingPoint &&
+                 customBlock->blockSlot == 0u,
+               "FrameUniforms maps to 0, LightUniforms to 1, unknown to 0");
+      testTrue(counters,
+               frameBlock->binding != lightBlock->binding &&
+                 frameBlock->binding != defaultBlock->binding &&
+                 lightBlock->binding != defaultBlock->binding &&
+                 customBlock->binding != lightBlock->binding,
+               "every uniform block receives a distinct SPIR-V binding");
+    }
+    std::vector<unsigned char> serialized;
+    serializeGlslProgram(program, &serialized);
+    GlslProgram deserialized;
+    testTrue(counters,
+             deserializeGlslProgram(serialized, &deserialized) &&
+               sameProgram(program, deserialized),
+             "multi-UBO blockSlot survives GlslProgramCache serialization");
+  }
+  finalizeGlslCompiler();
+
+  MockBackend mock;
+  mock.Initialize();
+  const BufferHandle ubo0 = mock.CreateBuffer(BufferUsage::Uniform, 256);
+  const BufferHandle ubo1 = mock.CreateBuffer(BufferUsage::Uniform, 3392);
+  RenderCommand bind0;
+  bind0.commandType = CommandType::BindUniformBuffer;
+  bind0.bindUniformBuffer = { ubo0, FrameUniformsBindingPoint };
+  RenderCommand bind1;
+  bind1.commandType = CommandType::BindUniformBuffer;
+  bind1.bindUniformBuffer = { ubo1, LightUniformsBindingPoint };
+  RenderCommand bindBad;
+  bindBad.commandType = CommandType::BindUniformBuffer;
+  bindBad.bindUniformBuffer = { ubo1, 36u };
+  mock.PushToCommandQueue(bind0);
+  mock.PushToCommandQueue(bind1);
+  mock.PushToCommandQueue(bindBad);
+  mock.SubmitCommandQueue();
+  testTrue(counters,
+           mock.getBoundUniformBuffer(0u) == ubo0 &&
+             mock.getBoundUniformBuffer(1u) == ubo1 &&
+             mock.getRejectedStaleCommandCount() == 1u,
+           "MockBackend tracks UBO slots 0 and 1 and rejects slot >= 36");
+  mock.Shutdown();
+  return counters.failures;
+}
+
 void
 registerVulkanShaderTests(IllumoTestRegistry& registry)
 {
   registry.add("Illumo.Vulkan.PrepareGlsl", []() { return testPrepareGlsl(); });
   registry.add("Illumo.Vulkan.ProgramSemantics",
                []() { return testCompileLinksLikeOpenGl(); });
+  registry.add("Illumo.Vulkan.NamedUniformBlocks",
+               []() { return testNamedUniformBlocks(); });
   registry.add("Illumo.Vulkan.EngineShadersCompile",
                []() { return testEngineShadersCompile(); });
   registry.add("Illumo.Vulkan.TexelConversion",

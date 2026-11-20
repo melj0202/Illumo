@@ -12,6 +12,10 @@
 // The std140 block in the instanced shaders is three mat4 and one vec4.
 static_assert(sizeof(Renderer::FrameUniforms) == 208,
               "FrameUniforms must match the std140 shader block");
+static_assert(sizeof(Renderer::GpuPunctualLight) == 48,
+              "GpuPunctualLight must match the std140 light struct");
+static_assert(sizeof(Renderer::LightUniforms) == 3376,
+              "LightUniforms must match the std140 shader block");
 
 static bool
 check(bool condition, const char* message)

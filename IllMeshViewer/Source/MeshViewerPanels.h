@@ -55,6 +55,12 @@ struct MeshViewerDisplaySettings
   float shadowBias = 0.001f;
   bool motionBlur = true;
   float motionBlurAmount = 0.5f;
+  bool hdr = true;
+  int tonemapper = 2;
+  float exposure = 0.0f;
+  bool bloom = true;
+  float bloomIntensity = 0.04f;
+  bool fxaa = true;
 };
 
 // One change the Display panel asks for: a display toggle the module owns,
@@ -102,7 +108,8 @@ private:
   enum class ControlKind
   {
     Toggle,
-    Slider
+    Slider,
+    Choice
   };
   struct Control
   {
@@ -115,6 +122,9 @@ private:
     float minimum = 0.0f;
     float maximum = 1.0f;
     int digits = 2;
+    int selected = 0;
+    std::vector<std::string> options;
+    std::vector<std::string> values;
     GuiToolRect rect;
   };
   struct Section
@@ -150,6 +160,12 @@ private:
                   float minimum,
                   float maximum,
                   int digits,
+                  float y);
+  float addChoice(const std::string& label,
+                  const std::string& key,
+                  int selected,
+                  const std::vector<std::string>& options,
+                  const std::vector<std::string>& values,
                   float y);
   int controlAt(float x, float y) const;
   // The edits a slider at a new value makes (ambient writes three keys).

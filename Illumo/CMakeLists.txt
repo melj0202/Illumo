@@ -431,10 +431,25 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
   add_test(NAME Illumo.Gpu.BackendParity COMMAND IllumoGpuTests backendparity
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
+  add_test(NAME Illumo.Gpu.PbrPunctualLightsParity
+    COMMAND IllumoGpuTests pbrparity
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
+  add_test(NAME Illumo.Gpu.ShadowAtlasParity
+    COMMAND IllumoGpuTests shadowatlasparity
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
+  add_test(NAME Illumo.Gpu.HdrBloomAgxParity
+    COMMAND IllumoGpuTests hdrbloomagxparity
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
+  add_test(NAME Illumo.Gpu.HdrForwardBench
+    COMMAND IllumoGpuTests hdrbench
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:IllumoGpuTests>")
   set_tests_properties(Illumo.Gpu.InstancingParity Illumo.Gpu.RenderWorldParity
     Illumo.Gpu.VulkanInstancingParity Illumo.Gpu.VulkanRenderWorldParity
-    Illumo.Gpu.BackendParity
+    Illumo.Gpu.BackendParity Illumo.Gpu.PbrPunctualLightsParity
+    Illumo.Gpu.ShadowAtlasParity Illumo.Gpu.HdrBloomAgxParity
     PROPERTIES LABELS "IllumoGpu" SKIP_RETURN_CODE 77 TIMEOUT 60)
+  set_tests_properties(Illumo.Gpu.HdrForwardBench
+    PROPERTIES LABELS "IllumoGpu;IllumoBenchmark" SKIP_RETURN_CODE 77 TIMEOUT 120)
 
   add_executable(IllumoPhysicsTests
     Tests/Physics/TestPhysicsMain.cpp

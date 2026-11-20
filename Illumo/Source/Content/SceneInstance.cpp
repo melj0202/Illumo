@@ -42,10 +42,13 @@ public:
 
 // A visual's render world instance, when it has one, and what the world last
 // received for it.
-struct SceneWorldBinding
+struct SceneInstance::WorldBinding
 {
   MeshAssetInfo mesh;
   ColorRgba tint{ 255, 255, 255, 255 };
+  bool hasCustomMaterial = false;
+  RenderMaterialDesc material;
+  RenderMaterialId customMaterialId = 0;
   RenderInstanceId id = 0;
   std::array<float, 16> sent{};
   bool sentVisible = true;
@@ -58,10 +61,13 @@ struct SceneInstance::Record
   std::vector<std::unique_ptr<MeshVisual>> visuals;
   std::vector<bool> castShadows;
   // Parallel to visuals; mesh is valid only for lit mesh-asset visuals.
-  std::vector<SceneWorldBinding> world;
+  std::vector<WorldBinding> world;
   std::vector<std::unique_ptr<GroundPlaneVisual>> groundPlanes;
   std::unique_ptr<PickProxy> proxy;
   bool hasLight = false;
+  RenderLightId worldLightId = 0;
+  RenderLightDesc sentLight{};
+  bool hasSentLight = false;
 };
 
 struct SceneInstance::AssetSlot
@@ -244,6 +250,9 @@ SceneInstance::load(const SceneDocument& document,
          entry.second->groundPlanes) {
       applyLightingTo(*plane);
     }
+    if (entry.second->hasLight || entry.second->worldLightId != 0) {
+      bindWorldLight(*entry.second);
+    }
   }
   applyWorldEnvironment();
   touch();
@@ -308,6 +317,160 @@ sameLighting(const SceneLighting& a, const SceneLighting& b)
          a.shadows == b.shadows && a.sourceId == b.sourceId;
 }
 
+static bool
+sameMaterialDesc(const RenderMaterialDesc& a, const RenderMaterialDesc& b)
+{
+  return a.tint == b.tint && a.receivesShadow == b.receivesShadow &&
+         a.castsShadow == b.castsShadow && a.blend == b.blend &&
+         a.albedoTexture == b.albedoTexture &&
+         a.normalTexture == b.normalTexture &&
+         a.metallicRoughnessTexture == b.metallicRoughnessTexture &&
+         a.emissiveTexture == b.emissiveTexture && a.metallic == b.metallic &&
+         a.roughness == b.roughness && a.emissiveFactor == b.emissiveFactor;
+}
+
+static bool
+sameLightDesc(const RenderLightDesc& a, const RenderLightDesc& b)
+{
+  return a.kind == b.kind && a.position == b.position &&
+         a.direction == b.direction && a.color == b.color &&
+         a.intensity == b.intensity && a.range == b.range &&
+         a.innerConeCos == b.innerConeCos && a.outerConeCos == b.outerConeCos &&
+         a.castsShadow == b.castsShadow && a.visible == b.visible;
+}
+
+RenderMaterialId
+SceneInstance::acquireWorldMaterial(const RenderMaterialDesc& desc)
+{
+  if (m_world == nullptr) {
+    return 0;
+  }
+  for (CustomMaterialSlot& slot : m_customMaterials) {
+    if (sameMaterialDesc(slot.desc, desc)) {
+      ++slot.refs;
+      return slot.id;
+    }
+  }
+  const RenderMaterialId id = nextRenderWorldId();
+  if (!m_world->createMaterial(id, desc)) {
+    return 0;
+  }
+  CustomMaterialSlot slot;
+  slot.id = id;
+  slot.desc = desc;
+  slot.refs = 1;
+  m_customMaterials.push_back(slot);
+  return id;
+}
+
+void
+SceneInstance::releaseWorldMaterial(RenderMaterialId id)
+{
+  if (id == 0) {
+    return;
+  }
+  for (size_t index = 0; index < m_customMaterials.size(); ++index) {
+    CustomMaterialSlot& slot = m_customMaterials[index];
+    if (slot.id != id) {
+      continue;
+    }
+    if (slot.refs > 1) {
+      --slot.refs;
+      return;
+    }
+    if (m_world != nullptr) {
+      m_world->destroyMaterial(slot.id);
+    }
+    m_customMaterials.erase(m_customMaterials.begin() +
+                            static_cast<std::ptrdiff_t>(index));
+    return;
+  }
+}
+
+bool
+SceneInstance::resolvePunctualLight(const Record& entry,
+                                    RenderLightDesc* out) const
+{
+  if (out == nullptr || m_state.worldMode == SceneWorldMode::World2D ||
+      !entry.hasLight || !entry.node.enabled) {
+    return false;
+  }
+  const SceneComponent* component = entry.node.find(SceneComponentType::Light);
+  if (component == nullptr) {
+    return false;
+  }
+  const SceneLight& light = std::get<SceneLight>(component->value);
+  if (light.kind == SceneLightKind::Directional) {
+    return false;
+  }
+  Matrix4 world(1.0f);
+  m_graph.getWorldTransform(entry.handle, &world);
+  const Vector3 position(world[3]);
+  Vector3 down(world * glm::vec4(0.0f, -1.0f, 0.0f, 0.0f));
+  const float downLength = glm::length(down);
+  if (std::isfinite(downLength) && downLength >= 1.0e-6f) {
+    down = down / downLength;
+  } else {
+    down = Vector3(0.0f, -1.0f, 0.0f);
+  }
+  RenderLightDesc desc;
+  desc.kind = light.kind == SceneLightKind::Spot ? RenderLightKind::Spot
+                                                 : RenderLightKind::Point;
+  desc.position = { position.x, position.y, position.z };
+  desc.direction = { down.x, down.y, down.z };
+  desc.color = { light.color.x, light.color.y, light.color.z };
+  desc.intensity = light.intensity;
+  desc.range = light.range;
+  desc.innerConeCos = std::cos(glm::radians(light.innerAngleDegrees));
+  desc.outerConeCos = std::cos(glm::radians(light.outerAngleDegrees));
+  desc.castsShadow = light.shadows && m_pipelineConfig.shadowsEnabled;
+  desc.visible = m_graph.isEffectivelyVisible(entry.handle) &&
+                 m_pipelineConfig.lightingEnabled;
+  *out = desc;
+  return true;
+}
+
+void
+SceneInstance::bindWorldLight(Record& entry)
+{
+  if (m_world == nullptr) {
+    return;
+  }
+  RenderLightDesc desc;
+  if (!resolvePunctualLight(entry, &desc)) {
+    unbindWorldLight(entry);
+    return;
+  }
+  if (entry.worldLightId == 0) {
+    const RenderLightId id = nextRenderWorldId();
+    if (m_world->createLight(id, desc)) {
+      entry.worldLightId = id;
+      entry.sentLight = desc;
+      entry.hasSentLight = true;
+    }
+    return;
+  }
+  if (!entry.hasSentLight || !sameLightDesc(desc, entry.sentLight)) {
+    if (m_world->updateLight(entry.worldLightId, desc)) {
+      entry.sentLight = desc;
+      entry.hasSentLight = true;
+    }
+  }
+}
+
+void
+SceneInstance::unbindWorldLight(Record& entry)
+{
+  if (entry.worldLightId == 0) {
+    return;
+  }
+  if (m_world != nullptr) {
+    m_world->destroyLight(entry.worldLightId);
+  }
+  entry.worldLightId = 0;
+  entry.hasSentLight = false;
+}
+
 void
 SceneInstance::setRenderWorld(IRenderWorld* world)
 {
@@ -320,6 +483,10 @@ SceneInstance::setRenderWorld(IRenderWorld* world)
          m_records) {
       unbindWorld(*entry.second);
     }
+    for (CustomMaterialSlot& slot : m_customMaterials) {
+      m_world->destroyMaterial(slot.id);
+    }
+    m_customMaterials.clear();
     for (RenderMaterialId& material : m_worldMaterials) {
       m_world->destroyMaterial(material);
       material = 0;
@@ -339,6 +506,7 @@ SceneInstance::setRenderWorld(IRenderWorld* world)
   applyWorldEnvironment();
   for (std::pair<const std::string, std::unique_ptr<Record>>& entry :
        m_records) {
+    bindWorldLight(*entry.second);
     for (size_t index = 0; index < entry.second->visuals.size(); ++index) {
       bindWorld(*entry.second, index);
     }
@@ -360,7 +528,7 @@ matrixValues(const Matrix4& matrix)
 void
 SceneInstance::bindWorld(Record& entry, size_t index)
 {
-  SceneWorldBinding& binding = entry.world[index];
+  WorldBinding& binding = entry.world[index];
   MeshVisual& visual = *entry.visuals[index];
   if (m_world == nullptr || binding.id != 0 || !binding.mesh.isValid()) {
     return;
@@ -370,9 +538,17 @@ SceneInstance::bindWorld(Record& entry, size_t index)
   RenderInstanceDesc desc;
   desc.mesh = binding.mesh.handle;
   desc.indexCount = binding.mesh.indexCount;
-  // MeshVisual shades with vertex colour times its tint; the instance tint
-  // does the same against a white material.
-  desc.material = m_worldMaterials[entry.castShadows[index] ? 0 : 1];
+  if (binding.hasCustomMaterial) {
+    binding.customMaterialId = acquireWorldMaterial(binding.material);
+    if (binding.customMaterialId == 0) {
+      return;
+    }
+    desc.material = binding.customMaterialId;
+  } else {
+    // MeshVisual shades with vertex colour times its tint; the instance tint
+    // does the same against a white material.
+    desc.material = m_worldMaterials[entry.castShadows[index] ? 0 : 1];
+  }
   desc.world = matrixValues(world * visual.getModelMatrix());
   desc.tint = { static_cast<float>(binding.tint.r) / 255.0f,
                 static_cast<float>(binding.tint.g) / 255.0f,
@@ -383,6 +559,10 @@ SceneInstance::bindWorld(Record& entry, size_t index)
   desc.localBounds = { binding.mesh.minBounds, binding.mesh.maxBounds };
   const RenderInstanceId id = nextRenderWorldId();
   if (!m_world->createInstance(id, desc)) {
+    if (binding.customMaterialId != 0) {
+      releaseWorldMaterial(binding.customMaterialId);
+      binding.customMaterialId = 0;
+    }
     return;
   }
   m_graph.invalidateSnapshots();
@@ -395,8 +575,9 @@ SceneInstance::bindWorld(Record& entry, size_t index)
 void
 SceneInstance::unbindWorld(Record& entry)
 {
+  unbindWorldLight(entry);
   for (size_t index = 0; index < entry.world.size(); ++index) {
-    SceneWorldBinding& binding = entry.world[index];
+    WorldBinding& binding = entry.world[index];
     if (binding.id == 0) {
       continue;
     }
@@ -404,12 +585,17 @@ SceneInstance::unbindWorld(Record& entry)
       m_world->destroyInstance(binding.id);
     }
     binding.id = 0;
+    if (binding.customMaterialId != 0) {
+      releaseWorldMaterial(binding.customMaterialId);
+      binding.customMaterialId = 0;
+    }
     m_graph.invalidateSnapshots();
     entry.visuals[index]->setVisible(true);
   }
 }
 
-// Sends only transforms and visibility that changed since the last frame.
+// Sends only transforms, visibility and punctual lights that changed since the
+// last frame.
 void
 SceneInstance::syncWorld()
 {
@@ -420,11 +606,14 @@ SceneInstance::syncWorld()
   for (std::pair<const std::string, std::unique_ptr<Record>>& pair :
        m_records) {
     Record& entry = *pair.second;
+    if (entry.hasLight || entry.worldLightId != 0) {
+      bindWorldLight(entry);
+    }
     Matrix4 world(1.0f);
     bool resolved = false;
     bool visible = false;
     for (size_t index = 0; index < entry.world.size(); ++index) {
-      SceneWorldBinding& binding = entry.world[index];
+      WorldBinding& binding = entry.world[index];
       if (binding.id == 0) {
         continue;
       }
@@ -464,6 +653,9 @@ SceneInstance::setPipelineConfig(const RenderPipelineConfig& config)
     for (std::unique_ptr<GroundPlaneVisual>& plane :
          entry.second->groundPlanes) {
       applyLightingTo(*plane);
+    }
+    if (entry.second->hasLight || entry.second->worldLightId != 0) {
+      bindWorldLight(*entry.second);
     }
   }
   applyWorldEnvironment();
@@ -548,6 +740,9 @@ SceneInstance::update()
          entry.second->groundPlanes) {
       applyLightingTo(*plane);
     }
+    if (entry.second->hasLight || entry.second->worldLightId != 0) {
+      bindWorldLight(*entry.second);
+    }
   }
   applyWorldEnvironment();
 }
@@ -569,6 +764,9 @@ SceneInstance::resolveLighting() const
     const SceneComponent* component =
       entry->node.find(SceneComponentType::Light);
     const SceneLight& light = std::get<SceneLight>(component->value);
+    if (light.kind != SceneLightKind::Directional) {
+      continue;
+    }
     Matrix4 world(1.0f);
     m_graph.getWorldTransform(handle, &world);
     Vector3 up = Vector3(world * glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
@@ -805,11 +1003,11 @@ SceneInstance::buildNode(const SceneNode& node,
 void
 SceneInstance::destroyAttachments(Record& entry)
 {
+  unbindWorld(entry);
+  entry.world.clear();
   if (entry.visuals.empty() && entry.groundPlanes.empty() && !entry.proxy) {
     return;
   }
-  unbindWorld(entry);
-  entry.world.clear();
   m_graph.invalidateSnapshots();
   for (std::unique_ptr<MeshVisual>& visual : entry.visuals) {
     m_graph.removeAttachment(entry.handle, visual.get());
@@ -940,14 +1138,20 @@ bool
 SceneInstance::configureVisual(MeshVisual& visual,
                                const SceneComponent& component,
                                bool* castShadows,
-                               MeshAssetInfo* worldMesh,
-                               ColorRgba* worldTint)
+                               WorldBinding* worldBinding)
 {
   visual.clearPrimitives();
   visual.clearMeshAsset();
   visual.setModelMatrix(Matrix4(1.0f));
+  visual.setAlbedoTexture(TextureHandle{});
+  visual.setNormalTexture(TextureHandle{});
+  visual.setMetallicRoughnessTexture(TextureHandle{});
+  visual.setEmissiveTexture(TextureHandle{});
+  visual.setMetallic(0.0f);
+  visual.setRoughness(0.8f);
+  visual.setEmissiveFactor({ 0.0f, 0.0f, 0.0f });
   *castShadows = true;
-  *worldMesh = MeshAssetInfo{};
+  *worldBinding = WorldBinding{};
   if (const ScenePrimitive* primitive =
         std::get_if<ScenePrimitive>(&component.value)) {
     visual.setModelMatrix(glm::scale(Matrix4(1.0f), primitive->extent));
@@ -961,8 +1165,8 @@ SceneInstance::configureVisual(MeshVisual& visual,
         shared.isValid() ? m_assets->getMeshInfo(shared) : MeshAssetInfo{};
       if (info.isValid()) {
         visual.setMeshAsset(info, primitive->color);
-        *worldMesh = info;
-        *worldTint = primitive->color;
+        worldBinding->mesh = info;
+        worldBinding->tint = primitive->color;
       } else {
         MeshData mesh;
         buildScenePrimitiveMesh(primitive->shape, mesh);
@@ -977,8 +1181,64 @@ SceneInstance::configureVisual(MeshVisual& visual,
     AssetSlot* slot = assetSlot(mesh->asset);
     if (slot != nullptr && !slot->failed) {
       visual.setMeshAsset(slot->meshInfo, mesh->tint);
-      *worldMesh = slot->meshInfo;
-      *worldTint = mesh->tint;
+      worldBinding->mesh = slot->meshInfo;
+      worldBinding->tint = mesh->tint;
+
+      TextureHandle albedoTex{};
+      TextureHandle normalTex{};
+      TextureHandle ormTex{};
+      TextureHandle emissiveTex{};
+      if (!mesh->albedoTexture.empty()) {
+        AssetSlot* texSlot = assetSlot(mesh->albedoTexture);
+        if (texSlot != nullptr && !texSlot->failed) {
+          albedoTex = texSlot->texture;
+        }
+      }
+      if (!mesh->normalTexture.empty()) {
+        AssetSlot* texSlot = assetSlot(mesh->normalTexture);
+        if (texSlot != nullptr && !texSlot->failed) {
+          normalTex = texSlot->texture;
+        }
+      }
+      if (!mesh->ormTexture.empty()) {
+        AssetSlot* texSlot = assetSlot(mesh->ormTexture);
+        if (texSlot != nullptr && !texSlot->failed) {
+          ormTex = texSlot->texture;
+        }
+      }
+      if (!mesh->emissiveTexture.empty()) {
+        AssetSlot* texSlot = assetSlot(mesh->emissiveTexture);
+        if (texSlot != nullptr && !texSlot->failed) {
+          emissiveTex = texSlot->texture;
+        }
+      }
+      visual.setAlbedoTexture(albedoTex);
+      visual.setNormalTexture(normalTex);
+      visual.setMetallicRoughnessTexture(ormTex);
+      visual.setEmissiveTexture(emissiveTex);
+      visual.setMetallic(mesh->metallic);
+      visual.setRoughness(mesh->roughness);
+      visual.setEmissiveFactor(
+        { mesh->emissive.x, mesh->emissive.y, mesh->emissive.z });
+
+      const bool customPbr =
+        albedoTex.isValid() || normalTex.isValid() || ormTex.isValid() ||
+        emissiveTex.isValid() || mesh->metallic != 0.0f ||
+        mesh->roughness != 0.8f || mesh->emissive != Vector3(0.0f);
+      if (customPbr) {
+        worldBinding->hasCustomMaterial = true;
+        worldBinding->material.receivesShadow = true;
+        worldBinding->material.castsShadow = mesh->castShadows;
+        worldBinding->material.albedoTexture = albedoTex;
+        worldBinding->material.normalTexture = normalTex;
+        worldBinding->material.metallicRoughnessTexture = ormTex;
+        worldBinding->material.emissiveTexture = emissiveTex;
+        worldBinding->material.metallic = mesh->metallic;
+        worldBinding->material.roughness = mesh->roughness;
+        worldBinding->material.emissiveFactor = { mesh->emissive.x,
+                                                  mesh->emissive.y,
+                                                  mesh->emissive.z };
+      }
     } else {
       visual.addSolidCube(glm::vec3(0.0f), glm::vec3(0.5f), kPlaceholderColor);
     }
@@ -1055,9 +1315,8 @@ SceneInstance::buildAttachments(Record& entry)
     }
     std::unique_ptr<MeshVisual> visual = std::make_unique<MeshVisual>();
     bool castShadows = true;
-    SceneWorldBinding binding;
-    configureVisual(
-      *visual, component, &castShadows, &binding.mesh, &binding.tint);
+    WorldBinding binding;
+    configureVisual(*visual, component, &castShadows, &binding);
     if (m_renderer != nullptr) {
       visual->prepare(m_renderer);
     }
@@ -1067,6 +1326,9 @@ SceneInstance::buildAttachments(Record& entry)
     entry.castShadows.push_back(castShadows);
     entry.world.push_back(binding);
     bindWorld(entry, entry.visuals.size() - 1);
+  }
+  if (entry.hasLight) {
+    bindWorldLight(entry);
   }
   if (entry.visuals.empty() && entry.groundPlanes.empty() &&
       m_options.pickProxies) {
@@ -1120,18 +1382,18 @@ SceneInstance::reconfigureAttachments(Record& entry,
   unbindWorld(entry);
   for (size_t index = 0; index < visuals.size(); ++index) {
     bool castShadows = true;
-    SceneWorldBinding& binding = entry.world[index];
-    configureVisual(*entry.visuals[index],
-                    *visuals[index],
-                    &castShadows,
-                    &binding.mesh,
-                    &binding.tint);
+    WorldBinding& binding = entry.world[index];
+    configureVisual(
+      *entry.visuals[index], *visuals[index], &castShadows, &binding);
     entry.castShadows[index] = castShadows;
     applyLightingTo(*entry.visuals[index], castShadows);
     bindWorld(entry, index);
   }
   m_lightingDirty = m_lightingDirty || hasLight || entry.hasLight;
   entry.hasLight = hasLight;
+  if (entry.hasLight) {
+    bindWorldLight(entry);
+  }
   return true;
 }
 void

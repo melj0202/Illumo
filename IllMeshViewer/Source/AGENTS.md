@@ -61,13 +61,16 @@ the platform seam. `IllMeshViewerCore` stays a native library for the
   env vars below stay the only source of those settings. Display toggles
   are stored in `showGrid`, `showAxes`, `showSkybox` and `showWireframe`. A
   camera drag belongs to the viewport only when it began there.
-- Persist lighting, shadows, and motion blur in EnvVars (`lightingEnabled`,
-  `lightDir*`, `lightColor*`, `ambientColor*`, `shadowsEnabled`,
-  `shadowMapSize`, `shadowRadius`, `lightDistance`, `shadowBias`,
-  `shadowSlopeScale`, `shadowNormalOffset`, `shadowPcf`,
-  `motionBlurEnabled`, `motionBlurAmount`, `motionBlurMax`) and apply them
-  through `MeshVisual` setters. Do not have `MeshVisual` read EnvVars, and
-  do not bind EnvVars directly as shader uniforms.
+- Persist lighting, shadows, motion blur, and HDR post-processing in EnvVars
+  (`lightingEnabled`, `lightDir*`, `lightColor*`, `ambientColor*`,
+  `shadowsEnabled`, `shadowMapSize`, `shadowRadius`, `lightDistance`,
+  `shadowBias`, `shadowSlopeScale`, `shadowNormalOffset`, `shadowPcf`,
+  `motionBlurEnabled`, `motionBlurAmount`, `motionBlurMax`, `hdrEnabled`,
+  `tonemapper`, `exposure`, `bloomEnabled`, `bloomIntensity`, `fxaaEnabled`);
+  apply mesh lighting/shadow/motion settings through `MeshVisual` setters, while
+  Display wire version 9 synchronizes host post-processing settings (D-E43). Do
+  not have `MeshVisual` read EnvVars, and do not bind EnvVars directly as
+  shader uniforms.
 - Main-thread affine.
 - `IllMeshViewer.Wasm.Package` (`IllMeshViewer/Tests/Wasm/TestViewerPackage.cpp`)
   drives the real package through the generic host: launch mesh as one

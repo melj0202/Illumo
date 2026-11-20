@@ -314,6 +314,16 @@ GuestRecordingBackend::hostTexture(TextureHandle handle) const
   return texture.id;
 }
 
+bool
+GuestRecordingBackend::isUsable2DTexture(TextureHandle handle) const
+{
+  if (!IsTextureValid(handle)) {
+    return false;
+  }
+  const Texture& texture = m_textures.at(handle.slot);
+  return !texture.cubemap && !texture.depthOnly;
+}
+
 std::uint32_t
 GuestRecordingBackend::currentTarget() const
 {
@@ -1576,19 +1586,21 @@ GuestRecordingBackend::consume(const RenderCommand& command)
           return fail("Invalid guest canvas fade");
         }
         m_canvasFade = vector;
-      } else {
+      } else if (std::strcmp(value.name, "uEmissiveFactor") != 0) {
         return fail("Unsupported guest vector uniform");
       }
       break;
     }
     case CommandType::SetUniformVec4:
-      if (std::strcmp(command.uniformVec4.name, "uTint") != 0) {
+      if (std::strcmp(command.uniformVec4.name, "uTint") == 0) {
+        m_lighting.tint = { command.uniformVec4.x,
+                            command.uniformVec4.y,
+                            command.uniformVec4.z,
+                            command.uniformVec4.w };
+      } else if (std::strcmp(command.uniformVec4.name, "uMaterialFactors") !=
+                 0) {
         return fail("Unsupported guest vector uniform");
       }
-      m_lighting.tint = { command.uniformVec4.x,
-                          command.uniformVec4.y,
-                          command.uniformVec4.z,
-                          command.uniformVec4.w };
       break;
     case CommandType::SetUniformFloat: {
       const CmdUniformFloat& value = command.uniformFloat;

@@ -11,6 +11,13 @@
 // anything when they are rejected.
 using RenderMaterialId = uint32_t;
 using RenderInstanceId = uint32_t;
+using RenderLightId = uint32_t;
+
+enum class RenderLightKind : unsigned char
+{
+  Point = 0,
+  Spot = 1,
+};
 
 // An id no other caller in this process has taken, for callers that share one
 // world (one guest world serves every scene of its modules). Main-thread only.
@@ -29,6 +36,28 @@ struct RenderMaterialDesc
   // Blended instances draw one at a time, after opaque ones, in creation
   // order.
   bool blend = false;
+  TextureHandle albedoTexture{};
+  TextureHandle normalTexture{};
+  // R: ambient occlusion, G: perceptual roughness, B: metallic.
+  TextureHandle metallicRoughnessTexture{};
+  TextureHandle emissiveTexture{};
+  float metallic = 0.0f;
+  float roughness = 0.8f;
+  std::array<float, 3> emissiveFactor{ 0.0f, 0.0f, 0.0f };
+};
+
+struct RenderLightDesc
+{
+  RenderLightKind kind = RenderLightKind::Point;
+  std::array<float, 3> position{ 0.0f, 0.0f, 0.0f };
+  std::array<float, 3> direction{ 0.0f, -1.0f, 0.0f };
+  std::array<float, 3> color{ 1.0f, 1.0f, 1.0f };
+  float intensity = 1.0f;
+  float range = 10.0f;
+  float innerConeCos = 0.9063078f;
+  float outerConeCos = 0.8191520f;
+  bool castsShadow = false;
+  bool visible = true;
 };
 
 struct RenderInstanceDesc
@@ -95,4 +124,22 @@ public:
   virtual void setEnvironment(const RenderEnvironment& environment) = 0;
   // False, with nothing changed, for a non-finite tint.
   virtual bool setSkybox(const RenderSkyboxDesc& skybox) = 0;
+
+  virtual bool createLight(RenderLightId id, const RenderLightDesc& desc)
+  {
+    (void)id;
+    (void)desc;
+    return false;
+  }
+  virtual bool updateLight(RenderLightId id, const RenderLightDesc& desc)
+  {
+    (void)id;
+    (void)desc;
+    return false;
+  }
+  virtual bool destroyLight(RenderLightId id)
+  {
+    (void)id;
+    return false;
+  }
 };

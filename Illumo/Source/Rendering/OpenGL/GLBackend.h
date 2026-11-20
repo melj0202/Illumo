@@ -21,6 +21,8 @@ private:
   IRenderWindow* window;
   int fps = 0;
   size_t m_rejectionsAtFrameStart = 0;
+  GLuint _zeroUniformBuffer = 0;
+  int m_maxTextureSize = 8192;
 
   std::unordered_map<uint32_t, GLMeshResourceEntry> _vaoRegistryLookup;
   std::unordered_map<uint32_t, GLShaderResourceEntry> _programRegistryLookup;
@@ -138,6 +140,7 @@ public:
   bool DestroyTexture(TextureHandle handle) override;
   bool IsTextureValid(TextureHandle handle) const override;
   TextureInfo GetTextureInfo(TextureHandle handle) const override;
+  int maxTextureSize() const override { return m_maxTextureSize; }
 
   FramebufferHandle CreateFramebuffer(
     const FramebufferDesc& desc,

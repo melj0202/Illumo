@@ -109,10 +109,19 @@ place.
         \symbolref{AssetManager} by normalized virtual path. A missing or
         failed asset draws a magenta placeholder and records a warning the
         program can read (\texttt{warnings()}).
-  \item \textbf{Lighting:} the first enabled, visible \texttt{light} component
-        in preorder supplies the one directional light; otherwise the
-        environment sun does. Ambient color and shadow settings are pushed
-        into every visual. 2D scenes are unlit.
+  \item \textbf{Lighting and PBR materials (D-R41, D-E43):} the first enabled,
+        visible \texttt{directional} \texttt{light} component in preorder
+        supplies the directional sun; otherwise the environment sun does.
+        Enabled, visible \texttt{point} and \texttt{spot} \texttt{light}
+        components bind to \symbolref{IRenderWorld} punctual lights and follow
+        node world transforms (local $-Y$ forward for spots).
+        \texttt{mesh} components bind optional \texttt{albedo\_texture},
+        \texttt{normal\_texture}, \texttt{orm\_texture} and
+        \texttt{emissive\_texture} assets plus \texttt{metallic},
+        \texttt{roughness} and linear \texttt{emissive} factors onto interned
+        \symbolref{RenderWorld} materials (or fallback \symbolref{MeshVisual}
+        setters). Ambient color and shadow settings are pushed into every
+        visual. 2D scenes are unlit.
   \item \textbf{Skybox:} the environment's cubemap asset is drawn by a
         \texttt{SkyboxVisual} that is a separate drawable, not a graph node.
         \pathref{SkyboxVisual.cpp} moved into the shared guest engine so
@@ -198,33 +207,40 @@ while preserving defaults.
         scissor (D-R23). World-space behavior is unchanged.
         Dynamic buffers reserve 1,024 quads, double as needed, and stop at a
         configurable 65,536 default ceiling.
-  \item \symbolref{MeshVisual} (D-R21/D-R24) is the world mesh host and
-        \symbolref{ISceneRenderAttachment}: colored lines/triangles, textured
-        quads (sprites), optional camera-facing billboards, optional
-        directional lighting with participation in a scene-level depth-only
-        shadow pass, and optional object motion blur from the previous clip
-        pose. Bounds cover every geometry source immediately after mutation;
-        camera-facing sprites use a view-independent enclosing volume. It clones
-        Shape/Sprite styles with depth-tested pipelines and emits
-        \texttt{uMVP}. Lit meshes also emit \texttt{WorldLook} light, shadow,
-        and motion-blur uniforms from CPU-side drawable state; products
-        persist those values through EnvVars rather than having
-        \symbolref{MeshVisual} read configuration.
-        One host can contain multiple visual items. Use child scene nodes for
-        independent transforms and subtree state; each node may borrow an ordered
-        list of attachments. Overlay HUD stays on \symbolref{GameVisual}. Dynamic
+  \item \symbolref{MeshVisual} and \symbolref{RenderWorld} (D-R21, D-R24,
+        D-R28, D-R41) evaluate linear multi-light Cook--Torrance GGX specular
+        and energy-conserving diffuse over optional albedo (sRGB-decoded),
+        NaN-safe screen-space cotangent normal, metallic/roughness ORM, and
+        linear emissive textures (with renderer-owned $1\times 1$ fallback
+        textures), one directional sun, and up to 64 frustum-culled,
+        priority-sorted point or spot lights in \texttt{LightUniforms}
+        (binding point 1). Perspective scenes and shadow-casting spot lights
+        use a $2 \times \texttt{shadowMapSize}$ ($2048\times 2048$ default,
+        clamped to \texttt{maxTextureSize()}) \texttt{Depth24} 4-quadrant 2D
+        shadow atlas: quadrants 0--2 hold up to three stabilized directional
+        CSM splits and quadrant 3 holds the highest-priority spot caster, with
+        per-quadrant \symbolref{RenderWorld} shadow buffers and recordings
+        preserving D-R39 zero-upload skip on static cascades. When
+        \texttt{hdrEnabled} is active and \texttt{World} contains 3D drawables
+        (\texttt{DrawableBase::has3DWorldContent()}, or
+        \texttt{canvasBloomEnabled} is set),
+        \symbolref{Illumo::configureScenePipeline} installs
+        \texttt{WorldHdrVelocity} (\texttt{RGBA16F} + \texttt{RG16F} +
+        \texttt{Depth24}), a 5-mip Jimenez 13-tap Karis-weighted bloom
+        downsample and $3\times 3$ tent upsample pyramid,
+        \texttt{HdrComposite} (velocity motion blur, exposure, and analytical
+        AgX / Reinhard / Clamp tonemapping), and single-pass luma
+        \texttt{FxaaResolve} into the sRGB backbuffer before \texttt{UI} and
+        \texttt{Debug} draw crisp un-tonemapped overlays; pure-2D frames bypass
+        offscreen HDR targets completely. Bounds cover every geometry source
+        immediately after mutation; camera-facing sprites use a
+        view-independent enclosing volume. Dynamic
         procedural meshes upload dirty vertices through \texttt{UpdateBuffer};
         capacity growth replaces the backing allocation. Immutable imported
         meshes instead borrow one reference-counted \texttt{MeshHandle} from
         \symbolref{AssetManager}; multiple visuals reuse the upload while
         retaining independent transform, tint, lighting, and motion state.
-        The Renderer retains caster descriptors, chooses light settings from
-        the first camera-visible caster, and filters them against a conservative
-        camera-frustum extrusion toward the light. Shadow orthographic XY bounds
-        are bounded to a near camera slice with power-of-two quantized extents,
-        shrink hysteresis, and world-origin texel snapping; fragment shaders
-        normalize receiver depth bias by the light-space depth span. Invalid
-        reconstruction falls back to all casters. A monotonically increasing frame
+        A monotonically increasing frame
         serial resets previous-MVP history when a culled visual re-enters.
 \end{itemize}
 
@@ -509,10 +525,15 @@ the OpenGL backend's observable results:
         can stall there), with the loop still paced by the refresh interval.
 \end{itemize}
 
-\texttt{Illumo.Gpu.BackendParity} renders seven scenes through both backends
-in one process --- lit and shadowed meshes with a RenderWorld and sky, 2D
+\texttt{Illumo.Gpu.BackendParity} renders ten scenes through both backends
+in one process --- lit and shadowed meshes with a RenderWorld and sky,
+textured GGX PBR materials with punctual lights and cotangent normal maps,
+the 4-quadrant CSM and hero-spot shadow atlas, the multi-pass linear HDR +
+5-mip Karis bloom + analytical AgX + FXAA chain (asserting zero Vulkan
+\texttt{renderPassBreaks}), 2D
 visuals through \texttt{renderOffscreen}, raw tokens covering culling,
-primitives, blending, depth, scissored clears, instancing and uniform arrays,
+primitives, blending, depth, scissored clears, instancing, multi-UBO binding
+and uniform arrays,
 texture formats and in-frame updates, render-target readback conversions, the
 detached-panel readback loop, and the default framebuffer with motion blur ---
 and compares the pixels. The device-free SPIR-V front end, shader cache, OpenGL
@@ -598,11 +619,12 @@ window. \texttt{FrameCapture} itself remains the
 engine API, checked on a real GPU by \texttt{IllumoCaptureGpuTests}.
 See \texttt{docs/frame-capture.md} for inputs, publication and limitations.
 
-Current 3D facilities include CPU OBJ import, directional lighting,
-per-drawable self-shadowing and post-processing, and scene-level environment
-lighting, sun and skybox resolved by \texttt{SceneInstance} from a scene's
-\texttt{settings.environment}. These do not yet implement registered game
-objects or physics integration.
+Current 3D facilities include CPU OBJ import, linear multi-light GGX PBR-lite
+materials, 4-quadrant CSM + spot shadow mapping, linear HDR post-processing
+(5-mip Karis bloom, analytical AgX tonemapping, velocity motion blur and luma
+FXAA), and scene-level environment lighting, sun, punctual lights and skybox
+resolved by \texttt{SceneInstance} from a format 2.1 scene. These do not yet
+implement glTF skinning or clustered >64-light shading.
 
 Renderer-bound GameVisual resources retain one renderer lifetime. Foreign use,
 truncated geometry, and queue rejection report incomplete frames and suppress

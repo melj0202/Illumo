@@ -7,6 +7,7 @@
 #include <Illumo/Foundation/BuildInfo.h>
 #include <Illumo/Rendering/GLString.h>
 #include <Illumo/Rendering/IBackend.h>
+#include <Illumo/Rendering/RenderWorld.h>
 #include <Illumo/Services/EnvVars.h>
 #include <Illumo/Testing/IllumoTestAccess.h>
 #include <Illumo/Testing/MockBackend.h>
@@ -703,6 +704,71 @@ testDebugOverlayGamepadCommandsAndDispatch()
   }
   std::filesystem::remove(path, error);
 }
+
+static void
+testDebugOverlayGraphicsPanel()
+{
+  testSection("Illumo: DebugOverlay toggles graphics panel via F7 and console "
+              "command");
+  const std::filesystem::path path =
+    temporaryEnvironmentPath("debug-overlay-graphics");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  int windowDestructions = 0;
+  {
+    Illumo host(headlessConfig(path));
+    setHeadlessFactories(host, &windowDestructions);
+    testTrue(g, host.initialize(), "host initializes");
+    DebugOverlay overlay;
+    testTrue(g, overlay.start(host.context()), "overlay starts");
+
+    CommandRegistry& registry = *host.context().commandRegistry;
+    testTrue(g,
+             registry.HasCommand("graphics"),
+             "DebugOverlay registers graphics command");
+
+    // F7 opens the floating graphics panel and dispatches it on Debug layer.
+    host.context().inputManager->getKeyQueue().push(
+      InputManager::KeyPressEvent{ KeyCode::F7, InputAction::Press, 0 });
+    host.beginUpdate(0.016);
+    overlay.update(0.016);
+    host.endUpdate();
+
+    DrawList* scene = host.beginRender();
+    overlay.dispatch(*scene);
+    const size_t openDebugCount =
+      scene->drawablesIn(RenderLayerId::Debug).size();
+    host.endRender();
+
+    // Console `graphics off` hides the panel; `graphics reset` restores values.
+    host.environment().setVar("exposure", "2.5");
+    registry.QueueCommand("graphics", { "off" });
+    registry.QueueCommand("graphics", { "reset" });
+    host.beginUpdate(0.016);
+    overlay.update(0.016);
+    host.endUpdate();
+
+    scene = host.beginRender();
+    overlay.dispatch(*scene);
+    const size_t closedDebugCount =
+      scene->drawablesIn(RenderLayerId::Debug).size();
+    host.endRender();
+
+    testTrue(g,
+             openDebugCount == closedDebugCount + 1,
+             "graphics panel adds one Debug-layer drawable while open");
+    testTrue(g,
+             host.environment().getVar("exposure").value == "0",
+             "graphics reset restores pipeline defaults");
+
+    overlay.stop();
+    testTrue(g,
+             !registry.HasCommand("graphics"),
+             "overlay stop unregisters graphics command");
+    host.shutdown();
+  }
+  std::filesystem::remove(path, error);
+}
 #endif
 
 static void
@@ -1046,6 +1112,98 @@ testGraphicsApiSelection()
            "a failing OpenGL start fails without a second attempt");
 }
 
+static void
+testHdrPipelineAndPure2DBypass()
+{
+  testSection(
+    "Illumo: 3D worlds activate HDR + bloom + AgX + FXAA while pure-2D "
+    "frames bypass offscreen passes");
+  const std::filesystem::path path = temporaryEnvironmentPath("hdr-bypass");
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  int windowDestructions = 0;
+  {
+    Illumo host(headlessConfig(path));
+    setHeadlessFactories(host, &windowDestructions);
+    testTrue(g, host.initialize(), "host initializes");
+
+    RenderWorld world;
+    Renderer* renderer = host.context().renderer;
+    const std::array<unsigned char, 36 * 3> verts{};
+    const std::array<unsigned int, 3> inds{ 0, 1, 2 };
+    const MeshHandle mesh =
+      renderer->enrollMesh(verts.data(),
+                           verts.size(),
+                           inds.data(),
+                           sizeof(inds),
+                           MeshVertexLayout::Pos3Norm3Color4U8Uv2,
+                           false);
+
+    // Pure-2D frame: empty RenderWorld in World + GLString in UI.
+    {
+      DrawList* scene = host.beginRender();
+      GLString uiText("2D", 255, 255, 255, 255, 12, 0, 0, renderer);
+      scene->AddDrawable(&world, RenderLayerId::World);
+      scene->AddDrawable(&uiText, RenderLayerId::UI);
+      host.endRender();
+      testTrue(g,
+               !scene->hasCustomPasses(RenderLayerId::World) &&
+                 renderer->getRenderTargetPool().count() == 0,
+               "pure-2D frame with empty RenderWorld bypasses HDR passes");
+    }
+
+    // Populate 3D world: HDR + 5-mip bloom + AgX + FXAA must engage.
+    testTrue(g, world.createMaterial(1, RenderMaterialDesc{}), "mat created");
+    RenderInstanceDesc inst;
+    inst.mesh = mesh;
+    inst.indexCount = 3;
+    inst.material = 1;
+    inst.world = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    testTrue(g, world.createInstance(1, inst), "3D instance created");
+    {
+      DrawList* scene = host.beginRender();
+      scene->AddDrawable(&world, RenderLayerId::World);
+      host.endRender();
+      const std::vector<RenderPassDesc>& passes =
+        scene->passesIn(RenderLayerId::World);
+      // 1 WorldHdrGeom + 5 BloomDown + 4 BloomUp + 1 HdrComposite + 1
+      // FxaaResolve = 12
+      testEqSize(g, passes.size(), 12u, "full 12-pass HDR chain configured");
+      if (passes.size() == 12u) {
+        testTrue(g,
+                 passes[0].name == "WorldHdrGeomPass" &&
+                   passes[1].name == "BloomDown0" &&
+                   passes[6].name == "BloomUp3" &&
+                   passes[10].name == "HdrComposite" &&
+                   passes[11].name == "FxaaResolve",
+                 "HDR pass sequence ordered accurately");
+      }
+      const PooledRenderTarget mip0 = renderer->getRenderTarget("BloomMip0");
+      const PooledRenderTarget mip4 = renderer->getRenderTarget("BloomMip4");
+      testTrue(g,
+               mip0.isValid() && mip0.width == 320 && mip0.height == 240 &&
+                 mip4.isValid() && mip4.width == 20 && mip4.height == 15,
+               "5-mip bloom pyramid sized accurately from 640x480 window");
+    }
+
+    // Runtime kill-switch hdrEnabled=0 returns immediately to LDR backbuffer.
+    host.environment().setVar("hdrEnabled", false);
+    {
+      DrawList* scene = host.beginRender();
+      scene->AddDrawable(&world, RenderLayerId::World);
+      host.endRender();
+      testTrue(g,
+               !scene->hasCustomPasses(RenderLayerId::World),
+               "hdrEnabled=0 bypasses HDR pass chain immediately");
+    }
+
+    world.releaseResources();
+    renderer->destroyMesh(mesh);
+    host.shutdown();
+  }
+  std::filesystem::remove(path, error);
+}
+
 static int
 runHostCase(void (*testFunction)())
 {
@@ -1078,6 +1236,8 @@ registerIllumoHostTests(IllumoTestRegistry& registry)
   registry.add("Illumo.Host.ScenePipelineConfigurationFromEnv", []() {
     return runHostCase(testScenePipelineConfigurationFromEnv);
   });
+  registry.add("Illumo.Host.HdrPipelineAndPure2DBypass",
+               []() { return runHostCase(testHdrPipelineAndPure2DBypass); });
 #if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
   registry.add("Illumo.Host.DebugOverlayConsoleIsGlobal",
                []() { return runHostCase(testDebugOverlayConsoleIsGlobal); });
@@ -1087,5 +1247,7 @@ registerIllumoHostTests(IllumoTestRegistry& registry)
   registry.add("Illumo.Host.DebugOverlayGamepad", []() {
     return runHostCase(testDebugOverlayGamepadCommandsAndDispatch);
   });
+  registry.add("Illumo.Host.DebugOverlayGraphics",
+               []() { return runHostCase(testDebugOverlayGraphicsPanel); });
 #endif
 }

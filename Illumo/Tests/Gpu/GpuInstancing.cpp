@@ -533,9 +533,11 @@ main(int argc, char** argv)
       test = argument;
     }
   }
-  if (test != "instancing" && test != "renderworld" &&
-      test != "backendparity") {
-    std::printf("Unknown case %s (instancing, renderworld or backendparity)\n",
+  const bool parityCase = test == "backendparity" || test == "pbrparity" ||
+                          test == "shadowatlasparity" ||
+                          test == "hdrbloomagxparity" || test == "hdrbench";
+  if (test != "instancing" && test != "renderworld" && !parityCase) {
+    std::printf("Unknown case %s (instancing, renderworld or *parity)\n",
                 test.c_str());
     return 2;
   }
@@ -547,9 +549,9 @@ main(int argc, char** argv)
     std::printf("SKIPPED: GLFW could not initialize\n");
     return kSkipped;
   }
-  // Vulkan renders offscreen with no window; OpenGL and the parity case need a
+  // Vulkan renders offscreen with no window; OpenGL and the parity cases need a
   // hidden 3.3 context.
-  const bool vulkanOnly = api == "vulkan" && test != "backendparity";
+  const bool vulkanOnly = api == "vulkan" && !parityCase;
   GLFWwindow* context = nullptr;
   if (!vulkanOnly) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -566,8 +568,18 @@ main(int argc, char** argv)
     glfwMakeContextCurrent(context);
   }
   int result = 1;
-  if (test == "backendparity") {
-    result = runBackendParity(context, dumpDirectory);
+  if (test == "hdrbench") {
+    result = runHdrForwardBench(context);
+  } else if (parityCase) {
+    std::string sceneFilter;
+    if (test == "pbrparity") {
+      sceneFilter = "pbr";
+    } else if (test == "shadowatlasparity") {
+      sceneFilter = "shadowatlas";
+    } else if (test == "hdrbloomagxparity") {
+      sceneFilter = "hdrbloomagx";
+    }
+    result = runBackendParity(context, dumpDirectory, sceneFilter);
   } else {
     HiddenWindow window(context);
     EnvVars env;

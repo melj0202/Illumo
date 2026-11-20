@@ -381,6 +381,7 @@ InputManager::update()
 {
   ILLUMO_PROFILE_ZONE("InputManager.update");
   m_suppressedKeys.fill(false);
+  m_mouseSuppressed = false;
   *scrollOffset = 0.0;
   if (window != nullptr) {
     ILLUMO_PROFILE_ZONE("InputManager.pollEvents");
@@ -452,6 +453,9 @@ InputManager::isKeyPressed(KeyCode key)
 bool
 InputManager::isMouseButtonPressed(KeyCode mouseButton)
 {
+  if (m_mouseSuppressed) {
+    return false;
+  }
   if (window == nullptr) {
     std::unordered_map<KeyCode, InputAction>::const_iterator it =
       inputStatesCurrent.find(mouseButton);

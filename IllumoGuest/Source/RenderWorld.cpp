@@ -15,15 +15,63 @@ finiteValues(const float* values, std::size_t count)
   return true;
 }
 
-static GuestWorldMaterial
-wireMaterial(const RenderMaterialDesc& desc)
+static constexpr std::size_t kMaximumGuestLights = 1024;
+static constexpr std::size_t kMaximumGuestMaterials = 4096;
+
+static bool
+sameResourceId(const GuestResourceId& left, const GuestResourceId& right)
 {
-  GuestWorldMaterial material;
-  material.tint = desc.tint;
-  material.receivesShadow = desc.receivesShadow;
-  material.castsShadow = desc.castsShadow;
-  material.blend = desc.blend;
-  return material;
+  return left.owner == right.owner && left.kind == right.kind &&
+         left.slot == right.slot && left.generation == right.generation;
+}
+
+static bool
+validGuestLightDesc(const RenderLightDesc& desc)
+{
+  if (desc.kind != RenderLightKind::Point &&
+      desc.kind != RenderLightKind::Spot) {
+    return false;
+  }
+  if (!finiteValues(desc.position.data(), desc.position.size()) ||
+      !finiteValues(desc.direction.data(), desc.direction.size()) ||
+      !finiteValues(desc.color.data(), desc.color.size()) ||
+      !std::isfinite(desc.intensity) || !std::isfinite(desc.range) ||
+      !std::isfinite(desc.innerConeCos) || !std::isfinite(desc.outerConeCos)) {
+    return false;
+  }
+  if (desc.intensity < 0.0f || desc.range <= 0.0f) {
+    return false;
+  }
+  if (desc.kind == RenderLightKind::Spot) {
+    const float dirLenSq = desc.direction[0] * desc.direction[0] +
+                           desc.direction[1] * desc.direction[1] +
+                           desc.direction[2] * desc.direction[2];
+    if (!std::isfinite(dirLenSq) || dirLenSq <= 1e-8f ||
+        desc.innerConeCos < desc.outerConeCos || desc.outerConeCos <= -1.0f ||
+        desc.innerConeCos > 1.0f) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static GuestWorldLight
+wireLight(const RenderLightDesc& desc)
+{
+  GuestWorldLight light;
+  light.kind = desc.kind == RenderLightKind::Spot ? 1u : 0u;
+  light.position = desc.position;
+  light.direction = desc.direction;
+  light.color = { std::max(desc.color[0], 0.0f),
+                  std::max(desc.color[1], 0.0f),
+                  std::max(desc.color[2], 0.0f) };
+  light.intensity = desc.intensity;
+  light.range = desc.range;
+  light.innerCos = desc.innerConeCos;
+  light.outerCos = desc.outerConeCos;
+  light.castsShadow = desc.castsShadow;
+  light.visible = desc.visible;
+  return light;
 }
 
 GuestRenderWorld::GuestRenderWorld(const GuestRecordingBackend& backend)
@@ -32,18 +80,69 @@ GuestRenderWorld::GuestRenderWorld(const GuestRecordingBackend& backend)
 }
 
 bool
+GuestRenderWorld::validMaterial(const RenderMaterialDesc& desc) const
+{
+  if (!finiteValues(desc.tint.data(), desc.tint.size()) ||
+      !std::isfinite(desc.metallic) || !std::isfinite(desc.roughness) ||
+      !finiteValues(desc.emissiveFactor.data(), desc.emissiveFactor.size())) {
+    return false;
+  }
+  const TextureHandle handles[4] = { desc.albedoTexture,
+                                     desc.normalTexture,
+                                     desc.metallicRoughnessTexture,
+                                     desc.emissiveTexture };
+  for (const TextureHandle& h : handles) {
+    if (h.isValid() && !m_backend.isUsable2DTexture(h)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+GuestWorldMaterial
+GuestRenderWorld::buildWireMaterial(
+  const RenderMaterialDesc& desc,
+  std::array<GuestResourceId, 4>* outIds) const
+{
+  GuestWorldMaterial material;
+  material.tint = desc.tint;
+  material.receivesShadow = desc.receivesShadow;
+  material.castsShadow = desc.castsShadow;
+  material.blend = desc.blend;
+  material.albedoTexture = m_backend.hostTexture(desc.albedoTexture);
+  material.normalTexture = m_backend.hostTexture(desc.normalTexture);
+  material.metallicRoughnessTexture =
+    m_backend.hostTexture(desc.metallicRoughnessTexture);
+  material.emissiveTexture = m_backend.hostTexture(desc.emissiveTexture);
+  material.metallic = std::clamp(desc.metallic, 0.0f, 1.0f);
+  material.roughness = std::clamp(desc.roughness, 0.0f, 1.0f);
+  material.emissiveFactor = { std::max(desc.emissiveFactor[0], 0.0f),
+                              std::max(desc.emissiveFactor[1], 0.0f),
+                              std::max(desc.emissiveFactor[2], 0.0f) };
+  if (outIds != nullptr) {
+    *outIds = { material.albedoTexture,
+                material.normalTexture,
+                material.metallicRoughnessTexture,
+                material.emissiveTexture };
+  }
+  return material;
+}
+
+bool
 GuestRenderWorld::createMaterial(RenderMaterialId id,
                                  const RenderMaterialDesc& desc)
 {
   if (id == 0 || m_materials.contains(id) ||
-      !finiteValues(desc.tint.data(), desc.tint.size())) {
+      m_materials.size() >= kMaximumGuestMaterials || !validMaterial(desc)) {
     return false;
   }
-  m_materials[id] = 0;
+  MaterialState state;
+  state.desc = desc;
   GuestWorldOperation operation;
   operation.op = GuestWorldOp::MaterialCreate;
   operation.id = id;
-  operation.material = wireMaterial(desc);
+  operation.material = buildWireMaterial(desc, &state.sentTextures);
+  m_materials[id] = state;
   m_queue.push_back(operation);
   return true;
 }
@@ -52,14 +151,16 @@ bool
 GuestRenderWorld::updateMaterial(RenderMaterialId id,
                                  const RenderMaterialDesc& desc)
 {
-  if (!m_materials.contains(id) ||
-      !finiteValues(desc.tint.data(), desc.tint.size())) {
+  std::unordered_map<RenderMaterialId, MaterialState>::iterator found =
+    m_materials.find(id);
+  if (found == m_materials.end() || !validMaterial(desc)) {
     return false;
   }
+  found->second.desc = desc;
   GuestWorldOperation operation;
   operation.op = GuestWorldOp::MaterialUpdate;
   operation.id = id;
-  operation.material = wireMaterial(desc);
+  operation.material = buildWireMaterial(desc, &found->second.sentTextures);
   m_queue.push_back(operation);
   return true;
 }
@@ -67,9 +168,9 @@ GuestRenderWorld::updateMaterial(RenderMaterialId id,
 bool
 GuestRenderWorld::destroyMaterial(RenderMaterialId id)
 {
-  std::unordered_map<RenderMaterialId, std::size_t>::iterator found =
+  std::unordered_map<RenderMaterialId, MaterialState>::iterator found =
     m_materials.find(id);
-  if (found == m_materials.end() || found->second != 0) {
+  if (found == m_materials.end() || found->second.users != 0) {
     return false;
   }
   m_materials.erase(found);
@@ -124,7 +225,7 @@ GuestRenderWorld::createInstance(RenderInstanceId id,
   instance.desc = desc;
   instance.waiting = state == GuestRecordingBackend::HostMeshState::Pending;
   m_instances[id] = instance;
-  m_materials[desc.material] += 1;
+  m_materials[desc.material].users += 1;
   if (instance.waiting) {
     m_waiting.push_back(id);
   } else {
@@ -202,7 +303,7 @@ GuestRenderWorld::destroyInstance(RenderInstanceId id)
   if (found == m_instances.end()) {
     return false;
   }
-  m_materials[found->second.desc.material] -= 1;
+  m_materials[found->second.desc.material].users -= 1;
   if (found->second.waiting) {
     m_waiting.erase(std::find(m_waiting.begin(), m_waiting.end(), id));
   } else {
@@ -260,11 +361,86 @@ GuestRenderWorld::setSkybox(const RenderSkyboxDesc& skybox)
   return true;
 }
 
+bool
+GuestRenderWorld::createLight(RenderLightId id, const RenderLightDesc& desc)
+{
+  if (id == 0 || m_lights.contains(id) ||
+      m_lights.size() >= kMaximumGuestLights || !validGuestLightDesc(desc)) {
+    return false;
+  }
+  m_lights.insert(id);
+  GuestWorldOperation operation;
+  operation.op = GuestWorldOp::LightCreate;
+  operation.id = id;
+  operation.light = wireLight(desc);
+  m_queue.push_back(operation);
+  return true;
+}
+
+bool
+GuestRenderWorld::updateLight(RenderLightId id, const RenderLightDesc& desc)
+{
+  if (!m_lights.contains(id) || !validGuestLightDesc(desc)) {
+    return false;
+  }
+  GuestWorldOperation operation;
+  operation.op = GuestWorldOp::LightUpdate;
+  operation.id = id;
+  operation.light = wireLight(desc);
+  m_queue.push_back(operation);
+  return true;
+}
+
+bool
+GuestRenderWorld::destroyLight(RenderLightId id)
+{
+  std::unordered_set<RenderLightId>::iterator found = m_lights.find(id);
+  if (found == m_lights.end()) {
+    return false;
+  }
+  m_lights.erase(found);
+  GuestWorldOperation operation;
+  operation.op = GuestWorldOp::LightDestroy;
+  operation.id = id;
+  m_queue.push_back(operation);
+  return true;
+}
+
 void
 GuestRenderWorld::takeOperations(std::vector<GuestWorldOperation>& output,
                                  std::size_t limit)
 {
   ILLUMO_PROFILE_ZONE("RenderWorld.takeOperations");
+  const std::uint64_t epoch = m_backend.textureEpoch();
+  if (epoch != m_checkedTextureEpoch) {
+    m_checkedTextureEpoch = epoch;
+    for (std::unordered_map<RenderMaterialId, MaterialState>::iterator it =
+           m_materials.begin();
+         it != m_materials.end();
+         ++it) {
+      MaterialState& mat = it->second;
+      std::array<GuestResourceId, 4> currentIds = { GuestResourceId{},
+                                                    GuestResourceId{},
+                                                    GuestResourceId{},
+                                                    GuestResourceId{} };
+      const GuestWorldMaterial wire = buildWireMaterial(mat.desc, &currentIds);
+      bool changed = false;
+      for (std::size_t slot = 0; slot < 4; ++slot) {
+        if (!sameResourceId(currentIds[slot], mat.sentTextures[slot])) {
+          changed = true;
+          break;
+        }
+      }
+      if (changed) {
+        mat.sentTextures = currentIds;
+        GuestWorldOperation op;
+        op.op = GuestWorldOp::MaterialUpdate;
+        op.id = it->first;
+        op.material = wire;
+        m_queue.push_back(op);
+      }
+    }
+  }
   // The sky change goes first: it never depends on queued operations.
   const GuestResourceId sky = m_skyShown ? m_sky : GuestResourceId{};
   const bool sameSky = sky.owner == m_sentSky.owner &&
@@ -305,7 +481,7 @@ GuestRenderWorld::takeOperations(std::vector<GuestWorldOperation>& output,
       // The mesh was destroyed, replaced or failed while this waited.
       Logger::LogWarning("Render world instance " + std::to_string(*it) +
                          " dropped: its mesh can no longer be used");
-      m_materials[desc.material] -= 1;
+      m_materials[desc.material].users -= 1;
       m_instances.erase(*it);
       it = m_waiting.erase(it);
       continue;

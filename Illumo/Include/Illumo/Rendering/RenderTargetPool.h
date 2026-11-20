@@ -11,6 +11,7 @@ struct PooledRenderTargetDesc
   std::string name;
   bool windowRelative = true;
   float scale = 1.0f;
+  int mipLevel = 0;
   int fixedWidth = 0;
   int fixedHeight = 0;
   std::vector<FramebufferAttachmentDesc> colorAttachments;
@@ -59,9 +60,20 @@ public:
     int targetHeight = 0;
 
     if (desc.windowRelative) {
-      const float s = (desc.scale > 0.0f) ? desc.scale : 1.0f;
-      targetWidth = std::max(1, static_cast<int>(windowWidth * s));
-      targetHeight = std::max(1, static_cast<int>(windowHeight * s));
+      if (desc.mipLevel > 0) {
+        const unsigned int shift =
+          static_cast<unsigned int>(std::min(desc.mipLevel, 16));
+        const unsigned int baseW =
+          windowWidth > 0 ? static_cast<unsigned int>(windowWidth) : 1u;
+        const unsigned int baseH =
+          windowHeight > 0 ? static_cast<unsigned int>(windowHeight) : 1u;
+        targetWidth = std::max(1, static_cast<int>(baseW >> shift));
+        targetHeight = std::max(1, static_cast<int>(baseH >> shift));
+      } else {
+        const float s = (desc.scale > 0.0f) ? desc.scale : 1.0f;
+        targetWidth = std::max(1, static_cast<int>(windowWidth * s));
+        targetHeight = std::max(1, static_cast<int>(windowHeight * s));
+      }
     } else {
       targetWidth = std::max(1, desc.fixedWidth);
       targetHeight = std::max(1, desc.fixedHeight);
@@ -72,10 +84,11 @@ public:
     if (it != m_entries.end()) {
       if (it->second.target.width == targetWidth &&
           it->second.target.height == targetHeight &&
+          sameAttachments(it->second.desc, desc) &&
           it->second.target.isValid()) {
         return it->second.target;
       }
-      // Dimensions changed; destroy old and recreate
+      // Dimensions or attachment formats changed; destroy old and recreate
       if (it->second.target.fboHandle.isValid()) {
         m_backend->DestroyFramebuffer(it->second.target.fboHandle);
       }
@@ -142,6 +155,24 @@ private:
     PooledRenderTargetDesc desc;
     PooledRenderTarget target;
   };
+
+  static bool sameAttachments(const PooledRenderTargetDesc& left,
+                              const PooledRenderTargetDesc& right)
+  {
+    if (left.depthStencilFormat != right.depthStencilFormat ||
+        left.depthFilter != right.depthFilter ||
+        left.colorAttachments.size() != right.colorAttachments.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < left.colorAttachments.size(); ++i) {
+      const FramebufferAttachmentDesc& a = left.colorAttachments[i];
+      const FramebufferAttachmentDesc& b = right.colorAttachments[i];
+      if (a.format != b.format || a.filter != b.filter || a.wrap != b.wrap) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   IBackend* m_backend = nullptr;
   std::unordered_map<std::string, Entry> m_entries;

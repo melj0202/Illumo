@@ -125,6 +125,7 @@ private:
   int m_modifierFlags;
   std::array<double, 2> m_snapshotMouse{};
   std::array<bool, static_cast<size_t>(KeyCode::F12) + 1> m_suppressedKeys{};
+  bool m_mouseSuppressed = false;
   GamepadState m_gamepadState{};
   GamepadState m_previousGamepadState{};
   void pollGamepad();
@@ -169,13 +170,18 @@ public:
   // unchanged.
   void suppressKeyForFrame(KeyCode key);
   bool isKeySuppressed(KeyCode key) const;
+  // Masks mouse button polling and frameAction(Mouse*) until the next update
+  // when an in-window overlay consumes a click or drag.
+  void suppressMouseForFrame() { m_mouseSuppressed = true; }
+  bool isMouseSuppressed() const { return m_mouseSuppressed; }
 
   InputAction GetInputAction(KeyCode keyCode);
   // Published frame state includes Press-to-Hold transitions and overlay masks.
   // GetInputAction is the raw platform poll used while constructing that state.
   InputAction frameAction(KeyCode key) const
   {
-    if (isKeySuppressed(key)) {
+    if (isKeySuppressed(key) ||
+        (m_mouseSuppressed && key >= KeyCode::MouseLeft)) {
       return InputAction::None;
     }
     const std::unordered_map<KeyCode, InputAction>::const_iterator found =

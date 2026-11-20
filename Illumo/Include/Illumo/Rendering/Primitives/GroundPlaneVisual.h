@@ -71,6 +71,7 @@ public:
 
   void Draw() override {}
   bool AppendCommands(Renderer* renderer) override;
+  bool has3DWorldContent() const override { return isVisible(); }
   void appendSceneCommands(Renderer* renderer,
                            const Matrix4& worldTransform) override;
   bool getSceneLocalBounds(AxisAlignedBounds3* bounds) const override

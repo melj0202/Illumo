@@ -1149,6 +1149,86 @@ diagnosticsBackpressureContract()
           "With room and no backlog a line is sent at once");
 }
 
+// Frame schema v10: GuestRenderWorld emits punctual light operations and
+// automatically updates materials once pending 2D textures receive host ids.
+static void
+renderWorldV10Contract()
+{
+  GuestServiceQueue queue;
+  GuestRecordingBackend backend(queue, 2048);
+  GuestSnapshotWindow window;
+  Renderer renderer(&window, nullptr, nullptr, &backend, false);
+  backend.setRenderer(renderer);
+  GuestRenderWorld world(backend);
+  std::vector<GuestWorldOperation> operations;
+
+  const std::array<unsigned char, 4> texel{ 255, 255, 255, 255 };
+  const TextureHandle pendingTex =
+    renderer.enrollTexture(texel.data(), 1, 1, 4);
+  RenderMaterialDesc mat;
+  mat.albedoTexture = pendingTex;
+  mat.metallic = 0.6f;
+  mat.roughness = 0.3f;
+  mat.emissiveFactor = { 0.5f, 0.25f, 0.0f };
+  require(world.createMaterial(1, mat),
+          "Material with pending 2D texture is accepted");
+
+  RenderLightDesc point;
+  point.kind = RenderLightKind::Point;
+  point.position = { 2.0f, 3.0f, 4.0f };
+  point.color = { 1.0f, 0.8f, 0.6f };
+  point.intensity = 3.0f;
+  point.range = 15.0f;
+  RenderLightDesc badLight = point;
+  badLight.range = 0.0f;
+  require(!world.createLight(0, point) && !world.createLight(1, badLight) &&
+            world.createLight(1, point) && !world.createLight(1, point),
+          "GuestRenderWorld validates light ids and parameters");
+
+  operations.clear();
+  world.takeOperations(operations, 64);
+  require(operations.size() == 2 &&
+            operations[0].op == GuestWorldOp::MaterialCreate &&
+            operations[0].material.albedoTexture.owner == 0 &&
+            operations[0].material.metallic == 0.6f &&
+            operations[1].op == GuestWorldOp::LightCreate &&
+            operations[1].id == 1 && operations[1].light.intensity == 3.0f,
+          "Pending texture waits out MaterialCreate; light travels at once");
+
+  // Complete the texture's host creation; next takeOperations emits
+  // MaterialUpdate.
+  backend.pump();
+  GuestServices sent = exchange(queue);
+  const GuestResourceId hostTex{ 9, GuestResourceKind::Texture, 2, 1 };
+  GuestWireWriter idBytes;
+  hostTex.write(idBytes);
+  for (GuestServiceRecord& record : sent.records) {
+    if (record.operation == GuestService::CreateTexture) {
+      record.payload = idBytes.data();
+    } else {
+      record.payload.clear();
+    }
+    record.status = GuestServiceStatus::Complete;
+  }
+  exchange(queue, sent);
+  backend.pump();
+
+  point.intensity = 7.0f;
+  require(world.updateLight(1, point) && world.destroyLight(1) &&
+            !world.destroyLight(1),
+          "Light update and destroy succeed in order");
+  operations.clear();
+  world.takeOperations(operations, 64);
+  require(operations.size() == 3 &&
+            operations[0].op == GuestWorldOp::LightUpdate &&
+            operations[0].light.intensity == 7.0f &&
+            operations[1].op == GuestWorldOp::LightDestroy &&
+            operations[2].op == GuestWorldOp::MaterialUpdate &&
+            operations[2].material.albedoTexture.slot == hostTex.slot,
+          "MaterialUpdate is emitted automatically when texture finishes");
+  backend.Shutdown();
+}
+
 class SdkContract final : public GuestApplication
 {
 public:
@@ -1174,22 +1254,30 @@ public:
     frameLimitContract();
     renderWorldContract();
     sceneWorldsContract();
-    visualProxyContract();
-    skyboxContract();
     return true;
   }
   void update(const GuestInput&) override
   {
     // start() already spends most of one call's fuel; later contracts run
-    // in the first update, which has its own.
-    if (!m_updated) {
-      m_updated = true;
+    // across update steps, each with its own fuel budget.
+    if (m_updateStep == 0) {
+      m_updateStep = 1;
+      visualProxyContract();
+      skyboxContract();
+    } else if (m_updateStep == 1) {
+      m_updateStep = 2;
       textureBackpressureContract();
       diagnosticsBackpressureContract();
+    } else if (m_updateStep == 2) {
+      m_updateStep = 3;
+      renderWorldV10Contract();
     }
   }
   bool close() override { return true; }
-  void shutdown() override {}
+  void shutdown() override
+  {
+    require(m_updateStep >= 3, "All update-phase contracts executed");
+  }
   GuestFrame frame() override
   {
     GuestFrame frame;
@@ -1201,7 +1289,7 @@ public:
   }
 
 private:
-  bool m_updated = false;
+  int m_updateStep = 0;
 };
 std::unique_ptr<GuestApplication>
 CreateGuestApplication()

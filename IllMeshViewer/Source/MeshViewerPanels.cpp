@@ -184,6 +184,32 @@ MeshViewerDisplayPanel::addSlider(const std::string& label,
   return y + GuiToolStyle::kRowHeight + 2.0f;
 }
 
+float
+MeshViewerDisplayPanel::addChoice(const std::string& label,
+                                  const std::string& key,
+                                  int selected,
+                                  const std::vector<std::string>& options,
+                                  const std::vector<std::string>& values,
+                                  float y)
+{
+  Control control;
+  control.kind = ControlKind::Choice;
+  control.label = label;
+  control.key = key;
+  control.options = options;
+  control.values = values;
+  control.selected =
+    options.empty()
+      ? 0
+      : std::clamp(selected, 0, static_cast<int>(options.size()) - 1);
+  control.rect = { m_placement.area.x,
+                   y,
+                   m_placement.area.w - GuiToolStyle::kScrollbar,
+                   GuiToolStyle::kRowHeight + 2.0f };
+  m_controls.push_back(control);
+  return y + GuiToolStyle::kRowHeight + 2.0f;
+}
+
 void
 MeshViewerDisplayPanel::layout()
 {
@@ -219,6 +245,25 @@ MeshViewerDisplayPanel::layout()
                 y);
   y = addSlider(
     "Amount", "motionBlurAmount", s.motionBlurAmount, 0.0f, 2.0f, 2, y);
+  y = addSection("Post-processing", y + 4.0f);
+  y = addToggle("HDR", MeshViewerAction::None, "hdrEnabled", s.hdr, y);
+  y = addChoice("Tonemapper",
+                "tonemapper",
+                s.tonemapper,
+                { "Clamp",
+                  "Reinhard",
+                  "AgX",
+                  "Khronos Neutral",
+                  "AgX Punchy",
+                  "ACES Filmic",
+                  "GT (Uchimura)" },
+                { "0", "1", "2", "3", "4", "5", "6" },
+                y);
+  y = addSlider("Exposure", "exposure", s.exposure, -4.0f, 4.0f, 2, y);
+  y = addToggle("Bloom", MeshViewerAction::None, "bloomEnabled", s.bloom, y);
+  y = addSlider(
+    "Bloom amt", "bloomIntensity", s.bloomIntensity, 0.0f, 0.25f, 3, y);
+  y = addToggle("FXAA", MeshViewerAction::None, "fxaaEnabled", s.fxaa, y);
   m_contentHeight = y + m_scroll - m_placement.area.y + 4.0f;
 }
 
@@ -315,6 +360,14 @@ MeshViewerDisplayPanel::update(InputManager* input, float dt)
           { control.action,
             control.key,
             control.key.empty() ? std::string() : (control.on ? "0" : "1") });
+      } else if (control.kind == ControlKind::Choice) {
+        if (!control.values.empty()) {
+          const std::size_t next =
+            (static_cast<std::size_t>(control.selected) + 1u) %
+            control.values.size();
+          edits.push_back(
+            { control.action, control.key, control.values[next] });
+        }
       } else {
         m_activeSlider = m_hover;
       }
@@ -361,6 +414,32 @@ MeshViewerDisplayPanel::rebuildVisual()
     if (control.kind == ControlKind::Toggle) {
       GuiToolStyle::toggle(
         m_visual, control.rect, control.label, control.on, hovered);
+      continue;
+    }
+    if (control.kind == ControlKind::Choice) {
+      const GuiToolRect box = GuiToolStyle::sliderTrack(control.rect);
+      GuiToolStyle::fittedText(
+        m_visual,
+        control.label,
+        control.rect.x + GuiToolStyle::kPad,
+        control.rect.y +
+          std::round((control.rect.h - GuiToolStyle::kFontSize) * 0.5f) - 1.0f,
+        box.x - control.rect.x - GuiToolStyle::kPad - 4.0f,
+        GuiToolStyle::kFontSize,
+        GuiToolPalette::text);
+      const std::string shown =
+        control.options.empty()
+          ? std::string()
+          : control.options[static_cast<std::size_t>(control.selected)];
+      GuiToolStyle::button(m_visual,
+                           GuiToolRect{ box.x,
+                                        control.rect.y + 1.0f,
+                                        control.rect.x + control.rect.w -
+                                          GuiToolStyle::kPad - box.x,
+                                        control.rect.h - 2.0f },
+                           "< " + shown + " >",
+                           hovered,
+                           false);
       continue;
     }
     const float span = control.maximum - control.minimum;

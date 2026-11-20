@@ -44,6 +44,7 @@ GroundPlaneVisual::prepare(Renderer* renderer)
     releaseMesh();
   }
   m_renderer = renderer;
+  m_renderer->ensureLightUniformBuffer();
   if (!m_cubeMesh.isValid()) {
     const std::array<float, 24>& vertices = SkyboxVisual::cubeVertices();
     const std::array<unsigned int, 36>& indices = SkyboxVisual::cubeIndices();
@@ -127,6 +128,7 @@ GroundPlaneVisual::AppendCommands(Renderer* renderer)
   if (!renderer->bindStyle(RenderStyleId::GroundPlane)) {
     return false;
   }
+  (void)renderer->useLightUniforms();
 
   renderer->pushUniformMat4("uViewProjection", glm::value_ptr(skyboxMvp));
   renderer->pushUniformMat4("uFullViewProjection", glm::value_ptr(fullVp));

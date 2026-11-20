@@ -43,6 +43,10 @@ public:
   // Offers itself to IBackend::AppendSkybox first: a guest with HostRender
   // shows it as its host render world's sky instead of recording a cube.
   bool AppendCommands(Renderer* renderer) override;
+  bool has3DWorldContent() const override
+  {
+    return isVisible() && m_cubemap.isValid();
+  }
   void appendSceneCommands(Renderer* renderer,
                            const Matrix4& worldTransform) override;
 

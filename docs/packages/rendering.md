@@ -23,9 +23,23 @@ are private. `MockBackend` is exposed only by `Illumo::TestSupport`.
 Borrowed `ISceneRenderAttachment` implementations receive a resolved world
 transform, may report conservative local bounds, and append backend-neutral
 tokens. The Renderer camera-culls only valid wholly excluded bounds; unknown
-bounds fail open. `MeshVisual` is the world mesh/sprite adapter, including
-optional lighting, camera-relevant shared shadow mapping, and previous-MVP
-motion blur. Immutable model geometry is reference-counted by
+bounds fail open. `MeshVisual` and `RenderWorld` implement linear multi-light
+Cook-Torrance GGX PBR-lite shading (`albedo`, NaN-safe screen-space cotangent
+`normal`, metallic/roughness `ORM`, and linear `emissive` textures, with
+renderer-owned `1x1` fallback textures), 1 directional sun plus up to 64
+frustum-culled and priority-sorted punctual point/spot lights in `LightUniforms`
+(binding point 1), a `2 * shadowMapSize` 4-quadrant 2D `Depth24` shadow atlas
+(3 stabilized directional CSM splits + 1 hero spot shadow in quadrant 3, with
+per-quadrant `RenderWorld` shadow streams preserving `D-R39` zero-upload skip),
+and previous-MVP velocity output (`D-R41`). When `hdrEnabled` is active and the
+`World` layer contains 3D drawables (or `canvasBloomEnabled` is set),
+`Illumo::configureScenePipeline()` installs `WorldHdrVelocity` (`RGBA16F` +
+`RG16F` + `Depth24`), a 5-mip Jimenez 13-tap Karis-weighted bloom downsample
+and 3x3 tent upsample pyramid, `HdrComposite` (velocity motion blur, exposure,
+and analytical AgX / Reinhard / Clamp tonemapping), and single-pass luma
+`FxaaResolve` into the sRGB backbuffer before `RenderLayerId::UI` and `Debug`
+draw crisp un-tonemapped overlays; pure-2D frames bypass offscreen HDR targets
+completely. Immutable model geometry is reference-counted by
 `AssetManager`; visuals keep only a non-owning `MeshHandle`, draw metadata, and
 per-instance transform/tint state. Typed slot+generation resource handles, the
 bounded command queue, painter-correct `GameVisual` overlay composition,

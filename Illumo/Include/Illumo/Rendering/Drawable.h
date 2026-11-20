@@ -36,6 +36,7 @@ public:
   // target, then invokes the command phase before ordinary color rendering.
   virtual void CollectShadowCasters(Renderer* renderer) { (void)renderer; }
   virtual void AppendShadowCommands(Renderer* renderer) { (void)renderer; }
+  virtual bool has3DWorldContent() const { return false; }
 
   bool isVisible() const { return visible; }
   void setVisible(bool v) { visible = v; }

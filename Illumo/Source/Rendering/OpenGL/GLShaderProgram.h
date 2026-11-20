@@ -5,6 +5,7 @@
 #include <Illumo/Rendering/IShaderProgram.h>
 #include <Illumo/Rendering/ShaderPreprocessor.h>
 #include <Illumo/Services/Logger.h>
+#include <array>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -12,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 class GLShaderProgram : public IShaderProgram
@@ -181,11 +183,16 @@ private:
       _valid = false;
     } else {
       _valid = true;
-      // GLSL 330 has no layout(binding): assign the shared block's point here.
-      const GLuint block =
-        glGetUniformBlockIndex(_programID, FrameUniformsBlockName);
-      if (block != GL_INVALID_INDEX) {
-        glUniformBlockBinding(_programID, block, FrameUniformsBindingPoint);
+      // GLSL 330 has no layout(binding): assign shared block points here.
+      const std::array<std::pair<const char*, GLuint>, 2> kKnownBlocks = { {
+        { FrameUniformsBlockName, FrameUniformsBindingPoint },
+        { LightUniformsBlockName, LightUniformsBindingPoint },
+      } };
+      for (const std::pair<const char*, GLuint>& entry : kKnownBlocks) {
+        const GLuint block = glGetUniformBlockIndex(_programID, entry.first);
+        if (block != GL_INVALID_INDEX) {
+          glUniformBlockBinding(_programID, block, entry.second);
+        }
       }
     }
 

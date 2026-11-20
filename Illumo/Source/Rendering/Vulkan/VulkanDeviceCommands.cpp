@@ -1006,6 +1006,10 @@ VulkanDevice::draw(DrawKind kind,
   }
   ILLUMO_PROFILE_ZONE("VulkanDevice.draw");
   ensureRecording();
+  if (m_renderingActive && (m_target.backbuffer != target.backbuffer ||
+                            m_target.handle != target.handle)) {
+    endRendering();
+  }
   InstanceLayout instanceLayout = InstanceLayout::None;
   VulkanBuffer* instanceBuffer = nullptr;
   if (mesh->instanceLayout != InstanceLayout::None) {
@@ -1063,9 +1067,11 @@ VulkanDevice::draw(DrawKind kind,
       write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
       write.pBufferInfo = &buffers[index];
     } else if (binding.kind == GlslBindingKind::NamedBlock) {
-      // OpenGL gives every block binding point 0 unless it names one; the
-      // backends bind FrameUniforms there.
-      VulkanBuffer* buffer = resolveBuffer(m_uniformBindings[0]);
+      // Named engine blocks resolve to their canonical UBO binding point;
+      // unmapped blocks default to OpenGL's implicit binding point 0.
+      const unsigned slot =
+        binding.blockSlot < kUniformBindings ? binding.blockSlot : 0u;
+      VulkanBuffer* buffer = resolveBuffer(m_uniformBindings[slot]);
       if (buffer != nullptr && buffer->usage == BufferUsage::Uniform) {
         buffer->memory.useSerial = m_recordingSerial;
         buffers[index] = { buffer->memory.buffer,

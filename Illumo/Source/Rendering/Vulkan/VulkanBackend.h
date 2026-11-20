@@ -102,6 +102,8 @@ public:
   bool DestroyTexture(TextureHandle handle) override;
   bool IsTextureValid(TextureHandle handle) const override;
   TextureInfo GetTextureInfo(TextureHandle handle) const override;
+  int maxTextureSize() const override;
+  size_t renderPassBreaks() const override;
 
   FramebufferHandle CreateFramebuffer(
     const FramebufferDesc& desc,

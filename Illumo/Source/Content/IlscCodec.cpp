@@ -339,10 +339,29 @@ readTransform(const Json& value, Transform3D& transform, std::string& error)
   return true;
 }
 
+static bool
+readOptionalText(const Json& object, const char* key, std::string& output)
+{
+  if (!object.contains(key)) {
+    return true;
+  }
+  const Json& value = object[key];
+  if (value.is_null()) {
+    output.clear();
+    return true;
+  }
+  if (!value.is_string()) {
+    return false;
+  }
+  output = value.get<std::string>();
+  return true;
+}
+
 // Returns false with an error for an invalid component; sets newerFormat when
 // the type is an unknown core (non-namespaced) type.
 static bool
 readComponent(const Json& entry,
+              int minor,
               SceneComponent& component,
               bool& newerFormat,
               std::string& error)
@@ -385,18 +404,45 @@ readComponent(const Json& entry,
   }
   if (type == "mesh") {
     SceneMeshRenderer mesh;
-    if (!onlyKeys(entry,
-                  { "type", "asset", "tint", "cast_shadows" },
-                  "mesh component",
-                  error)) {
+    if (minor < 1) {
+      if (!onlyKeys(entry,
+                    { "type", "asset", "tint", "cast_shadows" },
+                    "mesh component",
+                    error)) {
+        return false;
+      }
+    } else if (!onlyKeys(entry,
+                         { "type",
+                           "asset",
+                           "tint",
+                           "cast_shadows",
+                           "albedo_texture",
+                           "normal_texture",
+                           "orm_texture",
+                           "emissive_texture",
+                           "metallic",
+                           "roughness",
+                           "emissive" },
+                         "mesh component",
+                         error)) {
       return false;
     }
     if (!readText(entry, "asset", mesh.asset) ||
         (entry.contains("tint") && !readColor(entry["tint"], mesh.tint)) ||
-        !readBool(entry, "cast_shadows", mesh.castShadows)) {
+        !readBool(entry, "cast_shadows", mesh.castShadows) ||
+        !readOptionalText(entry, "albedo_texture", mesh.albedoTexture) ||
+        !readOptionalText(entry, "normal_texture", mesh.normalTexture) ||
+        !readOptionalText(entry, "orm_texture", mesh.ormTexture) ||
+        !readOptionalText(entry, "emissive_texture", mesh.emissiveTexture) ||
+        (entry.contains("metallic") &&
+         !readFloat(entry["metallic"], mesh.metallic)) ||
+        (entry.contains("roughness") &&
+         !readFloat(entry["roughness"], mesh.roughness)) ||
+        (entry.contains("emissive") &&
+         !readVector3(entry["emissive"], mesh.emissive))) {
       return fail(error,
-                  "mesh component needs an asset id, tint [4] and a "
-                  "boolean cast_shadows");
+                  "mesh component needs an asset id, tint [4], boolean "
+                  "cast_shadows and valid PBR properties");
     }
     component.value = mesh;
     return true;
@@ -464,21 +510,42 @@ readComponent(const Json& entry,
   if (type == "light") {
     SceneLight light;
     std::string kind = "directional";
-    if (!onlyKeys(entry,
-                  { "type", "kind", "color", "intensity", "shadows" },
-                  "light component",
-                  error)) {
+    if (minor < 1) {
+      if (!onlyKeys(entry,
+                    { "type", "kind", "color", "intensity", "shadows" },
+                    "light component",
+                    error)) {
+        return false;
+      }
+    } else if (!onlyKeys(entry,
+                         { "type",
+                           "kind",
+                           "color",
+                           "intensity",
+                           "shadows",
+                           "range",
+                           "inner_angle_degrees",
+                           "outer_angle_degrees" },
+                         "light component",
+                         error)) {
       return false;
     }
-    if (!readText(entry, "kind", kind) || kind != "directional" ||
+    if (!readText(entry, "kind", kind) ||
+        !parseSceneLightKind(kind, light.kind) ||
+        (minor < 1 && light.kind != SceneLightKind::Directional) ||
         (entry.contains("color") &&
          !readVector3(entry["color"], light.color)) ||
         (entry.contains("intensity") &&
          !readFloat(entry["intensity"], light.intensity)) ||
-        !readBool(entry, "shadows", light.shadows)) {
+        !readBool(entry, "shadows", light.shadows) ||
+        (entry.contains("range") && !readFloat(entry["range"], light.range)) ||
+        (entry.contains("inner_angle_degrees") &&
+         !readFloat(entry["inner_angle_degrees"], light.innerAngleDegrees)) ||
+        (entry.contains("outer_angle_degrees") &&
+         !readFloat(entry["outer_angle_degrees"], light.outerAngleDegrees))) {
       return fail(error,
-                  "light needs kind directional, color [3], intensity "
-                  "and a boolean shadows");
+                  "light needs kind directional|point|spot, color [3], "
+                  "intensity, range, cone angles and a boolean shadows");
     }
     component.value = light;
     return true;
@@ -540,6 +607,7 @@ readComponent(const Json& entry,
 
 static bool
 readNode(const Json& entry,
+         int minor,
          SceneNode& node,
          bool& newerFormat,
          std::string& error)
@@ -606,7 +674,7 @@ readNode(const Json& entry,
     }
     for (const Json& value : components) {
       SceneComponent component;
-      if (!readComponent(value, component, newerFormat, error)) {
+      if (!readComponent(value, minor, component, newerFormat, error)) {
         error = where + error;
         return false;
       }
@@ -846,7 +914,7 @@ IlscCodec::parse(std::string_view text,
   for (const Json& entry : nodes) {
     SceneNode node;
     bool newerFormat = false;
-    if (!readNode(entry, node, newerFormat, detail)) {
+    if (!readNode(entry, minor, node, newerFormat, detail)) {
       if (newerFormat) {
         return fail(error,
                     "Scene requires a newer format 2.x (" + detail +
@@ -943,6 +1011,27 @@ writeComponent(const SceneComponent& component)
     out["asset"] = mesh->asset;
     out["tint"] = color(mesh->tint);
     out["cast_shadows"] = mesh->castShadows;
+    if (!mesh->albedoTexture.empty()) {
+      out["albedo_texture"] = mesh->albedoTexture;
+    }
+    if (!mesh->normalTexture.empty()) {
+      out["normal_texture"] = mesh->normalTexture;
+    }
+    if (!mesh->ormTexture.empty()) {
+      out["orm_texture"] = mesh->ormTexture;
+    }
+    if (!mesh->emissiveTexture.empty()) {
+      out["emissive_texture"] = mesh->emissiveTexture;
+    }
+    if (mesh->metallic != 0.0f) {
+      out["metallic"] = number(mesh->metallic);
+    }
+    if (mesh->roughness != 0.8f) {
+      out["roughness"] = number(mesh->roughness);
+    }
+    if (mesh->emissive != Vector3(0.0f)) {
+      out["emissive"] = vector3(mesh->emissive);
+    }
   } else if (const SceneSprite* sprite =
                std::get_if<SceneSprite>(&component.value)) {
     out["type"] = "sprite";
@@ -964,10 +1053,21 @@ writeComponent(const SceneComponent& component)
   } else if (const SceneLight* light =
                std::get_if<SceneLight>(&component.value)) {
     out["type"] = "light";
-    out["kind"] = "directional";
+    out["kind"] = sceneLightKindName(light->kind);
     out["color"] = vector3(light->color);
     out["intensity"] = number(light->intensity);
     out["shadows"] = light->shadows;
+    if (light->kind != SceneLightKind::Directional || light->range != 10.0f) {
+      out["range"] = number(light->range);
+    }
+    if (light->kind == SceneLightKind::Spot ||
+        light->innerAngleDegrees != 25.0f) {
+      out["inner_angle_degrees"] = number(light->innerAngleDegrees);
+    }
+    if (light->kind == SceneLightKind::Spot ||
+        light->outerAngleDegrees != 35.0f) {
+      out["outer_angle_degrees"] = number(light->outerAngleDegrees);
+    }
   } else if (const SceneCamera* camera =
                std::get_if<SceneCamera>(&component.value)) {
     out["type"] = "camera";

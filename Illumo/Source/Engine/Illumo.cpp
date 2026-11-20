@@ -201,7 +201,8 @@ Illumo::initialize()
     std::make_unique<InputManager>(m_window->getWindowInstance());
   Logger::LogTrace("Input manager ready");
   m_scene = std::make_unique<DrawList>(m_window.get(), m_camera.get());
-  m_motionBlurPipelineConfigured = false;
+  m_pipelineConfigured = false;
+  m_hdrFallbackWarned = false;
   GLString::setRenderWindow(m_window.get());
 
   m_context.envVars = m_environment.get();
@@ -359,6 +360,24 @@ Illumo::endUpdate()
   m_inputManager->clearCharQueue();
 }
 
+static PooledRenderTargetDesc
+makeBloomMipTargetDesc(int mipIndex)
+{
+  static constexpr const char* kBloomMipNames[5] = {
+    "BloomMip0", "BloomMip1", "BloomMip2", "BloomMip3", "BloomMip4"
+  };
+  PooledRenderTargetDesc desc;
+  desc.name = kBloomMipNames[std::clamp(mipIndex, 0, 4)];
+  desc.windowRelative = true;
+  desc.mipLevel = std::clamp(mipIndex, 0, 4) + 1;
+  FramebufferAttachmentDesc color;
+  color.format = TextureFormat::RGBA16F;
+  color.filter = TextureFilter::Linear;
+  color.wrap = TextureWrap::ClampToEdge;
+  desc.colorAttachments.push_back(color);
+  return desc;
+}
+
 void
 Illumo::configureScenePipeline()
 {
@@ -369,21 +388,229 @@ Illumo::configureScenePipeline()
   const RenderPipelineConfig pipeline =
     RenderPipelineConfig::fromEnv(m_environment.get());
 
-  if (pipeline.motionBlurEnabled) {
-    const float amount = pipeline.motionBlurAmount;
-    const float maxVel = pipeline.motionBlurMax;
-    const int samples = pipeline.motionBlurSamples;
+  bool has3DWorld = false;
+  const std::vector<DrawableBase*>& worldDrawables =
+    m_scene->drawablesIn(RenderLayerId::World);
+  for (size_t i = 0; i < worldDrawables.size(); ++i) {
+    const DrawableBase* d = worldDrawables[i];
+    if (d != nullptr && d->isVisible() && d->has3DWorldContent()) {
+      has3DWorld = true;
+      break;
+    }
+  }
 
-    if (m_motionBlurPipelineConfigured && m_configuredBlurAmount == amount &&
-        m_configuredBlurMax == maxVel && m_configuredBlurSamples == samples) {
+  ConfiguredPipelineMode mode = ConfiguredPipelineMode::None;
+  if (pipeline.hdrEnabled && (has3DWorld || pipeline.canvasBloomEnabled)) {
+    mode = ConfiguredPipelineMode::HdrForward;
+  } else if (pipeline.motionBlurEnabled) {
+    mode = ConfiguredPipelineMode::LdrMotionBlur;
+  }
+
+  if (m_pipelineConfigured && m_configuredPipelineMode == mode &&
+      m_configuredPipeline == pipeline) {
+    return;
+  }
+
+  if (mode == ConfiguredPipelineMode::HdrForward) {
+    m_renderer->ensureBuiltinStyles();
+    const RenderStyleHandle compositeStyle =
+      m_renderer->getBuiltinStyleHandle(RenderStyleId::HdrComposite);
+    const RenderStyleHandle downStyle =
+      m_renderer->getBuiltinStyleHandle(RenderStyleId::BloomDownsample);
+    const RenderStyleHandle upStyle =
+      m_renderer->getBuiltinStyleHandle(RenderStyleId::BloomUpsample);
+    const RenderStyleHandle fxaaStyle =
+      m_renderer->getBuiltinStyleHandle(RenderStyleId::FxaaResolve);
+
+    const bool stylesOk =
+      compositeStyle.isValid() &&
+      (!pipeline.bloomEnabled || (downStyle.isValid() && upStyle.isValid())) &&
+      (!pipeline.fxaaEnabled || fxaaStyle.isValid());
+
+    PooledRenderTargetDesc hdrGeomDesc;
+    hdrGeomDesc.name = "WorldHdrVelocity";
+    hdrGeomDesc.windowRelative = true;
+    FramebufferAttachmentDesc hdrColor;
+    hdrColor.format = TextureFormat::RGBA16F;
+    hdrColor.filter = TextureFilter::Linear;
+    hdrColor.wrap = TextureWrap::ClampToEdge;
+    hdrGeomDesc.colorAttachments.push_back(hdrColor);
+    FramebufferAttachmentDesc hdrVelocity;
+    hdrVelocity.format = TextureFormat::RG16F;
+    hdrVelocity.filter = TextureFilter::Nearest;
+    hdrVelocity.wrap = TextureWrap::ClampToEdge;
+    hdrGeomDesc.colorAttachments.push_back(hdrVelocity);
+    hdrGeomDesc.depthStencilFormat = TextureFormat::Depth24;
+
+    const std::array<int, 2> winDims =
+      m_window
+        ? m_window->getWindowDimensions()
+        : std::array<int, 2>{ kDefaultWindowWidth, kDefaultWindowHeight };
+    const PooledRenderTarget probe = m_renderer->getRenderTargetPool().acquire(
+      hdrGeomDesc, std::max(1, winDims[0]), std::max(1, winDims[1]));
+
+    if (!stylesOk || !probe.isValid()) {
+      if (!m_hdrFallbackWarned) {
+        m_hdrFallbackWarned = true;
+        Logger::LogWarning("Illumo: HDR render targets or styles unavailable; "
+                           "falling back to LDR backbuffer");
+      }
+      m_pipelineConfigured = true;
+      m_configuredPipelineMode = mode;
+      m_configuredPipeline = pipeline;
+      m_scene->SetDefaultLayerPasses(RenderLayerId::World, {});
       return;
     }
 
-    m_motionBlurPipelineConfigured = true;
-    m_configuredBlurAmount = amount;
-    m_configuredBlurMax = maxVel;
-    m_configuredBlurSamples = samples;
+    std::vector<RenderPassDesc> worldPasses;
 
+    RenderPassDesc geomPass;
+    geomPass.name = "WorldHdrGeomPass";
+    geomPass.type = PassType::Draw;
+    geomPass.useScreenTarget = false;
+    geomPass.pooledTargetName = hdrGeomDesc.name;
+    geomPass.targetDesc = hdrGeomDesc;
+    geomPass.clear.clearColor = true;
+    geomPass.clear.clearColorValue = { 0.01f, 0.01f, 0.01f, 1.0f };
+    geomPass.clear.clearDepth = true;
+    worldPasses.push_back(std::move(geomPass));
+
+    const bool runBloom =
+      pipeline.bloomEnabled && pipeline.bloomIntensity > 0.0f;
+    const int mipCount = std::clamp(pipeline.bloomMipCount, 1, 5);
+    if (runBloom) {
+      for (int m = 0; m < mipCount; ++m) {
+        const PooledRenderTargetDesc mipDesc = makeBloomMipTargetDesc(m);
+        RenderPassDesc downPass;
+        downPass.name = std::string("BloomDown") + std::to_string(m);
+        downPass.type = PassType::PostProcess;
+        downPass.useScreenTarget = false;
+        downPass.pooledTargetName = mipDesc.name;
+        downPass.targetDesc = mipDesc;
+        downPass.styleHandle = downStyle;
+
+        PassInputTargetBinding srcBinding;
+        srcBinding.targetName = (m == 0) ? std::string("WorldHdrVelocity")
+                                         : makeBloomMipTargetDesc(m - 1).name;
+        srcBinding.attachmentIndex = 0;
+        srcBinding.slot = 0;
+        srcBinding.samplerUniformName = "uSourceTexture";
+        downPass.inputTargetTextures.push_back(srcBinding);
+        downPass.uniformInts.push_back(
+          PassUniformInt{ "uKarisAverage", (m == 0) ? 1 : 0 });
+        worldPasses.push_back(std::move(downPass));
+      }
+
+      for (int m = mipCount - 2; m >= 0; --m) {
+        const PooledRenderTargetDesc dstMipDesc = makeBloomMipTargetDesc(m);
+        RenderPassDesc upPass;
+        upPass.name = std::string("BloomUp") + std::to_string(m);
+        upPass.type = PassType::PostProcess;
+        upPass.useScreenTarget = false;
+        upPass.pooledTargetName = dstMipDesc.name;
+        upPass.targetDesc = dstMipDesc;
+        upPass.styleHandle = upStyle;
+
+        PassInputTargetBinding srcBinding;
+        srcBinding.targetName = makeBloomMipTargetDesc(m + 1).name;
+        srcBinding.attachmentIndex = 0;
+        srcBinding.slot = 0;
+        srcBinding.samplerUniformName = "uSourceTexture";
+        upPass.inputTargetTextures.push_back(srcBinding);
+        upPass.uniformFloats.push_back(
+          PassUniformFloat{ "uFilterRadius", 1.0f });
+        worldPasses.push_back(std::move(upPass));
+      }
+    }
+
+    RenderPassDesc compositePass;
+    compositePass.name = "HdrComposite";
+    compositePass.type = PassType::PostProcess;
+    compositePass.styleHandle = compositeStyle;
+    if (pipeline.fxaaEnabled) {
+      compositePass.useScreenTarget = false;
+      compositePass.pooledTargetName = "WorldLdrPreFxaa";
+      compositePass.targetDesc.name = "WorldLdrPreFxaa";
+      compositePass.targetDesc.windowRelative = true;
+      FramebufferAttachmentDesc ldrColor;
+      ldrColor.format = TextureFormat::RGBA8;
+      ldrColor.filter = TextureFilter::Linear;
+      ldrColor.wrap = TextureWrap::ClampToEdge;
+      compositePass.targetDesc.colorAttachments.push_back(ldrColor);
+    } else {
+      compositePass.useScreenTarget = true;
+    }
+
+    PassInputTargetBinding hdrBinding;
+    hdrBinding.targetName = "WorldHdrVelocity";
+    hdrBinding.attachmentIndex = 0;
+    hdrBinding.slot = 0;
+    hdrBinding.samplerUniformName = "uColorTexture";
+    compositePass.inputTargetTextures.push_back(hdrBinding);
+
+    PassInputTargetBinding velBinding;
+    velBinding.targetName = "WorldHdrVelocity";
+    velBinding.attachmentIndex = 1;
+    velBinding.slot = 1;
+    velBinding.samplerUniformName = "uVelocityTexture";
+    compositePass.inputTargetTextures.push_back(velBinding);
+
+    if (runBloom) {
+      PassInputTargetBinding bloomBinding;
+      bloomBinding.targetName = "BloomMip0";
+      bloomBinding.attachmentIndex = 0;
+      bloomBinding.slot = 2;
+      bloomBinding.samplerUniformName = "uBloomTexture";
+      compositePass.inputTargetTextures.push_back(bloomBinding);
+    }
+
+    compositePass.uniformInts.push_back(PassUniformInt{
+      "uMotionBlurEnabled", pipeline.motionBlurEnabled ? 1 : 0 });
+    compositePass.uniformFloats.push_back(
+      PassUniformFloat{ "uMotionBlurAmount", pipeline.motionBlurAmount });
+    compositePass.uniformFloats.push_back(
+      PassUniformFloat{ "uMotionBlurMax", pipeline.motionBlurMax });
+    compositePass.uniformInts.push_back(
+      PassUniformInt{ "uMotionBlurSamples", pipeline.motionBlurSamples });
+    compositePass.uniformInts.push_back(
+      PassUniformInt{ "uBloomEnabled", runBloom ? 1 : 0 });
+    compositePass.uniformFloats.push_back(
+      PassUniformFloat{ "uBloomIntensity", pipeline.bloomIntensity });
+    compositePass.uniformFloats.push_back(
+      PassUniformFloat{ "uExposure", pipeline.exposure });
+    compositePass.uniformInts.push_back(PassUniformInt{
+      "uTonemapper",
+      std::clamp(
+        pipeline.tonemapper, 0, RenderPipelineConfig::kMaxTonemapper) });
+    compositePass.uniformInts.push_back(
+      PassUniformInt{ "uStoreLumaInAlpha", pipeline.fxaaEnabled ? 1 : 0 });
+    worldPasses.push_back(std::move(compositePass));
+
+    if (pipeline.fxaaEnabled) {
+      RenderPassDesc fxaaPass;
+      fxaaPass.name = "FxaaResolve";
+      fxaaPass.type = PassType::PostProcess;
+      fxaaPass.useScreenTarget = true;
+      fxaaPass.styleHandle = fxaaStyle;
+
+      PassInputTargetBinding ldrInput;
+      ldrInput.targetName = "WorldLdrPreFxaa";
+      ldrInput.attachmentIndex = 0;
+      ldrInput.slot = 0;
+      ldrInput.samplerUniformName = "uColorTexture";
+      fxaaPass.inputTargetTextures.push_back(ldrInput);
+      worldPasses.push_back(std::move(fxaaPass));
+    }
+
+    m_pipelineConfigured = true;
+    m_configuredPipelineMode = mode;
+    m_configuredPipeline = pipeline;
+    m_scene->SetDefaultLayerPasses(RenderLayerId::World,
+                                   std::move(worldPasses));
+    return;
+  }
+
+  if (mode == ConfiguredPipelineMode::LdrMotionBlur) {
     RenderPassDesc geomPass;
     geomPass.name = "WorldGeomPass";
     geomPass.type = PassType::Draw;
@@ -426,30 +653,28 @@ Illumo::configureScenePipeline()
     velBinding.samplerUniformName = "uVelocityTexture";
     postPass.inputTargetTextures.push_back(velBinding);
 
-    PassUniformFloat blurAmount;
-    blurAmount.name = "uMotionBlurAmount";
-    blurAmount.value = amount;
-    postPass.uniformFloats.push_back(blurAmount);
-
-    PassUniformFloat blurMax;
-    blurMax.name = "uMotionBlurMax";
-    blurMax.value = maxVel;
-    postPass.uniformFloats.push_back(blurMax);
-
-    PassUniformInt blurSamples;
-    blurSamples.name = "uMotionBlurSamples";
-    blurSamples.value = samples;
-    postPass.uniformInts.push_back(blurSamples);
+    postPass.uniformFloats.push_back(
+      PassUniformFloat{ "uMotionBlurAmount", pipeline.motionBlurAmount });
+    postPass.uniformFloats.push_back(
+      PassUniformFloat{ "uMotionBlurMax", pipeline.motionBlurMax });
+    postPass.uniformInts.push_back(
+      PassUniformInt{ "uMotionBlurSamples", pipeline.motionBlurSamples });
 
     std::vector<RenderPassDesc> worldPasses;
     worldPasses.push_back(std::move(geomPass));
     worldPasses.push_back(std::move(postPass));
+    m_pipelineConfigured = true;
+    m_configuredPipelineMode = mode;
+    m_configuredPipeline = pipeline;
     m_scene->SetDefaultLayerPasses(RenderLayerId::World,
                                    std::move(worldPasses));
-  } else {
-    m_motionBlurPipelineConfigured = false;
-    m_scene->SetDefaultLayerPasses(RenderLayerId::World, {});
+    return;
   }
+
+  m_pipelineConfigured = true;
+  m_configuredPipelineMode = mode;
+  m_configuredPipeline = pipeline;
+  m_scene->SetDefaultLayerPasses(RenderLayerId::World, {});
 }
 
 DrawList*
@@ -460,7 +685,6 @@ Illumo::beginRender()
   }
   ILLUMO_PROFILE_ZONE("Illumo.BeginRender");
   m_frameProfiler.mark(FramePhase::ScenePreparation);
-  configureScenePipeline();
   m_scene->ClearDrawables();
   return m_scene.get();
 }
@@ -477,6 +701,7 @@ Illumo::endRender()
     ILLUMO_PROFILE_ZONE("Illumo.AssetPump");
     m_assetManager->pump();
   }
+  configureScenePipeline();
   m_frameProfiler.mark(FramePhase::Commands);
   {
     ILLUMO_PROFILE_ZONE("Illumo.BeginFrame");
@@ -525,6 +750,9 @@ Illumo::releaseServices()
   m_window.reset();
   clearContext();
   m_initialized = false;
+  m_pipelineConfigured = false;
+  m_hdrFallbackWarned = false;
+  m_configuredPipelineMode = ConfiguredPipelineMode::None;
 }
 
 void

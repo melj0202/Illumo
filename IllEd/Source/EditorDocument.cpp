@@ -1047,6 +1047,10 @@ EditorDocument::paste(const SceneDocument& fragment,
       SceneSprite* sprite = std::get_if<SceneSprite>(&component.value);
       if (mesh != nullptr) {
         remapAssetReference(mesh->asset, assetIds);
+        remapAssetReference(mesh->albedoTexture, assetIds);
+        remapAssetReference(mesh->normalTexture, assetIds);
+        remapAssetReference(mesh->ormTexture, assetIds);
+        remapAssetReference(mesh->emissiveTexture, assetIds);
       }
       if (sprite != nullptr) {
         remapAssetReference(sprite->texture, assetIds);

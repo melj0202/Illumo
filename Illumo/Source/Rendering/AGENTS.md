@@ -32,17 +32,18 @@ Services consume this boundary without importing GL or Vulkan types.
   claim a dropped frame was complete.
 - `DrawList` is a non-owning ordered drawable list rebuilt each frame. It
   does not own drawables and must not become a retained scene graph or ECS.
-- Directional shadows are one Renderer-owned pass. It runs before every layer
-  unless the World pass sequence places a `PassType::ShadowDepth` entry,
-  which runs it there with `passMask` choosing the depth emitters; an entry
-  in another layer is a frame error (D-RP2). The
-  first camera-visible World caster selects the light; the Renderer retains
-  caster descriptors, extrudes the camera frustum toward that light by the
-  configured caster distance, fits the shared map to intersecting bounds, and
-  rejects depth emission outside the relevant volume or fitted light frustum.
-  Invalid camera reconstruction fails open to all casters. Drawables and
-  SceneGraph attachments must not allocate private per-object shadow maps or
-  clear depth once per object.
+- Shadows are one Renderer-owned pass (`PassType::ShadowDepth`). It runs before
+  every layer unless the World pass sequence places a `PassType::ShadowDepth`
+  entry, which runs it there with `passMask` choosing the depth emitters; an
+  entry in another layer is a frame error (D-RP2). When perspective CSM or a
+  spot shadow light is active (D-R41), `Renderer` allocates a `2 * shadowMapSize`
+  `Depth24` 4-quadrant 2D shadow atlas (clamped to `maxTextureSize()`):
+  quadrants `0..2` hold up to 3 stabilized directional CSM splits and quadrant
+  `3` holds the highest-priority shadow-casting spot light. Each quadrant fits
+  and culls independently (`isShadowQuadrantRelevant(q, bounds)`). Invalid
+  camera reconstruction fails open to all casters. Drawables and SceneGraph
+  attachments must not allocate private per-object shadow maps or clear depth
+  once per object.
 - Camera and shadow bounds tests are Renderer-owned and conservative. Invalid
   frusta, matrices, or bounds disable the corresponding rejection rather than
   risking missing geometry.
@@ -68,25 +69,39 @@ Services consume this boundary without importing GL or Vulkan types.
   backend accepts `DrawIndexedInstanced` only after `SetInstanceStream`
   attached a large enough Instance buffer to the bound mesh in the same
   submission. A `WriteBuffer` at offset zero may discard the buffer first.
-- `Renderer::useFrameUniforms()` writes the `FrameUniforms` block at most once
-  per `RenderScene`, and only when called, so frames without instanced draws
-  emit nothing new. Shaders declaring the block read it from
-  `FrameUniformsBindingPoint`; keep `Renderer::FrameUniforms` and every
-  shader's std140 declaration identical (`Illumo.Instancing.StylesRegistered`
-  checks the text).
+- `Renderer::useFrameUniforms()` and `Renderer::useLightUniforms()` write the
+  `FrameUniforms` (`FrameUniformsBindingPoint`, slot 0) and `LightUniforms`
+  (`LightUniformsBindingPoint`, slot 1, resolved by `namedUniformBlockBinding`)
+  blocks at most once per `RenderScene`, and before any pass begins when active
+  so Vulkan routes them to the upload command buffer with zero render-pass
+  breaks (D-R41). Keep `Renderer::FrameUniforms` / `Renderer::LightUniforms`
+  and every shader's std140 declarations identical (`<illumo/light_uniforms.glsl>`).
 - A `RecordedCommandList` is recorded with the ordinary push helpers between
   `beginRecording` and `endRecording`, owns its matrices, and runs in place by
-  `ExecuteList`. Never record `useFrameUniforms`, framebuffer or viewport
-  changes, or anything that varies per frame; patch counts in place instead.
-- `RenderWorld` is a World drawable that owns persistent instances. Its
-  shadow commands rebind the shared `ShadowDepth` style afterwards, because
-  later drawables expect it. Call `releaseResources()` before its renderer is
-  destroyed. Its sky draws first and derives the rotation-only matrix from
-  the frame's world view projection, so it needs no camera of its own.
-  Anything that changes what a bucket uploads must go through `touchBucket`
-  (and moves must set `movedFrame`), and anything that changes the camera or
-  shadow frustum must change Renderer's cull revisions; otherwise an
-  unchanged-looking bucket keeps its stale instance data (D-R39).
+  `ExecuteList`. Never record `useFrameUniforms`, `useLightUniforms`,
+  framebuffer or viewport changes, or anything that varies per frame; patch
+  counts in place instead.
+- `RenderWorld` is a World drawable that owns persistent instances, PBR
+  materials (`albedo`, `normal`, `ORM`, `emissive`), and punctual lights (up to
+  64 frustum-culled and priority-sorted into `LightUniforms`, D-R41). Each
+  bucket owns distinct per-quadrant `shadowBuffers[0..3]`, `shadowUploads[0..3]`
+  and `shadow[0..3]` recordings so static cascades skip uploads independently
+  and never break a Vulkan dynamic rendering pass. Its shadow commands rebind
+  the shared `ShadowDepth` style afterwards, because later drawables expect it.
+  Call `releaseResources()` before its renderer is destroyed. Its sky draws
+  first and derives the rotation-only matrix from the frame's world view
+  projection, so it needs no camera of its own. Anything that changes what a
+  bucket uploads must go through `touchBucket` (and moves must set `movedFrame`),
+  and anything that changes the camera or shadow frustum must change Renderer's
+  cull revisions; otherwise an unchanged-looking bucket keeps its stale instance
+  data (D-R39).
+- `DrawableBase::has3DWorldContent()` reports whether a World drawable holds 3D
+  geometry (`RenderWorld`, `SkyboxVisual`, `SceneGraphDrawable`, 3D
+  `MeshVisual`, `GroundPlaneVisual`). `Illumo::configureScenePipeline()`
+  activates the linear HDR + 5-mip Karis bloom + AgX + FXAA pass chain only
+  when `hdrEnabled` is set and World has 3D content (or `canvasBloomEnabled`
+  is explicitly enabled), keeping pure-2D frames on the zero-allocation fast
+  path (D-R41).
 - Uniform tokens carry `RenderCommand::uniformKey`; the push helpers set it
   with `uniformKeyOf(name)`. It lives in former tail padding: keep
   `sizeof(RenderCommand) <= 72` (`PublicHeaderSmoke`). Backends resolve through `UniformNameTable`, which

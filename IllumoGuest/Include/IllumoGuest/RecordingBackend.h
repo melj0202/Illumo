@@ -149,6 +149,10 @@ public:
   bool AppendSkybox(const SkyboxVisual& skybox) override;
   // A cubemap's host id, or empty while it has no ready host copy.
   GuestResourceId hostCubemap(TextureHandle handle) const;
+  // A 2D texture's host id, or empty while pending or not a 2D texture.
+  GuestResourceId hostTexture(TextureHandle handle) const;
+  bool isUsable2DTexture(TextureHandle handle) const;
+  std::uint64_t textureEpoch() const { return m_textureEpoch; }
 
 private:
   struct Mesh
@@ -224,8 +228,6 @@ private:
   void emitMeshWrites();
   void pumpMeshes();
   void mergeShadowCaster(const GuestShadowCaster& caster);
-  // A host texture id for a proxied item, or empty while not on the host.
-  GuestResourceId hostTexture(TextureHandle handle) const;
   std::uint32_t currentTarget() const;
   // Closes the target's batch range at this point and places a visual.
   bool placeVisual(std::uint32_t visual);

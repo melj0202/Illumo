@@ -32,8 +32,19 @@ struct WorldLook
   // canvas_frag.glsl and IllumoGame's CanvasView.
   static constexpr const char* kCanvasFadeUniform = "uCanvasFade";
   static constexpr const char* kResolutionUniform = "u_resolution";
+  static constexpr const char* kAlbedoMapUniform = "uAlbedoMap";
+  static constexpr const char* kNormalMapUniform = "uNormalMap";
+  static constexpr const char* kOrmMapUniform = "uOrmMap";
+  static constexpr const char* kEmissiveMapUniform = "uEmissiveMap";
+  static constexpr const char* kMaterialFactorsUniform = "uMaterialFactors";
+  static constexpr const char* kEmissiveFactorUniform = "uEmissiveFactor";
+  static constexpr const char* kShadowQuadrantUniform = "uShadowQuadrant";
   static constexpr int kTextureUnit = 0;
   static constexpr int kShadowTextureUnit = 1;
+  static constexpr int kAlbedoTextureUnit = 2;
+  static constexpr int kNormalTextureUnit = 3;
+  static constexpr int kOrmTextureUnit = 4;
+  static constexpr int kEmissiveTextureUnit = 5;
   static constexpr int kPositionLocation = 0;
   static constexpr int kColorLocation = 1;
   static constexpr int kUvLocation = 2;

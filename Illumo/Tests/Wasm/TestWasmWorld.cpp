@@ -407,7 +407,7 @@ worldAddressingValidation()
   for (const GuestWorldOperation& invalid :
        { simple(GuestWorldOp::SelectWorld, 0),
          simple(GuestWorldOp::DestroyWorld, 0),
-         simple(static_cast<GuestWorldOp>(13), 1) }) {
+         simple(static_cast<GuestWorldOp>(16), 1) }) {
     GuestFrame ignored;
     denied =
       denied && !GuestFrame::read(encode(worldFrame({ invalid })), ignored);
@@ -552,9 +552,277 @@ worldsPerScene()
   return counters.failures == 0;
 }
 
+// Frame schema v10: PBR material textures/factors and punctual lights, v9
+// backward compatibility, and host-side light/texture validation.
+static bool
+worldV10Validation()
+{
+  TestCounters counters;
+  const GuestResourceId texA{ 700, GuestResourceKind::Texture, 1, 1 };
+  const GuestResourceId texB{ 700, GuestResourceKind::Texture, 2, 1 };
+  const GuestResourceId texC{ 700, GuestResourceKind::Texture, 3, 1 };
+  const GuestResourceId texD{ 700, GuestResourceKind::Texture, 4, 1 };
+
+  GuestWorldOperation pbrCreate = materialCreate(1);
+  pbrCreate.material.albedoTexture = texA;
+  pbrCreate.material.normalTexture = texB;
+  pbrCreate.material.metallicRoughnessTexture = texC;
+  pbrCreate.material.emissiveTexture = texD;
+  pbrCreate.material.metallic = 0.75f;
+  pbrCreate.material.roughness = 0.25f;
+  pbrCreate.material.emissiveFactor = { 1.5f, 0.5f, 0.25f };
+
+  GuestWorldOperation pbrUpdate = simple(GuestWorldOp::MaterialUpdate, 1);
+  pbrUpdate.material.metallic = 0.1f;
+  pbrUpdate.material.roughness = 0.9f;
+  pbrUpdate.material.emissiveFactor = { 0.0f, 2.0f, 0.0f };
+
+  GuestWorldOperation pointCreate = simple(GuestWorldOp::LightCreate, 5);
+  pointCreate.light.kind = 0u;
+  pointCreate.light.position = { 1.0f, 2.0f, 3.0f };
+  pointCreate.light.color = { 0.8f, 0.7f, 0.6f };
+  pointCreate.light.intensity = 4.5f;
+  pointCreate.light.range = 12.0f;
+  pointCreate.light.visible = true;
+
+  GuestWorldOperation spotUpdate = simple(GuestWorldOp::LightUpdate, 5);
+  spotUpdate.light.kind = 1u;
+  spotUpdate.light.position = { -2.0f, 5.0f, 1.0f };
+  spotUpdate.light.direction = { 0.0f, -1.0f, 0.0f };
+  spotUpdate.light.color = { 1.0f, 0.9f, 0.8f };
+  spotUpdate.light.intensity = 8.0f;
+  spotUpdate.light.range = 25.0f;
+  spotUpdate.light.innerCos = 0.9f;
+  spotUpdate.light.outerCos = 0.75f;
+  spotUpdate.light.castsShadow = true;
+  spotUpdate.light.visible = false;
+
+  const GuestFrame frame =
+    worldFrame({ pbrCreate,
+                 pbrUpdate,
+                 pointCreate,
+                 spotUpdate,
+                 simple(GuestWorldOp::LightDestroy, 5) });
+  const std::vector<std::byte> bytes = encode(frame);
+  GuestFrame decoded;
+  const bool ok = GuestFrame::read(bytes, decoded);
+  const std::vector<GuestWorldOperation>& ops = decoded.worldOperations;
+  testTrue(
+    counters,
+    ok && ops.size() == 5 && ops[0].material.albedoTexture.slot == 1 &&
+      ops[0].material.normalTexture.slot == 2 &&
+      ops[0].material.metallicRoughnessTexture.slot == 3 &&
+      ops[0].material.emissiveTexture.slot == 4 &&
+      ops[0].material.metallic == 0.75f && ops[0].material.roughness == 0.25f &&
+      ops[0].material.emissiveFactor[0] == 1.5f &&
+      ops[1].material.metallic == 0.1f &&
+      ops[1].material.emissiveFactor[1] == 2.0f &&
+      ops[2].op == GuestWorldOp::LightCreate && ops[2].light.kind == 0u &&
+      ops[2].light.intensity == 4.5f && ops[2].light.range == 12.0f &&
+      ops[3].op == GuestWorldOp::LightUpdate && ops[3].light.kind == 1u &&
+      ops[3].light.castsShadow && !ops[3].light.visible &&
+      ops[3].light.innerCos == 0.9f && ops[3].light.outerCos == 0.75f &&
+      ops[4].op == GuestWorldOp::LightDestroy,
+    "v10 PBR material and punctual light operations round-trip");
+
+  bool truncations = true;
+  for (std::size_t size = 0; size < bytes.size(); ++size) {
+    GuestFrame ignored;
+    truncations =
+      truncations && !GuestFrame::read(std::span(bytes).first(size), ignored);
+  }
+  testTrue(counters, truncations, "Every truncated v10 frame is rejected");
+
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float inf = std::numeric_limits<float>::infinity();
+  GuestWorldOperation badMeshTex = pbrCreate;
+  badMeshTex.material.albedoTexture.kind = GuestResourceKind::Mesh;
+  GuestWorldOperation badMetallic = pbrCreate;
+  badMetallic.material.metallic = 1.5f;
+  GuestWorldOperation badRoughness = pbrCreate;
+  badRoughness.material.roughness = -0.1f;
+  GuestWorldOperation badEmissive = pbrCreate;
+  badEmissive.material.emissiveFactor[2] = -0.5f;
+  GuestWorldOperation nanRoughness = pbrCreate;
+  nanRoughness.material.roughness = nan;
+
+  GuestWorldOperation zeroLightId = pointCreate;
+  zeroLightId.id = 0;
+  GuestWorldOperation badLightKind = pointCreate;
+  badLightKind.light.kind = 2u;
+  GuestWorldOperation zeroRange = pointCreate;
+  zeroRange.light.range = 0.0f;
+  GuestWorldOperation negIntensity = pointCreate;
+  negIntensity.light.intensity = -1.0f;
+  GuestWorldOperation infLight = pointCreate;
+  infLight.light.position[0] = inf;
+  GuestWorldOperation negLightColor = pointCreate;
+  negLightColor.light.color[1] = -0.1f;
+  GuestWorldOperation zeroSpotDir = spotUpdate;
+  zeroSpotDir.light.direction = { 0.0f, 0.0f, 0.0f };
+  GuestWorldOperation invertedCone = spotUpdate;
+  invertedCone.light.innerCos = 0.5f;
+  invertedCone.light.outerCos = 0.8f;
+
+  bool denied = true;
+  for (const GuestWorldOperation& invalid : { badMeshTex,
+                                              badMetallic,
+                                              badRoughness,
+                                              badEmissive,
+                                              nanRoughness,
+                                              zeroLightId,
+                                              badLightKind,
+                                              zeroRange,
+                                              negIntensity,
+                                              infLight,
+                                              negLightColor,
+                                              zeroSpotDir,
+                                              invertedCone }) {
+    GuestFrame ignored;
+    denied =
+      denied && !GuestFrame::read(encode(worldFrame({ invalid })), ignored);
+  }
+  // Light operations must be rejected in version 9 packets.
+  std::vector<std::byte> lightInV9 = encode(worldFrame({ pointCreate }));
+  lightInV9[4] = std::byte{ 9 };
+  GuestFrame ignored;
+  testTrue(counters,
+           denied && !GuestFrame::read(lightInV9, ignored),
+           "Malformed v10 material/light payloads and lights in v9 are denied");
+
+  // Backward compatibility: raw version 9 packet with v9 MaterialCreate (no
+  // texture/PBR tail) still decodes with default v10 PBR fields.
+  GuestWireWriter v9Wire;
+  v9Wire.u32(GuestFrame::Magic);
+  v9Wire.u32(9u);
+  v9Wire.f32(640.0f);
+  v9Wire.f32(480.0f);
+  v9Wire.u32(0u); // hasCamera
+  for (int i = 0; i < 16; ++i) {
+    v9Wire.f32(0.0f);
+  }
+  v9Wire.u32(0u); // batches
+  v9Wire.u32(0u); // textureWrites
+  v9Wire.u32(0u); // shadowCasters
+  v9Wire.u32(0u); // meshWrites
+  v9Wire.u32(0u); // surfaces
+  v9Wire.u32(1u); // 1 worldOperation: v9 MaterialCreate
+  v9Wire.u32(static_cast<std::uint32_t>(GuestWorldOp::MaterialCreate));
+  v9Wire.u32(1u);
+  v9Wire.f32(0.25f);
+  v9Wire.f32(0.5f);
+  v9Wire.f32(0.75f);
+  v9Wire.f32(1.0f);
+  v9Wire.u32(3u); // receivesShadow | castsShadow
+  v9Wire.u32(0u); // visualOperations
+  v9Wire.u32(0u); // compositions
+  GuestFrame v9Decoded;
+  testTrue(
+    counters,
+    GuestFrame::read(v9Wire.data(), v9Decoded) &&
+      v9Decoded.worldOperations.size() == 1 &&
+      v9Decoded.worldOperations[0].material.tint[0] == 0.25f &&
+      v9Decoded.worldOperations[0].material.metallic == 0.0f &&
+      v9Decoded.worldOperations[0].material.roughness == 0.8f &&
+      v9Decoded.worldOperations[0].material.albedoTexture.owner == 0,
+    "Version 9 MaterialCreate packets remain accepted with v10 defaults");
+
+  // Host WasmFrameRenderer transactional checks, texture lifetime, and light
+  // quota.
+  NullRenderWindow window(640, 480);
+  EnvVars env;
+  env.setVar("WinX", 640);
+  env.setVar("WinY", 480);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+  renderer.ensureBuiltinStyles();
+  GuestFrameLimits limits;
+  limits.maximumWorldLights = 2u;
+  WasmFrameRenderer bridge(renderer, 700, limits);
+
+  const std::array<std::byte, 4> pixel{
+    std::byte{ 255 }, std::byte{ 255 }, std::byte{ 255 }, std::byte{ 255 }
+  };
+  const GuestResourceId flatTex = bridge.createTexture(pixel, 1, 1, 4, false);
+  const GuestResourceId normTex = bridge.createTexture(pixel, 1, 1, 4, true);
+  const std::vector<std::byte> cubeBytes(GuestCubemapRequest::bytesFor(1));
+  const GuestResourceId cubeTex = bridge.createCubemap(cubeBytes, 1);
+
+  GuestWorldOperation cubemapMat = materialCreate(1);
+  cubemapMat.material.albedoTexture = cubeTex;
+  GuestWorldOperation unknownMat = materialCreate(1);
+  unknownMat.material.albedoTexture = {
+    700, GuestResourceKind::Texture, 99, 1
+  };
+  testTrue(counters,
+           !bridge.accept(encode(worldFrame({ cubemapMat }))) &&
+             !bridge.accept(encode(worldFrame({ unknownMat }))),
+           "Cubemap or unknown texture in a material slot is rejected");
+
+  GuestWorldOperation validMat = materialCreate(1);
+  validMat.material.blend = false;
+  validMat.material.albedoTexture = flatTex;
+  validMat.material.normalTexture = normTex;
+  validMat.material.metallic = 0.5f;
+  validMat.material.roughness = 0.4f;
+  testTrue(counters,
+           bridge.accept(encode(worldFrame({ validMat }))) &&
+             bridge.releaseTexture(flatTex) && bridge.releaseTexture(normTex),
+           "Material retains leased 2D textures after guest releaseTexture");
+
+  GuestWorldOperation l1 = pointCreate;
+  l1.id = 1;
+  GuestWorldOperation l2 = spotUpdate;
+  l2.op = GuestWorldOp::LightCreate;
+  l2.id = 2;
+  GuestWorldOperation l3 = pointCreate;
+  l3.id = 3;
+  testTrue(counters,
+           bridge.accept(encode(worldFrame({ l1 }))) &&
+             bridge.counters().worldLights == 1 &&
+             !bridge.accept(encode(worldFrame({ l1 }))) &&
+             !bridge.accept(
+               encode(worldFrame({ simple(GuestWorldOp::LightUpdate, 99) }))) &&
+             !bridge.accept(
+               encode(worldFrame({ simple(GuestWorldOp::LightDestroy, 99) }))),
+           "Duplicate or unknown light ids are rejected transactionally");
+
+  // Second light in world 2 reaches quota (2); a third light is denied until
+  // freed.
+  testTrue(counters,
+           bridge.accept(encode(
+             worldFrame({ simple(GuestWorldOp::SelectWorld, 2), l2 }))) &&
+             bridge.counters().worldLights == 2 &&
+             !bridge.accept(encode(worldFrame({ l3 }))) &&
+             bridge.accept(
+               encode(worldFrame({ simple(GuestWorldOp::DestroyWorld, 2) }))) &&
+             bridge.counters().worldLights == 1 &&
+             bridge.accept(encode(worldFrame({ l3 }))) &&
+             bridge.counters().worldLights == 2 &&
+             bridge.accept(
+               encode(worldFrame({ simple(GuestWorldOp::LightDestroy, 1) }))) &&
+             bridge.counters().worldLights == 1,
+           "maximumWorldLights quota spans guest worlds and frees on destroy");
+
+  DrawList scene(&window, &camera);
+  bridge.dispatch(scene);
+  renderer.BeginFrame();
+  renderer.RenderScene(&scene, &camera);
+  renderer.EndFrame();
+  testTrue(counters,
+           renderer.frameError().empty(),
+           "Accepted v10 world renders cleanly without backend errors");
+  return counters.failures == 0;
+}
+
 bool
 runWasmWorldTest(const std::string& name)
 {
+  if (name == "WorldV10Validation") {
+    return worldV10Validation();
+  }
   if (name == "WorldAddressingValidation") {
     return worldAddressingValidation();
   }

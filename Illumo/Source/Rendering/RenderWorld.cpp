@@ -20,6 +20,46 @@ finiteValues(const float* values, size_t count)
   return true;
 }
 
+static bool
+validMaterialDesc(const RenderMaterialDesc& desc)
+{
+  return finiteValues(desc.tint.data(), desc.tint.size()) &&
+         std::isfinite(desc.metallic) && std::isfinite(desc.roughness) &&
+         finiteValues(desc.emissiveFactor.data(), desc.emissiveFactor.size());
+}
+
+static bool
+validLightDesc(const RenderLightDesc& desc)
+{
+  if (desc.kind != RenderLightKind::Point &&
+      desc.kind != RenderLightKind::Spot) {
+    return false;
+  }
+  if (!finiteValues(desc.position.data(), desc.position.size()) ||
+      !finiteValues(desc.direction.data(), desc.direction.size()) ||
+      !finiteValues(desc.color.data(), desc.color.size()) ||
+      !std::isfinite(desc.intensity) || !std::isfinite(desc.range) ||
+      !std::isfinite(desc.innerConeCos) || !std::isfinite(desc.outerConeCos)) {
+    return false;
+  }
+  if (desc.range <= 0.0f || desc.intensity < 0.0f) {
+    return false;
+  }
+  if (desc.kind == RenderLightKind::Spot) {
+    const glm::vec3 dir(
+      desc.direction[0], desc.direction[1], desc.direction[2]);
+    const float len = glm::length(dir);
+    if (!std::isfinite(len) || len <= 0.0001f) {
+      return false;
+    }
+    if (desc.innerConeCos < desc.outerConeCos || desc.outerConeCos <= -1.0f ||
+        desc.innerConeCos > 1.0f) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool
 RenderWorld::BucketKey::operator==(const BucketKey& other) const
 {
@@ -59,23 +99,24 @@ RenderWorld::releaseResources()
     if (bucket->colorBuffer.isValid()) {
       m_renderer->destroyBuffer(bucket->colorBuffer);
     }
-    if (bucket->shadowBuffer.isValid()) {
-      m_renderer->destroyBuffer(bucket->shadowBuffer);
-    }
     bucket->colorBuffer = BufferHandle{};
-    bucket->shadowBuffer = BufferHandle{};
+    bucket->colorUpload.valid = false;
+    for (size_t q = 0; q < Renderer::kShadowAtlasQuadrants; ++q) {
+      if (bucket->shadowBuffers[q].isValid()) {
+        m_renderer->destroyBuffer(bucket->shadowBuffers[q]);
+      }
+      bucket->shadowBuffers[q] = BufferHandle{};
+      bucket->shadowUploads[q].valid = false;
+    }
     bucket->capacity = 0;
     bucket->dirty = true;
-    bucket->colorUpload.valid = false;
-    bucket->shadowUpload.valid = false;
   }
 }
 
 bool
 RenderWorld::createMaterial(RenderMaterialId id, const RenderMaterialDesc& desc)
 {
-  if (id == 0 || m_materials.contains(id) ||
-      !finiteValues(desc.tint.data(), desc.tint.size())) {
+  if (id == 0 || m_materials.contains(id) || !validMaterialDesc(desc)) {
     return false;
   }
   Material material;
@@ -89,8 +130,7 @@ RenderWorld::updateMaterial(RenderMaterialId id, const RenderMaterialDesc& desc)
 {
   std::unordered_map<RenderMaterialId, Material>::iterator found =
     m_materials.find(id);
-  if (found == m_materials.end() ||
-      !finiteValues(desc.tint.data(), desc.tint.size())) {
+  if (found == m_materials.end() || !validMaterialDesc(desc)) {
     return false;
   }
   const bool rebucket = found->second.desc.blend != desc.blend;
@@ -228,6 +268,164 @@ RenderWorld::setEnvironment(const RenderEnvironment& environment)
   }
 }
 
+RenderEnvironment
+RenderWorld::effectiveEnvironment(const Renderer* renderer) const
+{
+  RenderEnvironment resolved = m_environment;
+  if (renderer != nullptr) {
+    const Renderer::ShadowDebugOverrides& overrides =
+      renderer->getShadowDebugOverrides();
+    if (overrides.active) {
+      resolved.shadowsEnabled = overrides.shadowsEnabled;
+      resolved.shadowPcf = overrides.shadowPcf;
+      resolved.shadowMapSize = std::max(overrides.shadowMapSize, 64);
+      resolved.shadowBias = overrides.shadowBias;
+      resolved.shadowSlopeScale = overrides.shadowSlopeScale;
+      resolved.shadowNormalOffset = overrides.shadowNormalOffset;
+    }
+  }
+  return resolved;
+}
+
+bool
+RenderWorld::createLight(RenderLightId id, const RenderLightDesc& desc)
+{
+  if (id == 0 || m_lights.contains(id) || !validLightDesc(desc)) {
+    return false;
+  }
+  m_lights[id] = desc;
+  m_stats.lights += 1;
+  return true;
+}
+
+bool
+RenderWorld::updateLight(RenderLightId id, const RenderLightDesc& desc)
+{
+  std::unordered_map<RenderLightId, RenderLightDesc>::iterator found =
+    m_lights.find(id);
+  if (found == m_lights.end() || !validLightDesc(desc)) {
+    return false;
+  }
+  found->second = desc;
+  return true;
+}
+
+bool
+RenderWorld::destroyLight(RenderLightId id)
+{
+  std::unordered_map<RenderLightId, RenderLightDesc>::iterator found =
+    m_lights.find(id);
+  if (found == m_lights.end()) {
+    return false;
+  }
+  m_lights.erase(found);
+  m_stats.lights -= 1;
+  return true;
+}
+
+bool
+RenderWorld::betterLightCandidate(const LightCandidate& left,
+                                  const LightCandidate& right)
+{
+  if (left.score != right.score) {
+    return left.score > right.score;
+  }
+  return left.id < right.id;
+}
+
+void
+RenderWorld::gatherLights(Renderer* renderer)
+{
+  m_stats.activeLights = 0;
+  if (m_lights.empty()) {
+    renderer->setFramePunctualLights(nullptr, 0, nullptr);
+    return;
+  }
+  m_lightCandidates.clear();
+  const std::array<float, 3> camPos =
+    renderer->getWorldCameraReferencePosition();
+  const glm::vec3 eye(camPos[0], camPos[1], camPos[2]);
+  for (std::unordered_map<RenderLightId, RenderLightDesc>::const_iterator it =
+         m_lights.begin();
+       it != m_lights.end();
+       ++it) {
+    const RenderLightDesc& light = it->second;
+    if (!light.visible || light.intensity <= 0.0f) {
+      continue;
+    }
+    const glm::vec3 center(
+      light.position[0], light.position[1], light.position[2]);
+    const glm::vec3 extent(light.range);
+    const AxisAlignedBounds3 bounds{ center - extent, center + extent };
+    if (!renderer->isWorldBoundsVisible(bounds)) {
+      continue;
+    }
+    const glm::vec3 diff = center - eye;
+    const float distSq = glm::dot(diff, diff);
+    LightCandidate candidate;
+    candidate.id = it->first;
+    candidate.score =
+      (light.intensity * light.range * light.range) / std::max(distSq, 1.0f);
+    candidate.desc = light;
+    m_lightCandidates.push_back(candidate);
+  }
+  const size_t selected =
+    std::min(m_lightCandidates.size(), Renderer::kMaximumForwardLights);
+  if (m_lightCandidates.size() > Renderer::kMaximumForwardLights) {
+    std::partial_sort(m_lightCandidates.begin(),
+                      m_lightCandidates.begin() +
+                        static_cast<std::ptrdiff_t>(selected),
+                      m_lightCandidates.end(),
+                      betterLightCandidate);
+  } else {
+    std::sort(
+      m_lightCandidates.begin(), m_lightCandidates.end(), betterLightCandidate);
+  }
+  const bool shadowsAllowed = effectiveEnvironment(renderer).shadowsEnabled;
+  Renderer::SpotShadowLightDesc spotShadow{};
+  bool hasSpotShadow = false;
+  for (size_t index = 0; index < selected; ++index) {
+    const RenderLightDesc& src = m_lightCandidates[index].desc;
+    Renderer::GpuPunctualLight& dst = m_packedLights[index];
+    const float safeRange = std::max(src.range, 0.0001f);
+    dst.positionAndInvRange = {
+      src.position[0], src.position[1], src.position[2], 1.0f / safeRange
+    };
+    const float r = std::max(src.color[0], 0.0f) * src.intensity;
+    const float g = std::max(src.color[1], 0.0f) * src.intensity;
+    const float b = std::max(src.color[2], 0.0f) * src.intensity;
+    if (src.kind == RenderLightKind::Spot) {
+      const glm::vec3 rawDir(
+        src.direction[0], src.direction[1], src.direction[2]);
+      const float dirLen = glm::length(rawDir);
+      const glm::vec3 normDir =
+        dirLen > 0.0001f ? (rawDir / dirLen) : glm::vec3(0.0f, -1.0f, 0.0f);
+      const float angleScale =
+        1.0f / std::max(src.innerConeCos - src.outerConeCos, 0.0001f);
+      dst.radianceAndOuterCos = { r, g, b, src.outerConeCos };
+      dst.directionAndAngleScale = {
+        normDir.x, normDir.y, normDir.z, angleScale
+      };
+      if (!hasSpotShadow && src.castsShadow && shadowsAllowed) {
+        spotShadow.position = src.position;
+        spotShadow.direction = { normDir.x, normDir.y, normDir.z };
+        spotShadow.range = safeRange;
+        spotShadow.outerConeCos = src.outerConeCos;
+        spotShadow.lightIndex = static_cast<int>(index);
+        hasSpotShadow = true;
+      }
+    } else {
+      dst.radianceAndOuterCos = { r, g, b, -2.0f };
+      dst.directionAndAngleScale = { 0.0f, -1.0f, 0.0f, 1.0f };
+    }
+  }
+  m_stats.activeLights = selected;
+  renderer->setFramePunctualLights(selected > 0 ? m_packedLights.data()
+                                                : nullptr,
+                                   selected,
+                                   hasSpotShadow ? &spotShadow : nullptr);
+}
+
 RenderWorld::Instance*
 RenderWorld::findInstance(RenderInstanceId id)
 {
@@ -267,7 +465,9 @@ RenderWorld::addToBucket(size_t slot)
     bucket.members.clear();
     bucket.dirty = true;
     bucket.colorUpload.valid = false;
-    bucket.shadowUpload.valid = false;
+    for (size_t q = 0; q < Renderer::kShadowAtlasQuadrants; ++q) {
+      bucket.shadowUploads[q].valid = false;
+    }
     m_bucketIndex[key] = index;
     if (key.blendOwner != 0) {
       m_blendOrder.push_back(index);
@@ -346,12 +546,27 @@ RenderWorld::prepareFrame(Renderer* renderer)
   m_preparedSerial = serial;
   m_frame += 1;
   m_renderer = renderer;
+  const uint64_t overrideRevision =
+    renderer->getShadowDebugOverrides().revision;
+  if (overrideRevision != m_shadowOverrideRevision) {
+    m_shadowOverrideRevision = overrideRevision;
+    for (std::unique_ptr<Bucket>& bucket : m_buckets) {
+      bucket->dirty = true;
+    }
+  }
   m_stats.drawnInstances = 0;
   m_stats.shadowInstances = 0;
   m_stats.uploadedInstances = 0;
   renderer->ensureBuiltinStyles();
   m_ready = renderer->getStyle(RenderStyleId::LitMeshInstanced) != nullptr &&
             renderer->getStyle(RenderStyleId::ShadowDepthInstanced) != nullptr;
+  if (m_ready) {
+    renderer->ensureLightUniformBuffer();
+    renderer->whiteTexture();
+    renderer->flatNormalTexture();
+    renderer->defaultOrmTexture();
+    gatherLights(renderer);
+  }
   for (std::unique_ptr<Bucket>& bucket : m_buckets) {
     if (!m_ready || !bucket->inUse) {
       continue;
@@ -378,9 +593,15 @@ bool
 RenderWorld::ensureBuffers(Renderer* renderer, Bucket& bucket)
 {
   const size_t needed = std::max<size_t>(bucket.members.size(), 1);
-  const bool shadows = m_environment.shadowsEnabled;
+  const bool shadows = effectiveEnvironment(renderer).shadowsEnabled;
+  bool allShadowsValid = true;
+  if (shadows) {
+    for (size_t q = 0; q < Renderer::kShadowAtlasQuadrants; ++q) {
+      allShadowsValid = allShadowsValid && bucket.shadowBuffers[q].isValid();
+    }
+  }
   if (bucket.capacity >= needed && bucket.colorBuffer.isValid() &&
-      (!shadows || bucket.shadowBuffer.isValid())) {
+      allShadowsValid) {
     return true;
   }
   size_t capacity = std::max<size_t>(bucket.capacity, 16);
@@ -391,35 +612,45 @@ RenderWorld::ensureBuffers(Renderer* renderer, Bucket& bucket)
     if (bucket.colorBuffer.isValid()) {
       renderer->destroyBuffer(bucket.colorBuffer);
     }
-    if (bucket.shadowBuffer.isValid()) {
-      renderer->destroyBuffer(bucket.shadowBuffer);
-    }
     bucket.colorBuffer = BufferHandle{};
-    bucket.shadowBuffer = BufferHandle{};
+    for (size_t q = 0; q < Renderer::kShadowAtlasQuadrants; ++q) {
+      if (bucket.shadowBuffers[q].isValid()) {
+        renderer->destroyBuffer(bucket.shadowBuffers[q]);
+      }
+      bucket.shadowBuffers[q] = BufferHandle{};
+    }
     bucket.capacity = capacity;
   }
   const size_t bytes = capacity * sizeof(GpuInstance);
   if (!bucket.colorBuffer.isValid()) {
     bucket.colorBuffer = renderer->enrollBuffer(BufferUsage::Instance, bytes);
   }
-  if (shadows && !bucket.shadowBuffer.isValid()) {
-    bucket.shadowBuffer = renderer->enrollBuffer(BufferUsage::Instance, bytes);
+  allShadowsValid = true;
+  if (shadows) {
+    for (size_t q = 0; q < Renderer::kShadowAtlasQuadrants; ++q) {
+      if (!bucket.shadowBuffers[q].isValid()) {
+        bucket.shadowBuffers[q] =
+          renderer->enrollBuffer(BufferUsage::Instance, bytes);
+      }
+      allShadowsValid = allShadowsValid && bucket.shadowBuffers[q].isValid();
+    }
   }
   bucket.colorStaging.reserve(capacity);
-  bucket.shadowStaging.reserve(capacity);
+  for (size_t q = 0; q < Renderer::kShadowAtlasQuadrants; ++q) {
+    bucket.shadowStaging[q].reserve(capacity);
+    bucket.shadowUploads[q].valid = false;
+  }
   // New buffer handles live in the recorded lists, and hold nothing yet.
   bucket.dirty = true;
   bucket.colorUpload.valid = false;
-  bucket.shadowUpload.valid = false;
-  return bucket.colorBuffer.isValid() &&
-         (!shadows || bucket.shadowBuffer.isValid());
+  return bucket.colorBuffer.isValid() && allShadowsValid;
 }
 
 void
 RenderWorld::recordColor(Renderer* renderer, Bucket& bucket)
 {
   const RenderMaterialDesc& material = m_materials.at(bucket.key.material).desc;
-  const RenderEnvironment& environment = m_environment;
+  const RenderEnvironment environment = effectiveEnvironment(renderer);
   bucket.color.clear();
   renderer->beginRecording(&bucket.color);
   renderer->bindStyle(RenderStyleId::LitMeshInstanced);
@@ -460,6 +691,47 @@ RenderWorld::recordColor(Renderer* renderer, Bucket& bucket)
                             material.tint[3]);
   renderer->pushUniformInt(WorldLook::kShadowMapUniform,
                            WorldLook::kShadowTextureUnit);
+  const TextureHandle white = renderer->whiteTexture();
+  const TextureHandle flatNormal = renderer->flatNormalTexture();
+  const TextureHandle defaultOrm = renderer->defaultOrmTexture();
+  const TextureHandle albedoTex =
+    material.albedoTexture.isValid() ? material.albedoTexture : white;
+  const TextureHandle normalTex =
+    material.normalTexture.isValid() ? material.normalTexture : flatNormal;
+  const TextureHandle ormTex = material.metallicRoughnessTexture.isValid()
+                                 ? material.metallicRoughnessTexture
+                                 : defaultOrm;
+  const TextureHandle emissiveTex =
+    material.emissiveTexture.isValid() ? material.emissiveTexture : white;
+  const bool texturesBound = albedoTex.isValid() && normalTex.isValid() &&
+                             ormTex.isValid() && emissiveTex.isValid();
+  if (texturesBound) {
+    renderer->pushSetTexture(
+      albedoTex, static_cast<unsigned int>(WorldLook::kAlbedoTextureUnit));
+    renderer->pushUniformInt(WorldLook::kAlbedoMapUniform,
+                             WorldLook::kAlbedoTextureUnit);
+    renderer->pushSetTexture(
+      normalTex, static_cast<unsigned int>(WorldLook::kNormalTextureUnit));
+    renderer->pushUniformInt(WorldLook::kNormalMapUniform,
+                             WorldLook::kNormalTextureUnit);
+    renderer->pushSetTexture(
+      ormTex, static_cast<unsigned int>(WorldLook::kOrmTextureUnit));
+    renderer->pushUniformInt(WorldLook::kOrmMapUniform,
+                             WorldLook::kOrmTextureUnit);
+    renderer->pushSetTexture(
+      emissiveTex, static_cast<unsigned int>(WorldLook::kEmissiveTextureUnit));
+    renderer->pushUniformInt(WorldLook::kEmissiveMapUniform,
+                             WorldLook::kEmissiveTextureUnit);
+  }
+  renderer->pushUniformVec4(WorldLook::kMaterialFactorsUniform,
+                            std::clamp(material.metallic, 0.0f, 1.0f),
+                            std::clamp(material.roughness, 0.045f, 1.0f),
+                            material.normalTexture.isValid() ? 1.0f : 0.0f,
+                            texturesBound ? 1.0f : 0.0f);
+  renderer->pushUniformVec3(WorldLook::kEmissiveFactorUniform,
+                            std::max(material.emissiveFactor[0], 0.0f),
+                            std::max(material.emissiveFactor[1], 0.0f),
+                            std::max(material.emissiveFactor[2], 0.0f));
   renderer->pushSetMesh(
     MeshHandle{ bucket.key.meshSlot, bucket.key.meshGeneration });
   renderer->pushInstanceStream(
@@ -474,20 +746,26 @@ RenderWorld::recordColor(Renderer* renderer, Bucket& bucket)
 void
 RenderWorld::recordShadow(Renderer* renderer, Bucket& bucket)
 {
-  bucket.shadow.clear();
-  if (!bucket.shadowBuffer.isValid()) {
+  for (size_t q = 0; q < Renderer::kShadowAtlasQuadrants; ++q) {
+    bucket.shadow[q].clear();
+  }
+  if (!bucket.shadowBuffers[0].isValid()) {
     return;
   }
-  renderer->beginRecording(&bucket.shadow);
-  renderer->bindStyle(RenderStyleId::ShadowDepthInstanced);
-  renderer->pushSetMesh(
-    MeshHandle{ bucket.key.meshSlot, bucket.key.meshGeneration });
-  renderer->pushInstanceStream(
-    bucket.shadowBuffer, 0, InstanceLayout::LitModelTint);
-  renderer->pushDrawIndexedInstanced(
-    bucket.key.indexCount, bucket.key.firstIndex, 0);
-  bucket.shadowDraw = bucket.shadow.size() - 1;
-  renderer->endRecording();
+  for (size_t q = 0; q < Renderer::kShadowAtlasQuadrants; ++q) {
+    if (!bucket.shadowBuffers[q].isValid()) {
+      continue;
+    }
+    renderer->beginRecording(&bucket.shadow[q]);
+    renderer->pushSetMesh(
+      MeshHandle{ bucket.key.meshSlot, bucket.key.meshGeneration });
+    renderer->pushInstanceStream(
+      bucket.shadowBuffers[q], 0, InstanceLayout::LitModelTint);
+    renderer->pushDrawIndexedInstanced(
+      bucket.key.indexCount, bucket.key.firstIndex, 0);
+    bucket.shadowDraw = bucket.shadow[q].size() - 1;
+    renderer->endRecording();
+  }
   m_stats.recordings += 1;
 }
 
@@ -555,17 +833,24 @@ RenderWorld::streamPass(Renderer* renderer,
 void
 RenderWorld::CollectShadowCasters(Renderer* renderer)
 {
-  if (!isVisible() || !m_environment.shadowsEnabled ||
+  if (!isVisible() || renderer == nullptr) {
+    return;
+  }
+  const RenderEnvironment environment = effectiveEnvironment(renderer);
+  if ((!m_lights.empty() || environment.shadowsEnabled) &&
       !prepareFrame(renderer)) {
+    return;
+  }
+  if (!environment.shadowsEnabled) {
     return;
   }
   ILLUMO_PROFILE_ZONE("RenderWorld.CollectShadowCasters");
   Renderer::ShadowCasterDesc caster;
-  caster.lightDirection = m_environment.lightDirection;
-  caster.mapSize = m_environment.shadowMapSize;
-  caster.minimumRadius = m_environment.shadowMinimumRadius;
-  caster.lightDistance = m_environment.shadowLightDistance;
-  caster.casterDistance = m_environment.shadowCasterDistance;
+  caster.lightDirection = environment.lightDirection;
+  caster.mapSize = environment.shadowMapSize;
+  caster.minimumRadius = environment.shadowMinimumRadius;
+  caster.lightDistance = environment.shadowLightDistance;
+  caster.casterDistance = environment.shadowCasterDistance;
   for (std::unique_ptr<Bucket>& bucket : m_buckets) {
     if (!bucket->inUse ||
         !m_materials.at(bucket->key.material).desc.castsShadow) {
@@ -591,39 +876,51 @@ RenderWorld::CollectShadowCasters(Renderer* renderer)
 void
 RenderWorld::AppendShadowCommands(Renderer* renderer)
 {
-  if (!isVisible() || !m_environment.shadowsEnabled ||
+  if (!isVisible() || renderer == nullptr ||
+      !effectiveEnvironment(renderer).shadowsEnabled ||
       !prepareFrame(renderer) || !renderer->getShadowFrameContext().active) {
+    return;
+  }
+  const size_t quadrant = renderer->getActiveShadowQuadrant();
+  if (quadrant >= Renderer::kShadowAtlasQuadrants) {
     return;
   }
   ILLUMO_PROFILE_ZONE("RenderWorld.AppendShadowCommands");
   bool bound = false;
   for (std::unique_ptr<Bucket>& bucket : m_buckets) {
-    if (!bucket->inUse || bucket->dirty || bucket->shadow.size() == 0 ||
+    if (!bucket->inUse || bucket->dirty ||
+        bucket->shadow[quadrant].size() == 0 ||
+        !bucket->shadowBuffers[quadrant].isValid() ||
         !m_materials.at(bucket->key.material).desc.castsShadow) {
       continue;
     }
-    const unsigned int count = static_cast<unsigned int>(streamPass(
-      renderer,
-      *bucket,
-      bucket->shadowUpload,
-      bucket->shadowStaging,
-      bucket->shadowBuffer,
-      renderer->getShadowCullRevision(),
-      [renderer](const Instance& instance) {
-        return renderer->isShadowCasterRelevant(instance.worldBounds);
-      }));
+    const unsigned int count = static_cast<unsigned int>(
+      streamPass(renderer,
+                 *bucket,
+                 bucket->shadowUploads[quadrant],
+                 bucket->shadowStaging[quadrant],
+                 bucket->shadowBuffers[quadrant],
+                 renderer->getShadowQuadrantCullRevision(quadrant),
+                 [renderer, quadrant](const Instance& instance) {
+                   return renderer->isShadowQuadrantRelevant(
+                     quadrant, instance.worldBounds);
+                 }));
     if (count == 0) {
       continue;
     }
     if (!bound) {
-      if (!renderer->useFrameUniforms()) {
+      if (!renderer->useFrameUniforms() || !renderer->useLightUniforms() ||
+          !renderer->bindStyle(RenderStyleId::ShadowDepthInstanced)) {
         return;
       }
+      renderer->pushUniformInt(WorldLook::kShadowQuadrantUniform,
+                               static_cast<int>(quadrant));
       bound = true;
     }
-    bucket->shadow.at(bucket->shadowDraw).drawIndexedInstanced.instanceCount =
-      count;
-    renderer->pushExecuteList(&bucket->shadow);
+    bucket->shadow[quadrant]
+      .at(bucket->shadowDraw)
+      .drawIndexedInstanced.instanceCount = count;
+    renderer->pushExecuteList(&bucket->shadow[quadrant]);
     m_stats.shadowInstances += count;
   }
   // Drawables after this one expect the shared shadow style still bound.
@@ -653,7 +950,7 @@ RenderWorld::drawColor(Renderer* renderer, Bucket& bucket, bool& bound)
     return;
   }
   if (!bound) {
-    if (!renderer->useFrameUniforms()) {
+    if (!renderer->useFrameUniforms() || !renderer->useLightUniforms()) {
       return;
     }
     const Renderer::ShadowFrameContext& shadow =
@@ -715,6 +1012,7 @@ RenderWorld::drawSkybox(Renderer* renderer)
   if (!renderer->bindStyle(RenderStyleId::Skybox)) {
     return;
   }
+  (void)renderer->useLightUniforms();
   const std::array<float, 4>& tint = m_skybox.tint;
   renderer->pushSetTexture(m_skybox.cubemap, 0);
   renderer->pushUniformInt("uSkybox", 0);

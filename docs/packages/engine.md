@@ -47,6 +47,14 @@ frame live in Illumo:
   gamepad status line, 2D analog-stick deflection circles with L3/R3 click
   flashes, and logs button/trigger press edges to the console.
   `Illumo.Debug.GamepadOverlay` and `Illumo.Host.DebugOverlayGamepad` cover it.
+  Its `graphics [on|off|toggle|window|dock|reset]` command and unbound `F7`
+  key toggle `GraphicsSettingsOverlay`
+  (`Illumo/Source/Engine/GraphicsSettingsOverlay.h`), a draggable, resizable
+  `GuiToolStyle` floating panel (with optional `PopOut` into its own OS
+  `PixelWindow` rendered through `SoftwareCanvas`) for live HDR, tonemapping,
+  exposure, FXAA, bloom, motion blur, `Renderer::ShadowDebugOverrides`, VSync,
+  and FPS pacing tweaks. `Illumo.Debug.GraphicsSettingsOverlay` and
+  `Illumo.Host.DebugOverlayGraphics` cover it.
 - `IllumoApplicationDefinition` accepts declarative consumer policy: name,
   command line, defaults and the `run` callback,
   `int (*)(Illumo&, std::chrono::steady_clock::time_point launched)`, which

@@ -6,6 +6,7 @@
 #include <Illumo/Foundation/Sha256.h>
 #include <Illumo/Platform/SystemInfo.h>
 #include <Illumo/Rendering/AssetManager.h>
+#include <Illumo/Rendering/Primitives/SoftwareCanvas.h>
 #include <Illumo/Rendering/SplashText.h>
 #include <Illumo/Services/InputContext.h>
 #include <Illumo/Testing/TestAccess.h>
@@ -27,6 +28,7 @@
 #include "Engine/DebugOverlayState.h"
 #include "Engine/FileTreeOverlay.h"
 #include "Engine/GamepadOverlay.h"
+#include "Engine/GraphicsSettingsOverlay.h"
 #include "Engine/ProfilerOverlay.h"
 #include <map>
 
@@ -548,8 +550,15 @@ testInputManagerHeadlessLifecycle()
   testTrue(g,
            input.isMouseButtonReleased(KeyCode::MouseLeft),
            "mouse release uses frame edge");
+  input.suppressMouseForFrame();
+  testTrue(g,
+           !input.isMouseButtonReleased(KeyCode::MouseLeft) &&
+             input.frameAction(KeyCode::MouseLeft) == InputAction::None,
+           "suppressMouseForFrame masks mouse button edges and frameAction");
 
   input.update();
+  testTrue(
+    g, !input.isMouseSuppressed(), "mouse suppression clears on next update");
   testTrue(
     g, !input.isKeyReleased(KeyCode::A), "release edge clears on next update");
   testTrue(
@@ -1764,6 +1773,190 @@ testParseNumber()
     g, parseWholeFloating("0.5", &single) && single == 0.5f, "float parses");
 }
 
+static void
+testGraphicsSettingsOverlay()
+{
+  testSection("GraphicsSettingsOverlay: toggle, drag, scrub, shadow override, "
+              "and detached SoftwareCanvas");
+  NullRenderWindow window(1280, 720);
+  EnvVars env;
+  env.setVar("WinX", 1280);
+  env.setVar("WinY", 720);
+  RenderPipelineConfig::seedDefaults(&env);
+  Camera camera(glm::vec2(0.0f, 0.0f), 1.0f, &env);
+  MockBackend mock;
+  mock.Initialize();
+  Renderer renderer(&window, &env, &camera, &mock, false);
+
+  GraphicsSettingsOverlay overlay;
+  overlay.prepare(&renderer, &window, &camera, &env);
+  overlay.setDetachAvailable(true);
+
+  testTrue(g, !overlay.isOpen(), "overlay starts closed");
+  testTrue(
+    g,
+    !overlay.handleKey(KeyCode::F7, InputAction::Press, true, false, false),
+    "open console retains F7");
+  testTrue(
+    g,
+    !overlay.handleKey(KeyCode::F7, InputAction::Press, false, false, true),
+    "user-bound F7 falls through");
+  testTrue(
+    g,
+    overlay.handleKey(KeyCode::F7, InputAction::Press, false, false, false) &&
+      overlay.isOpen(),
+    "F7 opens graphics settings overlay");
+
+  double scroll = 0.0;
+  const bool idleConsumed = overlay.updateInWindow(
+    0.016, 1280.0f, 720.0f, 100.0f, 100.0f, false, &scroll, false);
+  testTrue(g,
+           !idleConsumed && overlay.visual().shapeCount() > 0 &&
+             overlay.visual().textCount() > 0,
+           "open overlay composes GuiToolStyle shapes and labels");
+
+  // Drag title bar to a new position inside viewport.
+  const GuiToolRect initial = overlay.panelRect();
+  const float grabX = initial.x + 40.0f;
+  const float grabY = initial.y + 10.0f;
+  const bool pressConsumed = overlay.updateInWindow(
+    0.016, 1280.0f, 720.0f, grabX, grabY, true, &scroll, false);
+  const bool dragConsumed = overlay.updateInWindow(0.016,
+                                                   1280.0f,
+                                                   720.0f,
+                                                   grabX - 200.0f,
+                                                   grabY + 60.0f,
+                                                   true,
+                                                   &scroll,
+                                                   false);
+  (void)overlay.updateInWindow(0.016,
+                               1280.0f,
+                               720.0f,
+                               grabX - 200.0f,
+                               grabY + 60.0f,
+                               false,
+                               &scroll,
+                               false);
+  const GuiToolRect moved = overlay.panelRect();
+  testTrue(g,
+           pressConsumed && dragConsumed && moved.x < initial.x &&
+             moved.y > initial.y,
+           "dragging title bar moves the floating panel and consumes mouse");
+
+  // Click Khronos Neutral (choice 0 on row 3: TonemapperBright) and verify
+  // tonemapper switches to 3, then scrub Exposure slider (row 4).
+  const float bodyTop = moved.y + GuiToolStyle::kTitleHeight + 2.0f;
+  const float brightRowY = bodyTop + 3.5f * GraphicsSettingsOverlay::kRowHeight;
+  const float neutralBtnX = moved.x + GuiToolStyle::kPad + 120.0f;
+  (void)overlay.updateInWindow(
+    0.016, 1280.0f, 720.0f, neutralBtnX, brightRowY, true, &scroll, false);
+  (void)overlay.updateInWindow(
+    0.016, 1280.0f, 720.0f, neutralBtnX, brightRowY, false, &scroll, false);
+  testEqInt(g,
+            RenderPipelineConfig::fromEnv(&env).tonemapper,
+            3,
+            "clicking Neutral selects Khronos PBR Neutral tonemapper (3)");
+
+  const float exposureY = bodyTop + 4.5f * GraphicsSettingsOverlay::kRowHeight;
+  const float sliderRightX = moved.x + moved.w - 75.0f;
+  (void)overlay.updateInWindow(
+    0.016, 1280.0f, 720.0f, sliderRightX, exposureY, true, &scroll, false);
+  (void)overlay.updateInWindow(
+    0.016, 1280.0f, 720.0f, sliderRightX, exposureY, false, &scroll, false);
+  const float updatedExposure = RenderPipelineConfig::fromEnv(&env).exposure;
+  testTrue(g,
+           updatedExposure > 1.0f,
+           "scrubbing exposure slider updates EnvVars live");
+
+  // Scroll down to Shadows section and toggle Directional & Spot Shadows (row
+  // 18) to verify Renderer::ShadowDebugOverrides activates automatically.
+  double wheelDown = -4.0;
+  (void)overlay.updateInWindow(0.016,
+                               1280.0f,
+                               720.0f,
+                               moved.x + 40.0f,
+                               moved.y + 120.0f,
+                               false,
+                               &wheelDown,
+                               false);
+  testTrue(g, wheelDown == 0.0, "panel consumes scroll wheel inside bounds");
+  // Expand height so all 29 rows fit without scrolling, then toggle row 18.
+  (void)overlay.updateInWindow(0.016,
+                               1280.0f,
+                               900.0f,
+                               moved.x + moved.w - 4.0f,
+                               moved.y + moved.h - 4.0f,
+                               true,
+                               &scroll,
+                               false);
+  (void)overlay.updateInWindow(0.016,
+                               1280.0f,
+                               900.0f,
+                               moved.x + moved.w + 20.0f,
+                               moved.y + 740.0f,
+                               true,
+                               &scroll,
+                               false);
+  (void)overlay.updateInWindow(0.016,
+                               1280.0f,
+                               900.0f,
+                               moved.x + moved.w + 20.0f,
+                               moved.y + 740.0f,
+                               false,
+                               &scroll,
+                               false);
+
+  const GuiToolRect tall = overlay.panelRect();
+  const float shadowsRowY = tall.y + GuiToolStyle::kTitleHeight + 2.0f +
+                            18.5f * GraphicsSettingsOverlay::kRowHeight;
+  (void)overlay.updateInWindow(
+    0.016, 1280.0f, 900.0f, tall.x + 24.0f, shadowsRowY, true, &scroll, false);
+  (void)overlay.updateInWindow(
+    0.016, 1280.0f, 900.0f, tall.x + 24.0f, shadowsRowY, false, &scroll, false);
+  testTrue(g,
+           overlay.shadowOverrideActive() &&
+             renderer.getShadowDebugOverrides().active &&
+             !renderer.getShadowDebugOverrides().shadowsEnabled,
+           "toggling shadow control activates live Renderer shadow override");
+
+  // Reset defaults restores EnvVars and clears shadow override.
+  overlay.resetDefaults();
+  testTrue(g,
+           !overlay.shadowOverrideActive() &&
+             !renderer.getShadowDebugOverrides().active &&
+             RenderPipelineConfig::fromEnv(&env).exposure == 0.0f,
+           "resetDefaults restores pipeline settings and clears override");
+
+  // PopOut request and SoftwareCanvas rasterization in detached mode.
+  overlay.requestDetach(1.0f);
+  const GraphicsSettingsOverlay::WindowRequest req =
+    overlay.takeWindowRequest();
+  testTrue(g,
+           req.kind == GraphicsSettingsOverlay::WindowRequestKind::Detach &&
+             req.width >= 320,
+           "requestDetach queues a valid PixelWindow detach request");
+  overlay.setDetached(true, 380, 560);
+  testTrue(g,
+           overlay.isDetached() && !overlay.wantsInWindowDraw() &&
+             overlay.composeDetached(),
+           "detached mode suppresses in-window draw and composes detached UI");
+  SoftwareCanvas canvas;
+  canvas.resize(380, 560);
+  canvas.clear(GuiToolPalette::panel);
+  canvas.draw(overlay.visual());
+  testTrue(g,
+           canvas.pixel(190, 10).r != GuiToolPalette::panel.r ||
+             canvas.pixel(190, 10).b != GuiToolPalette::panel.b,
+           "SoftwareCanvas rasterizes detached graphics panel title bar");
+
+  overlay.setDetached(false, 0, 0);
+  testTrue(g,
+           overlay.handleKey(
+             KeyCode::Escape, InputAction::Press, false, false, false) &&
+             !overlay.isOpen(),
+           "Escape closes in-window floating graphics panel");
+}
+
 void
 registerRuntimeUtilityTests(IllumoTestRegistry& registry)
 {
@@ -1774,6 +1967,9 @@ registerRuntimeUtilityTests(IllumoTestRegistry& registry)
   });
   registry.add("Illumo.Debug.GamepadOverlay",
                []() { return runRuntimeUtilityCase(testGamepadOverlay); });
+  registry.add("Illumo.Debug.GraphicsSettingsOverlay", []() {
+    return runRuntimeUtilityCase(testGraphicsSettingsOverlay);
+  });
   registry.add("Illumo.Profiler.Accounting", []() {
     return runRuntimeUtilityCase(testFrameProfilerAccounting);
   });

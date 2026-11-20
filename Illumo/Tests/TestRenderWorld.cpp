@@ -200,7 +200,8 @@ unchangedBucketsSkipUploads()
       const RenderCommand& command =
         fixture.render.mock.getLastNonEmptySubmitted(index);
       if (command.commandType == CommandType::WriteBuffer &&
-          command.writeBuffer.sizeBytes != sizeof(Renderer::FrameUniforms)) {
+          command.writeBuffer.sizeBytes != sizeof(Renderer::FrameUniforms) &&
+          command.writeBuffer.sizeBytes != sizeof(Renderer::LightUniforms)) {
         writes += 1;
         if (previousX != nullptr && command.writeBuffer.data != nullptr) {
           const float* record =
@@ -514,6 +515,144 @@ renderWorldBench()
                 worldTokens,
                 fixture.world.stats().recordings);
   }
+
+  // HDR PBR + 32 punctual lights + 4-quadrant shadow atlas (3 CSM + 1 spot)
+  // CPU world emission benchmark (2,000 textured instances across 4 buckets).
+  {
+    WorldFixture hdrFixture;
+    Renderer& renderer = hdrFixture.render.renderer;
+    const std::array<unsigned char, 4> texel{ 200, 180, 160, 255 };
+    const TextureHandle albedo = renderer.enrollTexture(texel.data(), 1, 1, 4);
+    const TextureHandle normal = renderer.enrollTexture(texel.data(), 1, 1, 4);
+    const TextureHandle orm = renderer.enrollTexture(texel.data(), 1, 1, 4);
+    const TextureHandle emissive =
+      renderer.enrollTexture(texel.data(), 1, 1, 4);
+
+    RenderEnvironment env;
+    env.lightDirection = { 0.45f, 1.0f, 0.35f };
+    env.lightColor = { 0.9f, 0.88f, 0.82f };
+    env.ambientColor = { 0.04f, 0.04f, 0.05f };
+    env.shadowsEnabled = true;
+    env.shadowMapSize = 1024;
+    env.shadowPcf = true;
+    hdrFixture.world.setEnvironment(env);
+
+    for (uint32_t m = 1; m <= 4; ++m) {
+      RenderMaterialDesc mat;
+      mat.albedoTexture = albedo;
+      mat.normalTexture = normal;
+      mat.metallicRoughnessTexture = orm;
+      mat.emissiveTexture = emissive;
+      mat.metallic = 0.25f * static_cast<float>(m - 1u);
+      mat.roughness = 0.2f + 0.2f * static_cast<float>(m - 1u);
+      mat.castsShadow = true;
+      mat.receivesShadow = true;
+      ok = hdrFixture.world.createMaterial(m, mat) && ok;
+    }
+
+    for (size_t i = 0; i < 2000u; ++i) {
+      const size_t row = i / 50u;
+      const float gx = -18.0f + 36.0f * static_cast<float>(i % 50u) / 50.0f;
+      const float gz = -4.0f - 40.0f * static_cast<float>(row) / 40.0f;
+      RenderInstanceDesc inst =
+        hdrFixture.instance(static_cast<RenderMaterialId>((i % 4u) + 1u), 0.0f);
+      const glm::mat4 model =
+        glm::translate(glm::mat4(1.0f), glm::vec3(gx, 0.0f, gz));
+      std::copy_n(glm::value_ptr(model), 16, inst.world.begin());
+      ok = hdrFixture.world.createInstance(
+             static_cast<RenderInstanceId>(i + 1u), inst) &&
+           ok;
+    }
+
+    for (uint32_t l = 1; l <= 32u; ++l) {
+      const uint32_t lightRow = l / 8u;
+      RenderLightDesc light;
+      light.kind = (l == 1u || (l % 4u) == 0u) ? RenderLightKind::Spot
+                                               : RenderLightKind::Point;
+      light.position = { -15.0f + static_cast<float>(l % 8u) * 4.2f,
+                         3.0f,
+                         -6.0f - static_cast<float>(lightRow) * 8.0f };
+      light.direction = { 0.0f, -1.0f, -0.2f };
+      light.color = { 0.8f, 0.7f, 0.6f };
+      light.intensity = 12.0f;
+      light.range = 14.0f;
+      light.innerConeCos = std::cos(glm::radians(18.0f));
+      light.outerConeCos = std::cos(glm::radians(32.0f));
+      light.castsShadow = (l == 1u);
+      ok = hdrFixture.world.createLight(l, light) && ok;
+    }
+
+    const glm::mat4 vp =
+      glm::perspective(glm::radians(60.0f), 2560.0f / 1440.0f, 0.2f, 90.0f) *
+      glm::lookAt(glm::vec3(0.0f, 8.0f, 8.0f),
+                  glm::vec3(0.0f, 0.0f, -22.0f),
+                  glm::vec3(0.0f, 1.0f, 0.0f));
+    std::array<float, 16> vpArray{};
+    std::copy_n(glm::value_ptr(vp), 16, vpArray.begin());
+
+    // Warm up 5 frames so RecordedCommandLists and static shadow caches settle.
+    for (int w = 0; w < 5; ++w) {
+      hdrFixture.render.mock.resetCounters();
+      renderer.setNextWorldViewProjection(vpArray);
+      renderer.BeginFrame();
+      renderer.RenderScene(&hdrFixture.scene, &hdrFixture.render.camera);
+      renderer.EndFrame();
+    }
+
+    std::vector<double> staticSamples;
+    std::vector<double> dynamicSamples;
+    size_t hdrTokens = 0;
+    for (int iter = 0; iter < 45; ++iter) {
+      hdrFixture.render.mock.resetCounters();
+      const std::chrono::steady_clock::time_point t0 =
+        std::chrono::steady_clock::now();
+      renderer.setNextWorldViewProjection(vpArray);
+      renderer.BeginFrame();
+      renderer.RenderScene(&hdrFixture.scene, &hdrFixture.render.camera);
+      renderer.EndFrame();
+      const std::chrono::steady_clock::time_point t1 =
+        std::chrono::steady_clock::now();
+      staticSamples.push_back(
+        std::chrono::duration<double, std::micro>(t1 - t0).count());
+      hdrTokens = hdrFixture.render.mock.getLastNonEmptySubmittedCount();
+    }
+
+    for (int iter = 0; iter < 45; ++iter) {
+      RenderLightDesc movingSpot;
+      movingSpot.kind = RenderLightKind::Spot;
+      movingSpot.position = { std::sin(static_cast<float>(iter) * 0.1f) * 4.0f,
+                              3.5f,
+                              -8.0f };
+      movingSpot.direction = { 0.0f, -1.0f, -0.15f };
+      movingSpot.color = { 0.9f, 0.8f, 0.7f };
+      movingSpot.intensity = 18.0f;
+      movingSpot.range = 16.0f;
+      movingSpot.innerConeCos = std::cos(glm::radians(18.0f));
+      movingSpot.outerConeCos = std::cos(glm::radians(32.0f));
+      movingSpot.castsShadow = false;
+      hdrFixture.world.updateLight(2u, movingSpot);
+
+      hdrFixture.render.mock.resetCounters();
+      const std::chrono::steady_clock::time_point t0 =
+        std::chrono::steady_clock::now();
+      renderer.setNextWorldViewProjection(vpArray);
+      renderer.BeginFrame();
+      renderer.RenderScene(&hdrFixture.scene, &hdrFixture.render.camera);
+      renderer.EndFrame();
+      const std::chrono::steady_clock::time_point t1 =
+        std::chrono::steady_clock::now();
+      dynamicSamples.push_back(
+        std::chrono::duration<double, std::micro>(t1 - t0).count());
+    }
+
+    std::sort(staticSamples.begin(), staticSamples.end());
+    std::sort(dynamicSamples.begin(), dynamicSamples.end());
+    std::printf("RenderWorldHdrBench instances=2000 lights=32 "
+                "hdr_static_us=%.1f hdr_dynamic_us=%.1f hdr_tokens=%zu\n",
+                staticSamples[staticSamples.size() / 2],
+                dynamicSamples[dynamicSamples.size() / 2],
+                hdrTokens);
+  }
   return ok ? 0 : 1;
 }
 
@@ -584,6 +723,312 @@ skyboxFromFrameCamera()
   return ok ? 0 : 1;
 }
 
+static int
+punctualLightsAndMaterials()
+{
+  WorldFixture fixture;
+  RenderWorld& world = fixture.world;
+  Renderer& renderer = fixture.render.renderer;
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+
+  // Material PBR validation and texture binding.
+  const std::array<unsigned char, 4> texel{ 200, 150, 100, 255 };
+  const TextureHandle albedo = renderer.enrollTexture(texel.data(), 1, 1, 4);
+  const TextureHandle normal = renderer.enrollTexture(texel.data(), 1, 1, 4);
+  const TextureHandle orm = renderer.enrollTexture(texel.data(), 1, 1, 4);
+  const TextureHandle emissive = renderer.enrollTexture(texel.data(), 1, 1, 4);
+
+  RenderMaterialDesc badMat;
+  badMat.metallic = nan;
+  RenderMaterialDesc badRough;
+  badRough.roughness = nan;
+  RenderMaterialDesc badEmissive;
+  badEmissive.emissiveFactor = { 0.0f, nan, 0.0f };
+  bool ok = check(!world.createMaterial(1, badMat) &&
+                    !world.createMaterial(1, badRough) &&
+                    !world.createMaterial(1, badEmissive),
+                  "materials reject non-finite PBR factors");
+
+  RenderMaterialDesc pbrMat;
+  pbrMat.albedoTexture = albedo;
+  pbrMat.normalTexture = normal;
+  pbrMat.metallicRoughnessTexture = orm;
+  pbrMat.emissiveTexture = emissive;
+  pbrMat.metallic = 0.85f;
+  pbrMat.roughness = 0.25f;
+  pbrMat.emissiveFactor = { 1.5f, 0.5f, 0.25f };
+  ok = check(world.createMaterial(1, pbrMat) &&
+               world.createInstance(1, fixture.instance(1, 0.0f)),
+             "textured PBR material and instance are created") &&
+       ok;
+
+  // Light CRUD and validation.
+  RenderLightDesc badRange;
+  badRange.range = 0.0f;
+  RenderLightDesc badNan;
+  badNan.position = { nan, 0.0f, 0.0f };
+  RenderLightDesc badCone;
+  badCone.kind = RenderLightKind::Spot;
+  badCone.innerConeCos = 0.5f;
+  badCone.outerConeCos = 0.8f;
+  RenderLightDesc badSpotDir;
+  badSpotDir.kind = RenderLightKind::Spot;
+  badSpotDir.direction = { 0.0f, 0.0f, 0.0f };
+  ok =
+    check(
+      !world.createLight(0, RenderLightDesc{}) &&
+        !world.createLight(1, badRange) && !world.createLight(1, badNan) &&
+        !world.createLight(1, badCone) && !world.createLight(1, badSpotDir) &&
+        !world.updateLight(99, RenderLightDesc{}) && !world.destroyLight(99),
+      "invalid light ids and parameters are rejected") &&
+    ok;
+
+  // Add 80 visible lights + 3 culled/hidden lights; tie-break id 12 vs id 50.
+  for (uint32_t i = 1; i <= 80; ++i) {
+    RenderLightDesc light;
+    light.kind = (i % 4 == 0) ? RenderLightKind::Spot : RenderLightKind::Point;
+    light.position = { 0.0f, 0.0f, 0.0f };
+    light.direction = { 0.0f, -1.0f, 0.0f };
+    light.color = { static_cast<float>(i) / 100.0f, 0.5f, 0.25f };
+    light.intensity = (i == 12 || i == 50) ? 100.0f : static_cast<float>(i);
+    light.range = 2.0f;
+    light.castsShadow = (i == 16);
+    ok = world.createLight(i, light) && ok;
+  }
+  RenderLightDesc duplicate;
+  ok = check(!world.createLight(12, duplicate), "duplicate light id refused") &&
+       ok;
+
+  RenderLightDesc hiddenLight;
+  hiddenLight.visible = false;
+  hiddenLight.intensity = 500.0f;
+  RenderLightDesc farLight;
+  farLight.position = { 50.0f, 0.0f, 0.0f };
+  farLight.range = 1.0f;
+  farLight.intensity = 500.0f;
+  ok =
+    check(world.createLight(90, hiddenLight) && world.createLight(91, farLight),
+          "hidden and out-of-frustum lights are created") &&
+    ok;
+
+  fixture.frame();
+  const Renderer::LightUniforms& uploaded = renderer.getLightUniforms();
+  ok = check(world.stats().lights == 82 && world.stats().activeLights == 64 &&
+               uploaded.countsAndFlags[0] == 64,
+             "frustum-visible lights cap at 64 active lights") &&
+       ok;
+  // Equal top score (intensity=100, range=2, dist=0): id 12 must precede id 50.
+  const float firstR = uploaded.punctualLights[0].radianceAndOuterCos[0];
+  const float secondR = uploaded.punctualLights[1].radianceAndOuterCos[0];
+  ok =
+    check(std::abs(firstR - 12.0f) < 1e-3f && std::abs(secondR - 50.0f) < 1e-3f,
+          "equal-priority lights tie-break deterministically by id") &&
+    ok;
+
+  // Verify material textures bound on units 2..5 via recorded command list.
+  bool sawAlbedo = false;
+  bool sawNormal = false;
+  bool sawOrm = false;
+  bool sawEmissive = false;
+  for (size_t index = 0;
+       index < fixture.render.mock.getLastNonEmptySubmittedCount();
+       ++index) {
+    const RenderCommand& cmd =
+      fixture.render.mock.getLastNonEmptySubmitted(index);
+    if (cmd.commandType == CommandType::ExecuteList &&
+        cmd.executeList.list != nullptr) {
+      const RecordedCommandList& list = *cmd.executeList.list;
+      for (size_t sub = 0; sub < list.size(); ++sub) {
+        const RenderCommand& item = list.at(sub);
+        if (item.commandType == CommandType::SetTexture) {
+          sawAlbedo = sawAlbedo || (item.bindTexture.slot == 2u &&
+                                    item.bindTexture.handle == albedo);
+          sawNormal = sawNormal || (item.bindTexture.slot == 3u &&
+                                    item.bindTexture.handle == normal);
+          sawOrm = sawOrm || (item.bindTexture.slot == 4u &&
+                              item.bindTexture.handle == orm);
+          sawEmissive = sawEmissive || (item.bindTexture.slot == 5u &&
+                                        item.bindTexture.handle == emissive);
+        }
+      }
+    }
+  }
+  ok = check(sawAlbedo && sawNormal && sawOrm && sawEmissive,
+             "recorded bucket binds albedo, normal, ORM and emissive maps") &&
+       ok;
+
+  // Update and destroy lights.
+  hiddenLight.visible = true;
+  ok = check(world.updateLight(90, hiddenLight) && world.destroyLight(12) &&
+               !world.destroyLight(12),
+             "lights update and destroy once") &&
+       ok;
+  fixture.frame();
+  ok =
+    check(
+      world.stats().lights == 81 &&
+        std::abs(
+          renderer.getLightUniforms().punctualLights[0].radianceAndOuterCos[0] -
+          500.0f) < 1.0f,
+      "updated light enters top priority slot") &&
+    ok;
+
+  renderer.destroyTexture(albedo);
+  renderer.destroyTexture(normal);
+  renderer.destroyTexture(orm);
+  renderer.destroyTexture(emissive);
+  return ok ? 0 : 1;
+}
+
+static RenderInstanceDesc
+makeInstanceAtXz(const WorldFixture& fixture,
+                 RenderMaterialId mat,
+                 float x,
+                 float z)
+{
+  RenderInstanceDesc desc = fixture.instance(mat, 0.0f);
+  std::array<float, 16> transform = kIdentity;
+  transform[12] = x;
+  transform[14] = z;
+  desc.world = transform;
+  return desc;
+}
+
+static size_t
+countSubmittedInstanceWrites(const MockBackend& mock)
+{
+  size_t writes = 0;
+  for (size_t index = 0; index < mock.getLastNonEmptySubmittedCount();
+       ++index) {
+    const RenderCommand& cmd = mock.getLastNonEmptySubmitted(index);
+    if (cmd.commandType == CommandType::WriteBuffer &&
+        cmd.writeBuffer.sizeBytes != sizeof(Renderer::FrameUniforms) &&
+        cmd.writeBuffer.sizeBytes != sizeof(Renderer::LightUniforms)) {
+      writes += 1;
+    }
+  }
+  return writes;
+}
+
+static void
+runWorldVpFrame(WorldFixture& fixture, const std::array<float, 16>& vpArray)
+{
+  fixture.render.mock.resetCounters();
+  fixture.render.renderer.setNextWorldViewProjection(vpArray);
+  fixture.render.renderer.BeginFrame();
+  fixture.render.renderer.RenderScene(&fixture.scene, &fixture.render.camera);
+  fixture.render.renderer.EndFrame();
+}
+
+static int
+shadowAtlasQuadrantsAndZeroUpload()
+{
+  WorldFixture fixture;
+  RenderWorld& world = fixture.world;
+  Renderer& renderer = fixture.render.renderer;
+  RenderEnvironment environment;
+  environment.shadowsEnabled = true;
+  environment.shadowMapSize = 1024;
+  world.setEnvironment(environment);
+
+  bool ok = check(world.createMaterial(1, RenderMaterialDesc{}) &&
+                    world.createMaterial(2, RenderMaterialDesc{}),
+                  "atlas materials created");
+
+  ok =
+    check(
+      world.createInstance(1, makeInstanceAtXz(fixture, 1, -0.5f, -3.0f)) &&
+        world.createInstance(2, makeInstanceAtXz(fixture, 1, 0.5f, -14.0f)) &&
+        world.createInstance(3, makeInstanceAtXz(fixture, 2, 0.0f, -45.0f)),
+      "near, mid and far casters created") &&
+    ok;
+
+  RenderLightDesc spot;
+  spot.kind = RenderLightKind::Spot;
+  spot.position = { 0.0f, 3.0f, -3.0f };
+  spot.direction = { -0.15f, -1.0f, 0.0f };
+  spot.color = { 1.0f, 0.9f, 0.7f };
+  spot.intensity = 25.0f;
+  spot.range = 15.0f;
+  spot.innerConeCos = std::cos(glm::radians(15.0f));
+  spot.outerConeCos = std::cos(glm::radians(30.0f));
+  spot.castsShadow = true;
+  ok =
+    check(world.createLight(1, spot), "hero spot shadow light created") && ok;
+
+  const glm::mat4 vp =
+    glm::perspective(glm::radians(60.0f), 640.0f / 480.0f, 0.2f, 90.0f) *
+    glm::lookAt(glm::vec3(0.0f, 3.0f, 4.0f),
+                glm::vec3(0.0f, 0.0f, -20.0f),
+                glm::vec3(0, 1, 0));
+  std::array<float, 16> vpArray{};
+  std::copy_n(glm::value_ptr(vp), 16, vpArray.begin());
+
+  runWorldVpFrame(fixture, vpArray);
+  const Renderer::LightUniforms& lightBlock = renderer.getLightUniforms();
+  ok = check(renderer.isShadowAtlasActive() &&
+               renderer.getShadowCascadeCount() == 3 &&
+               lightBlock.countsAndFlags[1] == 3 &&
+               lightBlock.countsAndFlags[2] == 0 &&
+               (lightBlock.countsAndFlags[3] & 4) != 0 &&
+               std::abs(lightBlock.cascadeSplitsAndTexel[3] -
+                        (1.0f / 2048.0f)) < 1e-6f,
+             "perspective scene with hero spot activates 2048x2048 4-quadrant "
+             "atlas") &&
+       ok;
+
+  bool sawQuad0 = false;
+  bool sawQuad3 = false;
+  for (size_t index = 0;
+       index < fixture.render.mock.getLastNonEmptySubmittedCount();
+       ++index) {
+    const RenderCommand& cmd =
+      fixture.render.mock.getLastNonEmptySubmitted(index);
+    if (cmd.commandType == CommandType::SetUniformInt &&
+        std::string(cmd.uniformInt.name) == "uShadowQuadrant") {
+      sawQuad0 = sawQuad0 || cmd.uniformInt.value == 0;
+      sawQuad3 = sawQuad3 || cmd.uniformInt.value == 3;
+    }
+  }
+  ok = check(sawQuad0 && sawQuad3,
+             "shadow pass emits draws into cascade 0 and spot quadrant 3") &&
+       ok;
+  ok = check(countSubmittedInstanceWrites(fixture.render.mock) > 0 &&
+               world.stats().uploadedInstances > 0,
+             "initial atlas frame uploads visible caster streams") &&
+       ok;
+
+  // Static second frame must skip instance uploads across all 4 quadrants.
+  runWorldVpFrame(fixture, vpArray);
+  ok = check(countSubmittedInstanceWrites(fixture.render.mock) == 0 &&
+               world.stats().uploadedInstances == 0 &&
+               world.stats().shadowInstances > 0,
+             "unchanged atlas frame emits zero instance-buffer uploads") &&
+       ok;
+
+  // Live Renderer::ShadowDebugOverrides disables shadows immediately and
+  // restores them when deactivated.
+  const size_t recordingsBefore = world.stats().recordings;
+  Renderer::ShadowDebugOverrides overrides{};
+  overrides.active = true;
+  overrides.shadowsEnabled = false;
+  renderer.setShadowDebugOverrides(overrides);
+  runWorldVpFrame(fixture, vpArray);
+  ok = check(world.stats().shadowInstances == 0 &&
+               world.stats().recordings > recordingsBefore,
+             "active ShadowDebugOverrides suppresses shadows and re-records") &&
+       ok;
+
+  overrides.active = false;
+  renderer.setShadowDebugOverrides(overrides);
+  runWorldVpFrame(fixture, vpArray);
+  ok = check(world.stats().shadowInstances > 0,
+             "deactivating ShadowDebugOverrides restores scene shadows") &&
+       ok;
+
+  return ok ? 0 : 1;
+}
+
 void
 registerRenderWorldTests(IllumoTestRegistry& registry)
 {
@@ -595,5 +1040,9 @@ registerRenderWorldTests(IllumoTestRegistry& registry)
                unchangedBucketsSkipUploads);
   registry.add("Illumo.RenderWorld.RejectsInvalidCalls", rejectsInvalidCalls);
   registry.add("Illumo.RenderWorld.ShadowsAndBlending", shadowsAndBlending);
+  registry.add("Illumo.RenderWorld.PunctualLightsAndMaterials",
+               punctualLightsAndMaterials);
+  registry.add("Illumo.RenderWorld.ShadowAtlasQuadrantsAndZeroUpload",
+               shadowAtlasQuadrantsAndZeroUpload);
   registry.add("Illumo.RecordedList.RecordingAndNesting", recordingAndNesting);
 }

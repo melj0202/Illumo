@@ -440,10 +440,16 @@ resolveNode(SceneNode& node, const std::string& key)
     } else if (primitive != nullptr && key.starts_with("primitive.color.")) {
       slot.byte = colorByte(primitive->color, last);
     }
-  } else if (key.starts_with("mesh.tint.")) {
+  } else if (key.starts_with("mesh.")) {
     SceneMeshRenderer* mesh = componentOf<SceneMeshRenderer>(node);
-    if (mesh != nullptr) {
+    if (mesh != nullptr && key.starts_with("mesh.tint.")) {
       slot.byte = colorByte(mesh->tint, last);
+    } else if (mesh != nullptr && key == "mesh.metallic") {
+      slot.number = &mesh->metallic;
+    } else if (mesh != nullptr && key == "mesh.roughness") {
+      slot.number = &mesh->roughness;
+    } else if (mesh != nullptr && key.starts_with("mesh.emissive.")) {
+      slot.number = &mesh->emissive[axisIndex(last)];
     }
   } else if (key.starts_with("sprite.")) {
     SceneSprite* sprite = componentOf<SceneSprite>(node);
@@ -475,6 +481,12 @@ resolveNode(SceneNode& node, const std::string& key)
       slot.number = &light->color[axisIndex(last)];
     } else if (light != nullptr && key == "light.intensity") {
       slot.number = &light->intensity;
+    } else if (light != nullptr && key == "light.range") {
+      slot.number = &light->range;
+    } else if (light != nullptr && key == "light.inner_angle") {
+      slot.number = &light->innerAngleDegrees;
+    } else if (light != nullptr && key == "light.outer_angle") {
+      slot.number = &light->outerAngleDegrees;
     }
   } else if (key.starts_with("camera.")) {
     SceneCamera* camera = componentOf<SceneCamera>(node);
@@ -910,8 +922,11 @@ defaultComponentLike(const SceneComponent& current,
     SceneSprite reset;
     reset.texture = sprite->texture;
     result.value = reset;
-  } else if (std::get_if<SceneLight>(&current.value) != nullptr) {
-    result.value = SceneLight{};
+  } else if (const SceneLight* light =
+               std::get_if<SceneLight>(&current.value)) {
+    SceneLight reset;
+    reset.kind = light->kind;
+    result.value = reset;
   } else if (const SceneCamera* camera =
                std::get_if<SceneCamera>(&current.value)) {
     SceneCamera reset;
@@ -1111,6 +1126,10 @@ buildAssetFields(const SceneDocument& scene,
       if (const SceneMeshRenderer* mesh =
             std::get_if<SceneMeshRenderer>(&component.value)) {
         used.insert(mesh->asset);
+        used.insert(mesh->albedoTexture);
+        used.insert(mesh->normalTexture);
+        used.insert(mesh->ormTexture);
+        used.insert(mesh->emissiveTexture);
       } else if (const SceneSprite* sprite =
                    std::get_if<SceneSprite>(&component.value)) {
         used.insert(sprite->texture);
@@ -1492,6 +1511,38 @@ EditorInspector::buildFields(const EditorDocument& document,
                  number("mesh.tint.g", "G", 1.0f),
                  number("mesh.tint.b", "B", 1.0f),
                  number("mesh.tint.a", "A", 1.0f) });
+      row("Albedo",
+          { assetChoice("mesh.albedo_texture",
+                        "Albedo",
+                        mesh->albedoTexture,
+                        { SceneAssetType::Texture },
+                        true) });
+      row("Normal",
+          { assetChoice("mesh.normal_texture",
+                        "Normal",
+                        mesh->normalTexture,
+                        { SceneAssetType::Texture },
+                        true) });
+      row("ORM",
+          { assetChoice("mesh.orm_texture",
+                        "ORM",
+                        mesh->ormTexture,
+                        { SceneAssetType::Texture },
+                        true) });
+      row("Emissive map",
+          { assetChoice("mesh.emissive_texture",
+                        "Emissive",
+                        mesh->emissiveTexture,
+                        { SceneAssetType::Texture },
+                        true) });
+      row("Surface",
+          { number("mesh.metallic", "M", 0.01f),
+            number("mesh.roughness", "R", 0.01f) });
+      colorRow("Emissive",
+               true,
+               { number("mesh.emissive.r", "R", 0.02f),
+                 number("mesh.emissive.g", "G", 0.02f),
+                 number("mesh.emissive.b", "B", 0.02f) });
       row("Shadows",
           { toggle("mesh.cast_shadows", "Cast", mesh->castShadows),
             button("component.remove.mesh", "Remove") });
@@ -1544,6 +1595,14 @@ EditorInspector::buildFields(const EditorDocument& document,
     } else if (const SceneLight* light =
                  std::get_if<SceneLight>(&component.value)) {
       section("Light");
+      const int kindIndex = light->kind == SceneLightKind::Point  ? 1
+                            : light->kind == SceneLightKind::Spot ? 2
+                                                                  : 0;
+      row("Kind",
+          { choice("light.kind",
+                   "Kind",
+                   { "directional", "point", "spot" },
+                   kindIndex) });
       colorRow("Color",
                true,
                { number("light.color.r", "R", 0.01f),
@@ -1552,6 +1611,14 @@ EditorInspector::buildFields(const EditorDocument& document,
       row("Intensity",
           { number("light.intensity", "I", 0.01f),
             toggle("light.shadows", "Shadows", light->shadows) });
+      if (light->kind != SceneLightKind::Directional) {
+        row("Range", { number("light.range", "Dist", 0.1f) });
+      }
+      if (light->kind == SceneLightKind::Spot) {
+        row("Cone",
+            { number("light.inner_angle", "In", 0.5f),
+              number("light.outer_angle", "Out", 0.5f) });
+      }
       row("", { button("component.remove.light", "Remove") });
     } else if (const SceneCamera* camera =
                  std::get_if<SceneCamera>(&component.value)) {
@@ -2196,6 +2263,24 @@ EditorInspector::applyChoice(const InspectorField& target,
       if (key == "mesh.asset") {
         SceneMeshRenderer* mesh = componentOf<SceneMeshRenderer>(node);
         return mesh != nullptr && ((mesh->asset = picked), true);
+      }
+      if (key == "mesh.albedo_texture" || key == "mesh.normal_texture" ||
+          key == "mesh.orm_texture" || key == "mesh.emissive_texture") {
+        SceneMeshRenderer* mesh = componentOf<SceneMeshRenderer>(node);
+        if (mesh == nullptr) {
+          return false;
+        }
+        const std::string chosen = picked == kNoAsset ? std::string() : picked;
+        std::string& slot = key == "mesh.albedo_texture"   ? mesh->albedoTexture
+                            : key == "mesh.normal_texture" ? mesh->normalTexture
+                            : key == "mesh.orm_texture" ? mesh->ormTexture
+                                                        : mesh->emissiveTexture;
+        slot = chosen;
+        return true;
+      }
+      if (key == "light.kind") {
+        SceneLight* light = componentOf<SceneLight>(node);
+        return light != nullptr && parseSceneLightKind(picked, light->kind);
       }
       if (key == "sprite.texture" || key == "sprite.source") {
         SceneSprite* sprite = componentOf<SceneSprite>(node);

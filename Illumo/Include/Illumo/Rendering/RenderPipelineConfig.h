@@ -16,6 +16,7 @@ struct RenderPipelineConfig
   bool shadowsEnabled = true;
   bool shadowPcf = true;
   int shadowMapSize = 1024;
+  int shadowCascades = 3;
   float shadowRadius = 2.5f;
   float lightDistance = 8.0f;
   float shadowBias = 0.001f;
@@ -25,6 +26,17 @@ struct RenderPipelineConfig
   float motionBlurAmount = 0.5f;
   float motionBlurMax = 0.2f;
   int motionBlurSamples = 8;
+  bool hdrEnabled = true;
+  // 0 = None (clamp), 1 = Reinhard, 2 = AgX Base, 3 = Khronos PBR Neutral,
+  // 4 = AgX Punchy, 5 = ACES Filmic, 6 = Uchimura / GT
+  static constexpr int kMaxTonemapper = 6;
+  int tonemapper = 2;
+  float exposure = 0.0f;
+  bool bloomEnabled = true;
+  float bloomIntensity = 0.04f;
+  int bloomMipCount = 5;
+  bool fxaaEnabled = true;
+  bool canvasBloomEnabled = false;
 
   bool operator==(const RenderPipelineConfig&) const = default;
 
@@ -62,6 +74,7 @@ struct RenderPipelineConfig
       { "shadowsEnabled", "1" },
       { "shadowPcf", "1" },
       { "shadowMapSize", "1024" },
+      { "shadowCascades", "3" },
       { "shadowRadius", "2.5" },
       { "lightDistance", "8" },
       { "shadowBias", "0.001" },
@@ -71,6 +84,14 @@ struct RenderPipelineConfig
       { "motionBlurAmount", "0.5" },
       { "motionBlurMax", "0.2" },
       { "motionBlurSamples", "8" },
+      { "hdrEnabled", "1" },
+      { "tonemapper", "2" },
+      { "exposure", "0" },
+      { "bloomEnabled", "1" },
+      { "bloomIntensity", "0.04" },
+      { "bloomMipCount", "5" },
+      { "fxaaEnabled", "1" },
+      { "canvasBloomEnabled", "0" },
     };
     for (const DefaultEntry& entry : kDefaults) {
       if (environment->getVar(entry.key).value.empty()) {
@@ -100,6 +121,11 @@ struct RenderPipelineConfig
     const EnvVar& mapSize = environment->getVar("shadowMapSize");
     if (!mapSize.value.empty() && mapSize.valueAsLong > 0) {
       config.shadowMapSize = static_cast<int>(mapSize.valueAsLong);
+    }
+    const EnvVar& cascades = environment->getVar("shadowCascades");
+    if (!cascades.value.empty() && cascades.valueAsLong >= 1) {
+      config.shadowCascades =
+        std::clamp(static_cast<int>(cascades.valueAsLong), 1, 3);
     }
     const EnvVar& radius = environment->getVar("shadowRadius");
     if (!radius.value.empty() && std::isfinite(radius.valueAsDouble) &&
@@ -141,6 +167,42 @@ struct RenderPipelineConfig
     if (!blurSamples.value.empty() && blurSamples.valueAsLong > 0) {
       config.motionBlurSamples = static_cast<int>(blurSamples.valueAsLong);
     }
+    const EnvVar& hdr = environment->getVar("hdrEnabled");
+    if (!hdr.value.empty()) {
+      config.hdrEnabled = hdr.valueAsBool;
+    }
+    const EnvVar& tonemap = environment->getVar("tonemapper");
+    if (!tonemap.value.empty()) {
+      config.tonemapper =
+        std::clamp(static_cast<int>(tonemap.valueAsLong), 0, kMaxTonemapper);
+    }
+    const EnvVar& exp = environment->getVar("exposure");
+    if (!exp.value.empty() && std::isfinite(exp.valueAsDouble)) {
+      config.exposure =
+        std::clamp(static_cast<float>(exp.valueAsDouble), -8.0f, 8.0f);
+    }
+    const EnvVar& bloom = environment->getVar("bloomEnabled");
+    if (!bloom.value.empty()) {
+      config.bloomEnabled = bloom.valueAsBool;
+    }
+    const EnvVar& bloomInt = environment->getVar("bloomIntensity");
+    if (!bloomInt.value.empty() && std::isfinite(bloomInt.valueAsDouble)) {
+      config.bloomIntensity =
+        std::clamp(static_cast<float>(bloomInt.valueAsDouble), 0.0f, 1.0f);
+    }
+    const EnvVar& bloomMips = environment->getVar("bloomMipCount");
+    if (!bloomMips.value.empty() && bloomMips.valueAsLong >= 1) {
+      config.bloomMipCount =
+        std::clamp(static_cast<int>(bloomMips.valueAsLong), 1, 5);
+    }
+    const EnvVar& fxaa = environment->getVar("fxaaEnabled");
+    if (!fxaa.value.empty()) {
+      config.fxaaEnabled = fxaa.valueAsBool;
+    }
+    const EnvVar& canvasBloom = environment->getVar("canvasBloomEnabled");
+    if (!canvasBloom.value.empty()) {
+      config.canvasBloomEnabled = canvasBloom.valueAsBool;
+    }
     return config;
   }
 
@@ -153,6 +215,8 @@ struct RenderPipelineConfig
     environment->setVar("shadowsEnabled", shadowsEnabled);
     environment->setVar("shadowPcf", shadowPcf);
     environment->setVar("shadowMapSize", static_cast<long>(shadowMapSize));
+    environment->setVar("shadowCascades",
+                        static_cast<long>(std::clamp(shadowCascades, 1, 3)));
     environment->setVar("shadowRadius", formatFloat(shadowRadius));
     environment->setVar("lightDistance", formatFloat(lightDistance));
     environment->setVar("shadowBias", formatFloat(shadowBias));
@@ -163,5 +227,16 @@ struct RenderPipelineConfig
     environment->setVar("motionBlurMax", formatFloat(motionBlurMax));
     environment->setVar("motionBlurSamples",
                         static_cast<long>(motionBlurSamples));
+    environment->setVar("hdrEnabled", hdrEnabled);
+    environment->setVar(
+      "tonemapper",
+      static_cast<long>(std::clamp(tonemapper, 0, kMaxTonemapper)));
+    environment->setVar("exposure", formatFloat(exposure));
+    environment->setVar("bloomEnabled", bloomEnabled);
+    environment->setVar("bloomIntensity", formatFloat(bloomIntensity));
+    environment->setVar("bloomMipCount",
+                        static_cast<long>(std::clamp(bloomMipCount, 1, 5)));
+    environment->setVar("fxaaEnabled", fxaaEnabled);
+    environment->setVar("canvasBloomEnabled", canvasBloomEnabled);
   }
 };

@@ -1,6 +1,6 @@
 {
   "format": "ilsc",
-  "format_version": [2, 0],
+  "format_version": [2, 1],
   "metadata": {
     "title": "Playground",
     "author": "Illumo",
@@ -23,6 +23,9 @@
       "components": [
         { "type": "primitive", "shape": "sphere", "extent": [0.45, 0.45, 0.45],
           "color": [240, 200, 90, 255] },
+        { "type": "light", "kind": "spot", "color": [0.55, 0.8, 1.0],
+          "intensity": 5.0, "shadows": true, "range": 12.0,
+          "inner_angle_degrees": 20, "outer_angle_degrees": 35 },
         { "type": "playground.bob", "height": 0.5, "period": 2 } ] },
     { "id": "beacon", "name": "Beacon",
       "transform": { "position": [0, 0.5, -2] },
@@ -33,6 +36,8 @@
       "components": [
         { "type": "primitive", "shape": "cube", "extent": [0.2, 0.2, 0.2],
           "color": [210, 215, 230, 255] },
+        { "type": "light", "kind": "point", "color": [1.0, 0.78, 0.45],
+          "intensity": 3.5, "shadows": false, "range": 8.0 },
         { "type": "playground.orbit", "target": "beacon", "radius": 1.5,
           "speed": 60 } ] },
     { "id": "walker", "name": "Walker",

@@ -151,6 +151,40 @@ Renderer::boundsIntersectFrustum(const AxisAlignedBounds3& bounds,
   return true;
 }
 
+static void
+resolveCameraPosFromMatrix(const glm::mat4& vp,
+                           const std::array<Vector3, 8>& corners,
+                           bool frustumValid,
+                           std::array<float, 4>* outPosAndMode,
+                           std::array<float, 3>* outRefPos)
+{
+  const float det = glm::determinant(vp);
+  if (std::isfinite(det) && std::abs(det) > std::numeric_limits<float>::min()) {
+    const glm::vec4 eye = glm::inverse(vp) * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
+    if (std::isfinite(eye.w) && std::abs(eye.w) > 1e-6f) {
+      const glm::vec3 pos = glm::vec3(eye) / eye.w;
+      if (std::isfinite(pos.x) && std::isfinite(pos.y) &&
+          std::isfinite(pos.z)) {
+        *outPosAndMode = { pos.x, pos.y, pos.z, 1.0f };
+        *outRefPos = { pos.x, pos.y, pos.z };
+        return;
+      }
+    }
+  }
+  if (frustumValid) {
+    const glm::vec3 nearCenter =
+      0.25f * (corners[0] + corners[2] + corners[4] + corners[6]);
+    const glm::vec3 farCenter =
+      0.25f * (corners[1] + corners[3] + corners[5] + corners[7]);
+    const glm::vec3 toCamera = nearCenter - farCenter;
+    const float len = glm::length(toCamera);
+    const glm::vec3 dir =
+      len > 1e-5f ? (toCamera / len) : glm::vec3(0.0f, 0.0f, 1.0f);
+    *outPosAndMode = { dir.x, dir.y, dir.z, -1.0f };
+    *outRefPos = { nearCenter.x, nearCenter.y, nearCenter.z };
+  }
+}
+
 void
 Renderer::beginFrameContext(Camera* camera)
 {
@@ -163,6 +197,12 @@ Renderer::beginFrameContext(Camera* camera)
   frameContext.worldCamera = camera;
   frameContext.frameSerial = frameSerial;
   cameraFrustum = BoundsFrustum{};
+  m_framePunctualLightCount = 0;
+  m_frameSpotShadow = SpotShadowLightDesc{};
+  m_hasFrameSpotShadow = false;
+  m_hdrLinearWorldTarget = false;
+  m_worldCameraPosAndMode = { 0.0f, 0.0f, 1.0f, -1.0f };
+  m_worldCameraReferencePos = { 0.0f, 0.0f, 0.0f };
   if (_window == nullptr) {
     return;
   }
@@ -189,6 +229,11 @@ Renderer::beginFrameContext(Camera* camera)
                 m_nextWorldViewProjection.data(),
                 m_nextWorldViewProjection.size() * sizeof(float));
     buildBoundsFrustum(supplied, &cameraFrustum);
+    resolveCameraPosFromMatrix(supplied,
+                               cameraFrustum.corners,
+                               cameraFrustum.valid,
+                               &m_worldCameraPosAndMode,
+                               &m_worldCameraReferencePos);
     return;
   }
   if (camera == nullptr) {
@@ -205,6 +250,17 @@ Renderer::beginFrameContext(Camera* camera)
               frameContext.worldMvp.size() * sizeof(float));
   frameContext.hasWorldMvp = true;
   buildBoundsFrustum(matrix, &cameraFrustum);
+  if (camera->getProjectionType() == ProjectionType::Perspective) {
+    const glm::vec3 eye = camera->getEye();
+    m_worldCameraPosAndMode = { eye.x, eye.y, eye.z, 1.0f };
+    m_worldCameraReferencePos = { eye.x, eye.y, eye.z };
+  } else {
+    resolveCameraPosFromMatrix(matrix,
+                               cameraFrustum.corners,
+                               cameraFrustum.valid,
+                               &m_worldCameraPosAndMode,
+                               &m_worldCameraReferencePos);
+  }
 }
 
 void
@@ -231,6 +287,20 @@ Renderer::resetShadowFrame()
   shadowCasterVolume = AxisAlignedBounds3{};
   shadowCasterVolumeValid = false;
   shadowFrameContext = ShadowFrameContext{};
+  for (size_t q = 0; q < kShadowAtlasQuadrants; ++q) {
+    m_shadowQuadrantActive[q] = false;
+    m_shadowQuadrantMatrices[q] = shadowFrameContext.lightSpaceMatrix;
+    m_shadowQuadrantFrustums[q] = BoundsFrustum{};
+    m_shadowQuadrantCasterFrustums[q] = BoundsFrustum{};
+    m_shadowQuadrantCasterVolumes[q] = AxisAlignedBounds3{};
+    m_shadowQuadrantCasterVolumeValid[q] = false;
+  }
+  m_shadowCascadeClipSplits = { 0.0f, 0.0f, 0.0f };
+  m_primaryLightSpaceMatrix = shadowFrameContext.lightSpaceMatrix;
+  m_activeShadowQuadrant = 0;
+  m_shadowCascadeCount = 0;
+  m_shadowQuadrantSize = 0;
+  m_shadowAtlasActive = false;
 }
 
 void
@@ -279,20 +349,30 @@ Renderer::isWorldBoundsVisible(const AxisAlignedBounds3& bounds) const
 bool
 Renderer::isShadowCasterRelevant(const AxisAlignedBounds3& bounds) const
 {
-  if (!shadowFrameContext.active) {
+  return isShadowQuadrantRelevant(m_activeShadowQuadrant, bounds);
+}
+
+bool
+Renderer::isShadowQuadrantRelevant(size_t quadrant,
+                                   const AxisAlignedBounds3& bounds) const
+{
+  if (!shadowFrameContext.active || quadrant >= kShadowAtlasQuadrants ||
+      !m_shadowQuadrantActive[quadrant]) {
     return false;
   }
   if (!bounds.isValid()) {
     return true;
   }
-  if (shadowCasterVolumeValid && !bounds.intersects(shadowCasterVolume)) {
+  if (m_shadowQuadrantCasterVolumeValid[quadrant] &&
+      !bounds.intersects(m_shadowQuadrantCasterVolumes[quadrant])) {
     return false;
   }
-  if (shadowCasterVolumeValid &&
-      !boundsIntersectFrustum(bounds, shadowCasterFrustum)) {
+  if (m_shadowQuadrantCasterVolumeValid[quadrant] &&
+      !boundsIntersectFrustum(bounds,
+                              m_shadowQuadrantCasterFrustums[quadrant])) {
     return false;
   }
-  return boundsIntersectFrustum(bounds, shadowFrustum);
+  return boundsIntersectFrustum(bounds, m_shadowQuadrantFrustums[quadrant]);
 }
 
 bool
@@ -319,22 +399,36 @@ Renderer::getCullRevision() const
 uint64_t
 Renderer::getShadowCullRevision() const
 {
-  const bool active = shadowFrameContext.active;
-  if (m_shadowCullActive != active ||
-      (active &&
-       (m_shadowCullVolumeValid != shadowCasterVolumeValid ||
-        !(m_shadowCullVolume.minimum == shadowCasterVolume.minimum) ||
-        !(m_shadowCullVolume.maximum == shadowCasterVolume.maximum) ||
-        !sameFrustum(m_shadowCullCasterFrustum, shadowCasterFrustum) ||
-        !sameFrustum(m_shadowCullFrustum, shadowFrustum)))) {
-    m_shadowCullActive = active;
-    m_shadowCullVolumeValid = shadowCasterVolumeValid;
-    m_shadowCullVolume = shadowCasterVolume;
-    m_shadowCullCasterFrustum = shadowCasterFrustum;
-    m_shadowCullFrustum = shadowFrustum;
-    m_shadowCullRevision += 1;
+  return getShadowQuadrantCullRevision(m_activeShadowQuadrant);
+}
+
+uint64_t
+Renderer::getShadowQuadrantCullRevision(size_t quadrant) const
+{
+  if (quadrant >= kShadowAtlasQuadrants) {
+    return 0;
   }
-  return m_shadowCullRevision;
+  ShadowQuadrantCullCache& cache = m_shadowQuadrantCullCache[quadrant];
+  const bool active =
+    shadowFrameContext.active && m_shadowQuadrantActive[quadrant];
+  if (cache.active != active ||
+      (active &&
+       (cache.volumeValid != m_shadowQuadrantCasterVolumeValid[quadrant] ||
+        !(cache.volume.minimum ==
+          m_shadowQuadrantCasterVolumes[quadrant].minimum) ||
+        !(cache.volume.maximum ==
+          m_shadowQuadrantCasterVolumes[quadrant].maximum) ||
+        !sameFrustum(cache.casterFrustum,
+                     m_shadowQuadrantCasterFrustums[quadrant]) ||
+        !sameFrustum(cache.frustum, m_shadowQuadrantFrustums[quadrant])))) {
+    cache.active = active;
+    cache.volumeValid = m_shadowQuadrantCasterVolumeValid[quadrant];
+    cache.volume = m_shadowQuadrantCasterVolumes[quadrant];
+    cache.casterFrustum = m_shadowQuadrantCasterFrustums[quadrant];
+    cache.frustum = m_shadowQuadrantFrustums[quadrant];
+    cache.revision += 1;
+  }
+  return cache.revision;
 }
 
 void
@@ -365,6 +459,7 @@ Renderer::releaseShadowResources()
   m_stabilizedShadowMapSize = 0;
   m_stabilizedShadowBaseRadius = 0.0f;
   m_stabilizedShadowLightDir = { 0.0f, 0.0f, 0.0f };
+  m_stabilizedCascadeHalfExtents = { 0.0f, 0.0f, 0.0f };
 }
 
 bool
@@ -394,7 +489,7 @@ Renderer::prepareShadowPass()
       }
     }
   }
-  if (!anchorFound) {
+  if (!anchorFound && !m_hasFrameSpotShadow) {
     return false;
   }
 
@@ -411,10 +506,10 @@ Renderer::prepareShadowPass()
                                     lightDirection.y,
                                     lightDirection.z };
 
+  const float casterDistance = std::isfinite(anchor.casterDistance)
+                                 ? std::max(anchor.casterDistance, 0.0f)
+                                 : 0.0f;
   if (cameraFrustum.valid) {
-    const float casterDistance = std::isfinite(anchor.casterDistance)
-                                   ? std::max(anchor.casterDistance, 0.0f)
-                                   : 0.0f;
     const Vector3 extrusion = lightDirection * casterDistance;
     shadowCasterFrustum = cameraFrustum;
     for (Vector4& plane : shadowCasterFrustum.planes) {
@@ -439,7 +534,7 @@ Renderer::prepareShadowPass()
       Vector3(caster.boundsMin[0], caster.boundsMin[1], caster.boundsMin[2]),
       Vector3(caster.boundsMax[0], caster.boundsMax[1], caster.boundsMax[2])
     };
-    if (shadowCasterVolumeValid &&
+    if (shadowCasterVolumeValid && !m_hasFrameSpotShadow &&
         (!casterBounds.intersects(shadowCasterVolume) ||
          !boundsIntersectFrustum(casterBounds, shadowCasterFrustum))) {
       continue;
@@ -472,7 +567,51 @@ Renderer::prepareShadowPass()
     return false;
   }
 
-  ensureShadowResources(requestedShadowMapSize);
+  int configuredCascades = 3;
+  if (envVars != nullptr) {
+    const EnvVar& cascadesVar = envVars->getVar("shadowCascades");
+    if (!cascadesVar.value.empty() && cascadesVar.valueAsLong >= 1) {
+      configuredCascades =
+        std::clamp(static_cast<int>(cascadesVar.valueAsLong), 1, 3);
+    }
+  }
+
+  bool isPerspective = false;
+  Vector3 nearCenter(0.0f);
+  Vector3 farCenter(0.0f);
+  Vector3 viewForward(0.0f, 0.0f, -1.0f);
+  float frustumDepth = 0.0f;
+  if (cameraFrustum.valid) {
+    nearCenter = 0.25f * (cameraFrustum.corners[0] + cameraFrustum.corners[2] +
+                          cameraFrustum.corners[4] + cameraFrustum.corners[6]);
+    farCenter = 0.25f * (cameraFrustum.corners[1] + cameraFrustum.corners[3] +
+                         cameraFrustum.corners[5] + cameraFrustum.corners[7]);
+    const float nearDiag =
+      glm::length(cameraFrustum.corners[6] - cameraFrustum.corners[0]);
+    const float farDiag =
+      glm::length(cameraFrustum.corners[7] - cameraFrustum.corners[1]);
+    const Vector3 viewAxis = farCenter - nearCenter;
+    frustumDepth = glm::length(viewAxis);
+    isPerspective = frustumDepth > 0.001f && farDiag > nearDiag * 1.01f;
+    if (frustumDepth > 0.001f) {
+      viewForward = viewAxis / frustumDepth;
+    }
+  }
+
+  m_shadowAtlasActive =
+    (isPerspective && configuredCascades > 1 && anchorFound) ||
+    m_hasFrameSpotShadow;
+  const int maxTex =
+    _backend != nullptr ? std::max(_backend->maxTextureSize(), 256) : 8192;
+  if (m_shadowAtlasActive) {
+    m_shadowQuadrantSize =
+      std::clamp(requestedShadowMapSize, 64, std::max(64, maxTex / 2));
+  } else {
+    m_shadowQuadrantSize = std::clamp(requestedShadowMapSize, 1, maxTex);
+  }
+  const int targetSize =
+    m_shadowAtlasActive ? (2 * m_shadowQuadrantSize) : m_shadowQuadrantSize;
+  ensureShadowResources(targetSize);
   if (!shadowFramebuffer.isValid() || !shadowDepthTexture.isValid()) {
     return false;
   }
@@ -485,30 +624,196 @@ Renderer::prepareShadowPass()
   // not shift the texel grid across stationary surfaces.
   const glm::mat4 lightView =
     glm::lookAt(glm::vec3(0.0f), -lightDirection, lightUp);
-
   const float baseRadius = std::max(requestedShadowMinimumRadius, 0.1f);
-  BoundsFrustum cameraFitFrustum = cameraFrustum;
-  bool usePerspectiveXyCap = false;
-  glm::vec2 perspectiveFocusLightXY(0.0f);
-  float perspectiveRawXyCap = 0.0f;
+  const float texelPadScale = m_shadowQuadrantSize > 2
+                                ? static_cast<float>(m_shadowQuadrantSize) /
+                                    static_cast<float>(m_shadowQuadrantSize - 2)
+                                : 1.0f;
+  const glm::vec3 previousLightDir(m_stabilizedShadowLightDir[0],
+                                   m_stabilizedShadowLightDir[1],
+                                   m_stabilizedShadowLightDir[2]);
+  const bool sameSharedConfig =
+    m_stabilizedShadowMapSize == m_shadowQuadrantSize &&
+    std::abs(m_stabilizedShadowBaseRadius - baseRadius) <= 0.0001f &&
+    glm::dot(previousLightDir, lightDirection) >= 0.9999f;
 
-  if (cameraFrustum.valid) {
-    const Vector3 nearCenter =
-      0.25f * (cameraFrustum.corners[0] + cameraFrustum.corners[2] +
-               cameraFrustum.corners[4] + cameraFrustum.corners[6]);
-    const Vector3 farCenter =
-      0.25f * (cameraFrustum.corners[1] + cameraFrustum.corners[3] +
-               cameraFrustum.corners[5] + cameraFrustum.corners[7]);
-    const float nearDiag =
-      glm::length(cameraFrustum.corners[6] - cameraFrustum.corners[0]);
-    const float farDiag =
-      glm::length(cameraFrustum.corners[7] - cameraFrustum.corners[1]);
-    const Vector3 viewAxis = farCenter - nearCenter;
-    const float frustumDepth = glm::length(viewAxis);
-    const bool isPerspective =
-      frustumDepth > 0.001f && farDiag > nearDiag * 1.01f;
+  if (anchorFound && isPerspective && configuredCascades > 1) {
+    const Vector3 camEye(m_worldCameraReferencePos[0],
+                         m_worldCameraReferencePos[1],
+                         m_worldCameraReferencePos[2]);
+    const float dNear =
+      std::max(glm::dot(nearCenter - camEye, viewForward), 0.05f);
+    const float maxRange = casterDistance > 0.0f ? casterDistance : 100.0f;
+    const float dMax =
+      std::min(dNear + frustumDepth, std::max(dNear + 4.0f, maxRange));
+    std::array<float, 3> splitDepths{ dMax, dMax, dMax };
+    constexpr float kLambda = 0.75f;
+    for (int c = 0; c < configuredCascades; ++c) {
+      const float p =
+        static_cast<float>(c + 1) / static_cast<float>(configuredCascades);
+      const float dLog = dNear * std::pow(dMax / dNear, p);
+      const float dUni = dNear + (dMax - dNear) * p;
+      float split = kLambda * dLog + (1.0f - kLambda) * dUni;
+      if (c == 0) {
+        split = std::max(split, std::min(14.0f, dMax * 0.35f));
+      }
+      if (c > 0) {
+        split = std::max(split, splitDepths[c - 1] + 0.5f);
+      }
+      splitDepths[c] = std::min(split, dMax);
+    }
+
+    if (!sameSharedConfig) {
+      m_stabilizedCascadeHalfExtents = { 0.0f, 0.0f, 0.0f };
+      m_stabilizedShadowMapSize = m_shadowQuadrantSize;
+      m_stabilizedShadowBaseRadius = baseRadius;
+      m_stabilizedShadowLightDir = requestedShadowLightDirection;
+    }
+
+    const glm::mat4 worldVp = frameContext.hasWorldMvp
+                                ? glm::make_mat4(frameContext.worldMvp.data())
+                                : glm::mat4(1.0f);
+
+    m_shadowCascadeCount = configuredCascades;
+    for (int c = 0; c < configuredCascades; ++c) {
+      const float prevDepth = (c == 0) ? dNear : splitDepths[c - 1];
+      const float currDepth = splitDepths[c];
+      const float t0 =
+        std::clamp((prevDepth - dNear) / frustumDepth, 0.0f, 1.0f);
+      const float t1 =
+        std::clamp((currDepth - dNear) / frustumDepth, t0 + 0.0001f, 1.0f);
+
+      BoundsFrustum subFrustum = cameraFrustum;
+      const Vector3 sliceNearCenter =
+        nearCenter + viewForward * (t0 * frustumDepth);
+      const Vector3 sliceFarCenter =
+        nearCenter + viewForward * (t1 * frustumDepth);
+      subFrustum.planes[4] =
+        Vector4(viewForward, -glm::dot(viewForward, sliceNearCenter));
+      subFrustum.planes[5] =
+        Vector4(-viewForward, glm::dot(viewForward, sliceFarCenter));
+      for (size_t pair = 0; pair < 4; ++pair) {
+        const Vector3 c0 = cameraFrustum.corners[pair * 2];
+        const Vector3 c1 = cameraFrustum.corners[pair * 2 + 1];
+        subFrustum.corners[pair * 2] = glm::mix(c0, c1, t0);
+        subFrustum.corners[pair * 2 + 1] = glm::mix(c0, c1, t1);
+      }
+      subFrustum.worldBounds =
+        AxisAlignedBounds3{ subFrustum.corners[0], subFrustum.corners[0] };
+      for (size_t idx = 1; idx < subFrustum.corners.size(); ++idx) {
+        subFrustum.worldBounds.include(subFrustum.corners[idx]);
+      }
+
+      const Vector3 extrusion = lightDirection * maxRange;
+      BoundsFrustum cExtruded = subFrustum;
+      for (Vector4& plane : cExtruded.planes) {
+        const float projected = glm::dot(Vector3(plane), extrusion);
+        plane.w -= std::min(0.0f, projected);
+      }
+      AxisAlignedBounds3 cVolume = subFrustum.worldBounds;
+      for (const Vector3& corner : subFrustum.corners) {
+        cVolume.include(corner + extrusion);
+      }
+      cExtruded.worldBounds = cVolume;
+      m_shadowQuadrantCasterFrustums[c] = cExtruded;
+      m_shadowQuadrantCasterVolumes[c] = cVolume;
+      m_shadowQuadrantCasterVolumeValid[c] =
+        cVolume.isValid() && cExtruded.valid;
+
+      const float rNear = glm::length(subFrustum.corners[0] - sliceNearCenter);
+      const float rFar = glm::length(subFrustum.corners[1] - sliceFarCenter);
+      const float axisLen = glm::length(sliceFarCenter - sliceNearCenter);
+      Vector3 sphereCenter = (sliceNearCenter + sliceFarCenter) * 0.5f;
+      if (axisLen > 1e-4f) {
+        const float x = std::clamp(
+          (axisLen * axisLen + rFar * rFar - rNear * rNear) / (2.0f * axisLen),
+          0.0f,
+          axisLen);
+        sphereCenter = sliceNearCenter + viewForward * x;
+      }
+      float rawRadius = 0.0f;
+      for (const Vector3& corner : subFrustum.corners) {
+        rawRadius = std::max(rawRadius, glm::length(corner - sphereCenter));
+      }
+      float halfExtent =
+        std::ceil(std::max(baseRadius, rawRadius * texelPadScale) * 16.0f) /
+        16.0f;
+      if (m_stabilizedCascadeHalfExtents[c] > 0.0f &&
+          std::abs(halfExtent - m_stabilizedCascadeHalfExtents[c]) <=
+            m_stabilizedCascadeHalfExtents[c] * 0.02f) {
+        halfExtent = m_stabilizedCascadeHalfExtents[c];
+      } else {
+        m_stabilizedCascadeHalfExtents[c] = halfExtent;
+      }
+
+      const glm::vec3 sphereLight =
+        glm::vec3(lightView * glm::vec4(sphereCenter, 1.0f));
+      const float texelSize =
+        (2.0f * halfExtent) / static_cast<float>(m_shadowQuadrantSize);
+      const glm::vec2 snappedCenter =
+        texelSize > 0.000001f
+          ? glm::floor(glm::vec2(sphereLight) / texelSize + 0.5f) * texelSize
+          : glm::vec2(sphereLight);
+
+      float zLightMin = sphereLight.z - halfExtent;
+      float zLightMax = sphereLight.z + halfExtent;
+      const glm::vec2 orthoXyMin = snappedCenter - glm::vec2(halfExtent);
+      const glm::vec2 orthoXyMax = snappedCenter + glm::vec2(halfExtent);
+      for (const ShadowCasterDesc& caster : shadowCasters) {
+        const AxisAlignedBounds3 casterBounds{
+          Vector3(
+            caster.boundsMin[0], caster.boundsMin[1], caster.boundsMin[2]),
+          Vector3(caster.boundsMax[0], caster.boundsMax[1], caster.boundsMax[2])
+        };
+        if (m_shadowQuadrantCasterVolumeValid[c] &&
+            (!casterBounds.intersects(cVolume) ||
+             !boundsIntersectFrustum(casterBounds, cExtruded))) {
+          continue;
+        }
+        glm::vec3 cLightMin(0.0f);
+        glm::vec3 cLightMax(0.0f);
+        projectBoundsToLight(casterBounds, lightView, &cLightMin, &cLightMax);
+        if (cLightMax.x < orthoXyMin.x || cLightMin.x > orthoXyMax.x ||
+            cLightMax.y < orthoXyMin.y || cLightMin.y > orthoXyMax.y) {
+          continue;
+        }
+        zLightMin = std::min(zLightMin, cLightMin.z);
+        zLightMax = std::max(zLightMax, cLightMax.z);
+      }
+
+      const float nearPadding = std::max(0.5f, halfExtent * 0.1f);
+      const float farPadding =
+        std::max(nearPadding, std::max(requestedShadowLightDistance, 16.0f));
+      constexpr float kDepthStep = 4.0f;
+      const float nearPlane =
+        std::floor((-zLightMax - nearPadding) / kDepthStep) * kDepthStep;
+      const float farPlane = std::max(
+        nearPlane + kDepthStep,
+        std::ceil((-zLightMin + farPadding) / kDepthStep) * kDepthStep);
+      const glm::mat4 lightProj = glm::ortho(snappedCenter.x - halfExtent,
+                                             snappedCenter.x + halfExtent,
+                                             snappedCenter.y - halfExtent,
+                                             snappedCenter.y + halfExtent,
+                                             nearPlane,
+                                             farPlane);
+      const glm::mat4 cascadeMatrix = lightProj * lightView;
+      std::memcpy(m_shadowQuadrantMatrices[c].data(),
+                  glm::value_ptr(cascadeMatrix),
+                  16 * sizeof(float));
+      buildBoundsFrustum(cascadeMatrix, &m_shadowQuadrantFrustums[c]);
+      m_shadowQuadrantActive[c] = m_shadowQuadrantFrustums[c].valid;
+
+      const glm::vec4 splitClip = worldVp * glm::vec4(sliceFarCenter, 1.0f);
+      m_shadowCascadeClipSplits[c] =
+        std::isfinite(splitClip.w) ? splitClip.w : currDepth;
+    }
+  } else if (anchorFound) {
+    BoundsFrustum cameraFitFrustum = cameraFrustum;
+    bool usePerspectiveXyCap = false;
+    glm::vec2 perspectiveFocusLightXY(0.0f);
+    float perspectiveRawXyCap = 0.0f;
+
     if (isPerspective) {
-      const Vector3 viewForward = viewAxis / frustumDepth;
       bool hasVisibleDepth = false;
       float minVisibleDepth = frustumDepth;
       for (const ShadowCasterDesc& caster : shadowCasters) {
@@ -573,179 +878,220 @@ Renderer::prepareShadowPass()
       perspectiveRawXyCap = maxCameraHalfExtent * 0.85f;
       usePerspectiveXyCap = true;
     }
-  }
 
-  glm::vec2 xyLightMin(0.0f);
-  glm::vec2 xyLightMax(0.0f);
-  float xyFallbackZMin = 0.0f;
-  float xyFallbackZMax = 0.0f;
-  bool xyBoundsValid = false;
-  if (cameraFrustum.valid) {
+    glm::vec2 xyLightMin(0.0f);
+    glm::vec2 xyLightMax(0.0f);
+    float xyFallbackZMin = 0.0f;
+    float xyFallbackZMax = 0.0f;
+    bool xyBoundsValid = false;
+    if (cameraFrustum.valid) {
+      for (const ShadowCasterDesc& caster : shadowCasters) {
+        const AxisAlignedBounds3 casterBounds{
+          Vector3(
+            caster.boundsMin[0], caster.boundsMin[1], caster.boundsMin[2]),
+          Vector3(caster.boundsMax[0], caster.boundsMax[1], caster.boundsMax[2])
+        };
+        if (!casterBounds.intersects(cameraFitFrustum.worldBounds) ||
+            !boundsIntersectFrustum(casterBounds, cameraFitFrustum)) {
+          continue;
+        }
+        glm::vec3 cLightMin(0.0f);
+        glm::vec3 cLightMax(0.0f);
+        projectBoundsToLight(casterBounds, lightView, &cLightMin, &cLightMax);
+        if (usePerspectiveXyCap) {
+          const glm::vec2 capMin =
+            perspectiveFocusLightXY - glm::vec2(perspectiveRawXyCap);
+          const glm::vec2 capMax =
+            perspectiveFocusLightXY + glm::vec2(perspectiveRawXyCap);
+          if (cLightMax.x < capMin.x || cLightMin.x > capMax.x ||
+              cLightMax.y < capMin.y || cLightMin.y > capMax.y) {
+            continue;
+          }
+          cLightMin.x = std::max(cLightMin.x, capMin.x);
+          cLightMin.y = std::max(cLightMin.y, capMin.y);
+          cLightMax.x = std::min(cLightMax.x, capMax.x);
+          cLightMax.y = std::min(cLightMax.y, capMax.y);
+        }
+        if (!xyBoundsValid) {
+          xyLightMin = glm::vec2(cLightMin);
+          xyLightMax = glm::vec2(cLightMax);
+          xyFallbackZMin = cLightMin.z;
+          xyFallbackZMax = cLightMax.z;
+          xyBoundsValid = true;
+        } else {
+          xyLightMin = glm::min(xyLightMin, glm::vec2(cLightMin));
+          xyLightMax = glm::max(xyLightMax, glm::vec2(cLightMax));
+          xyFallbackZMin = std::min(xyFallbackZMin, cLightMin.z);
+          xyFallbackZMax = std::max(xyFallbackZMax, cLightMax.z);
+        }
+      }
+    }
+    if (!xyBoundsValid) {
+      const AxisAlignedBounds3 fallbackBounds =
+        cameraFrustum.valid ? AxisAlignedBounds3{ Vector3(anchor.boundsMin[0],
+                                                          anchor.boundsMin[1],
+                                                          anchor.boundsMin[2]),
+                                                  Vector3(anchor.boundsMax[0],
+                                                          anchor.boundsMax[1],
+                                                          anchor.boundsMax[2]) }
+                            : AxisAlignedBounds3{ Vector3(shadowBoundsMin[0],
+                                                          shadowBoundsMin[1],
+                                                          shadowBoundsMin[2]),
+                                                  Vector3(shadowBoundsMax[0],
+                                                          shadowBoundsMax[1],
+                                                          shadowBoundsMax[2]) };
+      glm::vec3 fallbackLightMin(0.0f);
+      glm::vec3 fallbackLightMax(0.0f);
+      projectBoundsToLight(
+        fallbackBounds, lightView, &fallbackLightMin, &fallbackLightMax);
+      xyLightMin = glm::vec2(fallbackLightMin);
+      xyLightMax = glm::vec2(fallbackLightMax);
+      xyFallbackZMin = fallbackLightMin.z;
+      xyFallbackZMax = fallbackLightMax.z;
+    }
+
+    const glm::vec2 rawCenter = (xyLightMin + xyLightMax) * 0.5f;
+    const glm::vec2 rawHalfExtents = (xyLightMax - xyLightMin) * 0.5f;
+    const float rawMaxHalf = std::max(rawHalfExtents.x, rawHalfExtents.y);
+    const float fitPadding = std::max(0.05f, rawMaxHalf * 0.08f);
+    const float requiredHalfExtent =
+      std::max(baseRadius, (rawMaxHalf + fitPadding) * texelPadScale);
+
+    float quantizedHalfExtent = baseRadius;
+    while (quantizedHalfExtent < requiredHalfExtent &&
+           quantizedHalfExtent < 65536.0f) {
+      quantizedHalfExtent *= 2.0f;
+    }
+
+    if (sameSharedConfig && m_stabilizedShadowHalfExtent > 0.0f &&
+        requiredHalfExtent <= m_stabilizedShadowHalfExtent &&
+        requiredHalfExtent >= m_stabilizedShadowHalfExtent * 0.4f) {
+      quantizedHalfExtent = m_stabilizedShadowHalfExtent;
+    } else {
+      m_stabilizedShadowHalfExtent = quantizedHalfExtent;
+      m_stabilizedShadowMapSize = m_shadowQuadrantSize;
+      m_stabilizedShadowBaseRadius = baseRadius;
+      m_stabilizedShadowLightDir = requestedShadowLightDirection;
+    }
+
+    const float halfExtent = quantizedHalfExtent;
+    const float texelSize =
+      (2.0f * halfExtent) / static_cast<float>(m_shadowQuadrantSize);
+    const glm::vec2 snappedCenter =
+      texelSize > 0.000001f
+        ? glm::floor(rawCenter / texelSize + 0.5f) * texelSize
+        : rawCenter;
+
+    float zLightMin = 0.0f;
+    float zLightMax = 0.0f;
+    bool zBoundsValid = false;
+    const glm::vec2 orthoXyMin = snappedCenter - glm::vec2(halfExtent);
+    const glm::vec2 orthoXyMax = snappedCenter + glm::vec2(halfExtent);
     for (const ShadowCasterDesc& caster : shadowCasters) {
       const AxisAlignedBounds3 casterBounds{
         Vector3(caster.boundsMin[0], caster.boundsMin[1], caster.boundsMin[2]),
         Vector3(caster.boundsMax[0], caster.boundsMax[1], caster.boundsMax[2])
       };
-      if (!casterBounds.intersects(cameraFitFrustum.worldBounds) ||
-          !boundsIntersectFrustum(casterBounds, cameraFitFrustum)) {
+      if (shadowCasterVolumeValid &&
+          (!casterBounds.intersects(shadowCasterVolume) ||
+           !boundsIntersectFrustum(casterBounds, shadowCasterFrustum))) {
         continue;
       }
       glm::vec3 cLightMin(0.0f);
       glm::vec3 cLightMax(0.0f);
       projectBoundsToLight(casterBounds, lightView, &cLightMin, &cLightMax);
-      if (usePerspectiveXyCap) {
-        const glm::vec2 capMin =
-          perspectiveFocusLightXY - glm::vec2(perspectiveRawXyCap);
-        const glm::vec2 capMax =
-          perspectiveFocusLightXY + glm::vec2(perspectiveRawXyCap);
-        if (cLightMax.x < capMin.x || cLightMin.x > capMax.x ||
-            cLightMax.y < capMin.y || cLightMin.y > capMax.y) {
-          continue;
-        }
-        cLightMin.x = std::max(cLightMin.x, capMin.x);
-        cLightMin.y = std::max(cLightMin.y, capMin.y);
-        cLightMax.x = std::min(cLightMax.x, capMax.x);
-        cLightMax.y = std::min(cLightMax.y, capMax.y);
+      if (cLightMax.x < orthoXyMin.x || cLightMin.x > orthoXyMax.x ||
+          cLightMax.y < orthoXyMin.y || cLightMin.y > orthoXyMax.y) {
+        continue;
       }
-      if (!xyBoundsValid) {
-        xyLightMin = glm::vec2(cLightMin);
-        xyLightMax = glm::vec2(cLightMax);
-        xyFallbackZMin = cLightMin.z;
-        xyFallbackZMax = cLightMax.z;
-        xyBoundsValid = true;
+      if (!zBoundsValid) {
+        zLightMin = cLightMin.z;
+        zLightMax = cLightMax.z;
+        zBoundsValid = true;
       } else {
-        xyLightMin = glm::min(xyLightMin, glm::vec2(cLightMin));
-        xyLightMax = glm::max(xyLightMax, glm::vec2(cLightMax));
-        xyFallbackZMin = std::min(xyFallbackZMin, cLightMin.z);
-        xyFallbackZMax = std::max(xyFallbackZMax, cLightMax.z);
+        zLightMin = std::min(zLightMin, cLightMin.z);
+        zLightMax = std::max(zLightMax, cLightMax.z);
       }
-    }
-  }
-  if (!xyBoundsValid) {
-    const AxisAlignedBounds3 fallbackBounds =
-      cameraFrustum.valid
-        ? AxisAlignedBounds3{ Vector3(anchor.boundsMin[0],
-                                      anchor.boundsMin[1],
-                                      anchor.boundsMin[2]),
-                              Vector3(anchor.boundsMax[0],
-                                      anchor.boundsMax[1],
-                                      anchor.boundsMax[2]) }
-        : AxisAlignedBounds3{
-            Vector3(shadowBoundsMin[0], shadowBoundsMin[1], shadowBoundsMin[2]),
-            Vector3(shadowBoundsMax[0], shadowBoundsMax[1], shadowBoundsMax[2])
-          };
-    glm::vec3 fallbackLightMin(0.0f);
-    glm::vec3 fallbackLightMax(0.0f);
-    projectBoundsToLight(
-      fallbackBounds, lightView, &fallbackLightMin, &fallbackLightMax);
-    xyLightMin = glm::vec2(fallbackLightMin);
-    xyLightMax = glm::vec2(fallbackLightMax);
-    xyFallbackZMin = fallbackLightMin.z;
-    xyFallbackZMax = fallbackLightMax.z;
-  }
-
-  const glm::vec2 rawCenter = (xyLightMin + xyLightMax) * 0.5f;
-  const glm::vec2 rawHalfExtents = (xyLightMax - xyLightMin) * 0.5f;
-  const float rawMaxHalf = std::max(rawHalfExtents.x, rawHalfExtents.y);
-  const float fitPadding = std::max(0.05f, rawMaxHalf * 0.08f);
-  const float texelPadScale =
-    requestedShadowMapSize > 2
-      ? static_cast<float>(requestedShadowMapSize) /
-          static_cast<float>(requestedShadowMapSize - 2)
-      : 1.0f;
-  const float requiredHalfExtent =
-    std::max(baseRadius, (rawMaxHalf + fitPadding) * texelPadScale);
-
-  float quantizedHalfExtent = baseRadius;
-  while (quantizedHalfExtent < requiredHalfExtent &&
-         quantizedHalfExtent < 65536.0f) {
-    quantizedHalfExtent *= 2.0f;
-  }
-
-  const glm::vec3 previousLightDir(m_stabilizedShadowLightDir[0],
-                                   m_stabilizedShadowLightDir[1],
-                                   m_stabilizedShadowLightDir[2]);
-  const bool sameConfig =
-    m_stabilizedShadowHalfExtent > 0.0f &&
-    m_stabilizedShadowMapSize == requestedShadowMapSize &&
-    std::abs(m_stabilizedShadowBaseRadius - baseRadius) <= 0.0001f &&
-    glm::dot(previousLightDir, lightDirection) >= 0.9999f;
-  if (sameConfig && requiredHalfExtent <= m_stabilizedShadowHalfExtent &&
-      requiredHalfExtent >= m_stabilizedShadowHalfExtent * 0.4f) {
-    quantizedHalfExtent = m_stabilizedShadowHalfExtent;
-  } else {
-    m_stabilizedShadowHalfExtent = quantizedHalfExtent;
-    m_stabilizedShadowMapSize = requestedShadowMapSize;
-    m_stabilizedShadowBaseRadius = baseRadius;
-    m_stabilizedShadowLightDir = requestedShadowLightDirection;
-  }
-
-  const float halfExtent = quantizedHalfExtent;
-  const float texelSize =
-    (2.0f * halfExtent) / static_cast<float>(requestedShadowMapSize);
-  const glm::vec2 snappedCenter =
-    texelSize > 0.000001f ? glm::floor(rawCenter / texelSize + 0.5f) * texelSize
-                          : rawCenter;
-
-  float zLightMin = 0.0f;
-  float zLightMax = 0.0f;
-  bool zBoundsValid = false;
-  const glm::vec2 orthoXyMin = snappedCenter - glm::vec2(halfExtent);
-  const glm::vec2 orthoXyMax = snappedCenter + glm::vec2(halfExtent);
-  for (const ShadowCasterDesc& caster : shadowCasters) {
-    const AxisAlignedBounds3 casterBounds{
-      Vector3(caster.boundsMin[0], caster.boundsMin[1], caster.boundsMin[2]),
-      Vector3(caster.boundsMax[0], caster.boundsMax[1], caster.boundsMax[2])
-    };
-    if (shadowCasterVolumeValid &&
-        (!casterBounds.intersects(shadowCasterVolume) ||
-         !boundsIntersectFrustum(casterBounds, shadowCasterFrustum))) {
-      continue;
-    }
-    glm::vec3 cLightMin(0.0f);
-    glm::vec3 cLightMax(0.0f);
-    projectBoundsToLight(casterBounds, lightView, &cLightMin, &cLightMax);
-    if (cLightMax.x < orthoXyMin.x || cLightMin.x > orthoXyMax.x ||
-        cLightMax.y < orthoXyMin.y || cLightMin.y > orthoXyMax.y) {
-      continue;
     }
     if (!zBoundsValid) {
-      zLightMin = cLightMin.z;
-      zLightMax = cLightMax.z;
-      zBoundsValid = true;
-    } else {
-      zLightMin = std::min(zLightMin, cLightMin.z);
-      zLightMax = std::max(zLightMax, cLightMax.z);
+      zLightMin = xyFallbackZMin;
+      zLightMax = xyFallbackZMax;
+    }
+
+    const float nearPadding = std::max(0.5f, halfExtent * 0.1f);
+    const float farPadding =
+      std::max(nearPadding, requestedShadowLightDistance);
+    constexpr float kDepthStep = 4.0f;
+    const float nearPlane =
+      std::floor((-zLightMax - nearPadding) / kDepthStep) * kDepthStep;
+    const float farPlane =
+      std::max(nearPlane + kDepthStep,
+               std::ceil((-zLightMin + farPadding) / kDepthStep) * kDepthStep);
+    const glm::mat4 lightProjection = glm::ortho(snappedCenter.x - halfExtent,
+                                                 snappedCenter.x + halfExtent,
+                                                 snappedCenter.y - halfExtent,
+                                                 snappedCenter.y + halfExtent,
+                                                 nearPlane,
+                                                 farPlane);
+    const glm::mat4 lightSpaceMatrix = lightProjection * lightView;
+    std::memcpy(m_shadowQuadrantMatrices[0].data(),
+                glm::value_ptr(lightSpaceMatrix),
+                16 * sizeof(float));
+    buildBoundsFrustum(lightSpaceMatrix, &m_shadowQuadrantFrustums[0]);
+    m_shadowQuadrantCasterFrustums[0] = shadowCasterFrustum;
+    m_shadowQuadrantCasterVolumes[0] = shadowCasterVolume;
+    m_shadowQuadrantCasterVolumeValid[0] = shadowCasterVolumeValid;
+    m_shadowQuadrantActive[0] = m_shadowQuadrantFrustums[0].valid;
+    m_shadowCascadeCount = m_shadowQuadrantActive[0] ? 1 : 0;
+    m_shadowCascadeClipSplits = { 1e9f, 1e9f, 1e9f };
+  }
+
+  if (m_hasFrameSpotShadow) {
+    const glm::vec3 spotPos(m_frameSpotShadow.position[0],
+                            m_frameSpotShadow.position[1],
+                            m_frameSpotShadow.position[2]);
+    const glm::vec3 rawDir(m_frameSpotShadow.direction[0],
+                           m_frameSpotShadow.direction[1],
+                           m_frameSpotShadow.direction[2]);
+    const float dirLen = glm::length(rawDir);
+    const glm::vec3 spotDir =
+      dirLen > 0.0001f ? (rawDir / dirLen) : glm::vec3(0.0f, -1.0f, 0.0f);
+    glm::vec3 spotUp(0.0f, 1.0f, 0.0f);
+    if (std::abs(glm::dot(spotDir, spotUp)) > 0.98f) {
+      spotUp = glm::vec3(0.0f, 0.0f, 1.0f);
+    }
+    const float outerCos =
+      std::clamp(m_frameSpotShadow.outerConeCos, -0.95f, 0.9995f);
+    const float fov = std::clamp(
+      2.0f * std::acos(outerCos), glm::radians(6.0f), glm::radians(165.0f));
+    const float farRange = std::max(m_frameSpotShadow.range, 0.25f);
+    const float nearRange = std::clamp(farRange * 0.02f, 0.05f, 0.2f);
+    const glm::mat4 spotMatrix =
+      glm::perspective(fov, 1.0f, nearRange, farRange) *
+      glm::lookAt(spotPos, spotPos + spotDir, spotUp);
+    if (buildBoundsFrustum(spotMatrix, &m_shadowQuadrantFrustums[3])) {
+      std::memcpy(m_shadowQuadrantMatrices[3].data(),
+                  glm::value_ptr(spotMatrix),
+                  16 * sizeof(float));
+      m_shadowQuadrantCasterVolumeValid[3] = false;
+      m_shadowQuadrantActive[3] = true;
     }
   }
-  if (!zBoundsValid) {
-    zLightMin = xyFallbackZMin;
-    zLightMax = xyFallbackZMax;
+
+  bool anyQuadrantActive = false;
+  for (size_t q = 0; q < kShadowAtlasQuadrants; ++q) {
+    anyQuadrantActive = anyQuadrantActive || m_shadowQuadrantActive[q];
+  }
+  if (!anyQuadrantActive) {
+    return false;
   }
 
-  const float nearPadding = std::max(0.5f, halfExtent * 0.1f);
-  const float farPadding = std::max(nearPadding, requestedShadowLightDistance);
-  constexpr float kDepthStep = 4.0f;
-  const float nearPlane =
-    std::floor((-zLightMax - nearPadding) / kDepthStep) * kDepthStep;
-  const float farPlane =
-    std::max(nearPlane + kDepthStep,
-             std::ceil((-zLightMin + farPadding) / kDepthStep) * kDepthStep);
-  const glm::mat4 lightProjection = glm::ortho(snappedCenter.x - halfExtent,
-                                               snappedCenter.x + halfExtent,
-                                               snappedCenter.y - halfExtent,
-                                               snappedCenter.y + halfExtent,
-                                               nearPlane,
-                                               farPlane);
-  const glm::mat4 lightSpaceMatrix = lightProjection * lightView;
-
-  std::memcpy(shadowFrameContext.lightSpaceMatrix.data(),
-              glm::value_ptr(lightSpaceMatrix),
-              shadowFrameContext.lightSpaceMatrix.size() * sizeof(float));
+  m_primaryLightSpaceMatrix = m_shadowQuadrantMatrices[0];
+  shadowFrameContext.lightSpaceMatrix = m_primaryLightSpaceMatrix;
   shadowFrameContext.lightDirection = requestedShadowLightDirection;
   shadowFrameContext.depthTexture = shadowDepthTexture;
   shadowFrameContext.active = true;
-  buildBoundsFrustum(lightSpaceMatrix, &shadowFrustum);
+  shadowFrustum = m_shadowQuadrantFrustums[0];
   return true;
 }
 
@@ -770,16 +1116,46 @@ Renderer::appendShadowPass(const std::vector<DrawableBase*>& worldDrawables,
   ILLUMO_PROFILE_ZONE("Renderer.ShadowPass");
   const FramebufferHandle restoredFramebuffer = _currentPassFbo;
   const std::array<int, 4> restoredViewport = _currentPassViewport;
+  const ScissorState restoredScissor = currentScissorState;
   pushFramebuffer(shadowFramebuffer);
-  pushViewport(0, 0, requestedShadowMapSize, requestedShadowMapSize);
+  if (m_shadowAtlasActive && restoredScissor.enabled) {
+    pushScissor(false, 0, 0, 0, 0);
+  }
+  pushViewport(0, 0, enrolledShadowMapSize, enrolledShadowMapSize);
   pushClearDepth();
-  bindStyle(RenderStyleId::ShadowDepth);
-  for (size_t i = 0; i < worldDrawables.size(); ++i) {
-    DrawableBase* drawable = worldDrawables[i];
-    if (drawable != nullptr && drawable->isVisible() &&
-        (drawable->getPassMask() & passMask) != 0) {
-      drawable->AppendShadowCommands(this);
+
+  for (size_t q = 0; q < kShadowAtlasQuadrants; ++q) {
+    if (!m_shadowQuadrantActive[q]) {
+      continue;
     }
+    m_activeShadowQuadrant = q;
+    shadowFrameContext.lightSpaceMatrix = m_shadowQuadrantMatrices[q];
+    if (m_shadowAtlasActive) {
+      const int qx = (q & 1u) != 0 ? m_shadowQuadrantSize : 0;
+      const int qy = ((q >> 1u) & 1u) != 0 ? m_shadowQuadrantSize : 0;
+      pushViewport(qx, qy, m_shadowQuadrantSize, m_shadowQuadrantSize);
+      pushScissor(true, qx, qy, m_shadowQuadrantSize, m_shadowQuadrantSize);
+    } else if (q != 0) {
+      pushViewport(0, 0, m_shadowQuadrantSize, m_shadowQuadrantSize);
+    }
+    bindStyle(RenderStyleId::ShadowDepth);
+    for (size_t i = 0; i < worldDrawables.size(); ++i) {
+      DrawableBase* drawable = worldDrawables[i];
+      if (drawable != nullptr && drawable->isVisible() &&
+          (drawable->getPassMask() & passMask) != 0) {
+        drawable->AppendShadowCommands(this);
+      }
+    }
+  }
+
+  m_activeShadowQuadrant = 0;
+  shadowFrameContext.lightSpaceMatrix = m_primaryLightSpaceMatrix;
+  if (m_shadowAtlasActive) {
+    pushScissor(restoredScissor.enabled,
+                restoredScissor.x,
+                restoredScissor.y,
+                restoredScissor.width,
+                restoredScissor.height);
   }
   pushFramebuffer(restoredFramebuffer);
   pushViewport(restoredViewport[0],
@@ -855,8 +1231,17 @@ Renderer::~Renderer()
   if (_backend != nullptr && m_frameUniformBuffer.isValid()) {
     _backend->DestroyBuffer(m_frameUniformBuffer);
   }
+  if (_backend != nullptr && m_lightUniformBuffer.isValid()) {
+    _backend->DestroyBuffer(m_lightUniformBuffer);
+  }
   if (_backend != nullptr && _whiteTextureHandle.isValid()) {
     _backend->DestroyTexture(_whiteTextureHandle);
+  }
+  if (_backend != nullptr && _flatNormalTextureHandle.isValid()) {
+    _backend->DestroyTexture(_flatNormalTextureHandle);
+  }
+  if (_backend != nullptr && _defaultOrmTextureHandle.isValid()) {
+    _backend->DestroyTexture(_defaultOrmTextureHandle);
   }
   if (_ownedBackend) {
     _ownedBackend->Shutdown();
@@ -1098,9 +1483,12 @@ Renderer::useFrameUniforms()
     m_frameUniforms.previousViewProjection = frameContext.hasWorldMvp
                                                ? m_previousViewProjection
                                                : defaults.viewProjection;
-    m_frameUniforms.lightSpace = shadowFrameContext.lightSpaceMatrix;
+    m_frameUniforms.lightSpace = m_primaryLightSpaceMatrix;
     m_frameUniforms.shadowState = {
-      shadowFrameContext.active ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f
+      shadowFrameContext.active ? 1.0f : 0.0f,
+      (shadowFrameContext.active && m_shadowAtlasActive) ? 1.0f : 0.0f,
+      0.0f,
+      0.0f
     };
     if (!pushWriteBuffer(m_frameUniformBuffer,
                          0,
@@ -1110,6 +1498,90 @@ Renderer::useFrameUniforms()
     }
   }
   pushBindUniformBuffer(m_frameUniformBuffer, FrameUniformsBindingPoint);
+  return true;
+}
+
+bool
+Renderer::ensureLightUniformBuffer()
+{
+  if (_backend == nullptr) {
+    return false;
+  }
+  if (!m_lightUniformBufferAttempted) {
+    m_lightUniformBufferAttempted = true;
+    m_lightUniformBuffer =
+      _backend->CreateBuffer(BufferUsage::Uniform, sizeof(LightUniforms));
+  }
+  return m_lightUniformBuffer.isValid();
+}
+
+void
+Renderer::setFramePunctualLights(const GpuPunctualLight* lights,
+                                 size_t count,
+                                 const SpotShadowLightDesc* spotShadow)
+{
+  m_framePunctualLightCount =
+    lights != nullptr ? std::min(count, kMaximumForwardLights) : 0u;
+  for (size_t index = 0; index < m_framePunctualLightCount; ++index) {
+    m_framePunctualLights[index] = lights[index];
+  }
+  if (spotShadow != nullptr && spotShadow->lightIndex >= 0 &&
+      static_cast<size_t>(spotShadow->lightIndex) < m_framePunctualLightCount) {
+    m_frameSpotShadow = *spotShadow;
+    m_hasFrameSpotShadow = true;
+  } else {
+    m_frameSpotShadow = SpotShadowLightDesc{};
+    m_hasFrameSpotShadow = false;
+  }
+}
+
+bool
+Renderer::useLightUniforms()
+{
+  if (_backend == nullptr || m_recording != nullptr ||
+      !ensureLightUniformBuffer()) {
+    return false;
+  }
+  if (m_lightUniformsSerial != frameSerial) {
+    m_lightUniformsSerial = frameSerial;
+    m_lightUniforms = LightUniforms{};
+    m_lightUniforms.atlasLightMatrices = m_shadowQuadrantMatrices;
+    const float texel = enrolledShadowMapSize > 0
+                          ? (1.0f / static_cast<float>(enrolledShadowMapSize))
+                          : 0.0f;
+    m_lightUniforms.cascadeSplitsAndTexel = { m_shadowCascadeClipSplits[0],
+                                              m_shadowCascadeClipSplits[1],
+                                              m_shadowCascadeClipSplits[2],
+                                              texel };
+    int flags = 0;
+    if (m_hdrLinearWorldTarget) {
+      flags |= 2;
+    }
+    if (shadowFrameContext.active && m_shadowAtlasActive) {
+      flags |= 4;
+    }
+    const int spotIdx = (shadowFrameContext.active && m_shadowAtlasActive &&
+                         m_shadowQuadrantActive[3] && m_hasFrameSpotShadow)
+                          ? m_frameSpotShadow.lightIndex
+                          : -1;
+    m_lightUniforms.countsAndFlags = {
+      static_cast<int>(m_framePunctualLightCount),
+      shadowFrameContext.active ? m_shadowCascadeCount : 0,
+      spotIdx,
+      flags
+    };
+    m_lightUniforms.cameraPositionAndMode = m_worldCameraPosAndMode;
+    for (size_t index = 0; index < m_framePunctualLightCount; ++index) {
+      m_lightUniforms.punctualLights[index] = m_framePunctualLights[index];
+    }
+    if (!pushWriteBuffer(m_lightUniformBuffer,
+                         0,
+                         static_cast<unsigned int>(sizeof(LightUniforms)),
+                         &m_lightUniforms)) {
+      return false;
+    }
+  }
+  pushBindUniformBuffer(m_lightUniformBuffer, LightUniformsBindingPoint);
   return true;
 }
 
@@ -1739,6 +2211,9 @@ Renderer::executePostProcessPass(const RenderPassDesc& pass,
 
   if (pass.styleHandle.isValid()) {
     bindStyle(pass.styleHandle);
+    if (pass.overridePipelineState) {
+      pushPipelineState(pass.pipelineState);
+    }
   } else if (pass.shaderHandle.isValid()) {
     pushSetShader(pass.shaderHandle);
   }
@@ -1809,6 +2284,19 @@ Renderer::RenderScene(DrawList* scene, Camera* camera)
   };
 
   if (scene != nullptr) {
+    if (scene->hasCustomPasses(RenderLayerId::World)) {
+      const std::vector<RenderPassDesc>& worldPasses =
+        scene->passesIn(RenderLayerId::World);
+      for (const RenderPassDesc& pass : worldPasses) {
+        if (pass.type == PassType::Draw && !pass.useScreenTarget &&
+            !pass.targetDesc.colorAttachments.empty() &&
+            pass.targetDesc.colorAttachments[0].format ==
+              TextureFormat::RGBA16F) {
+          m_hdrLinearWorldTarget = true;
+          break;
+        }
+      }
+    }
     const std::vector<DrawableBase*>& worldDrawables =
       scene->drawablesIn(RenderLayerId::World);
     {

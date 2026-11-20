@@ -1143,7 +1143,7 @@ run(const std::string& name)
              "Backend decoding accepts unset, OpenGL and Vulkan");
     // A code beyond the version's range is refused (writers never send one).
     GuestWireWriter beyond;
-    beyond.u32(kGuestDisplayVersion);
+    beyond.u32(8u);
     beyond.u32(1u);
     const std::uint32_t beyondFields[] = {
       0u, 1u, 60u, 100u, 0u, 4u, GuestDisplayState::kUnknownMsaa, 3u, 0u, 0u, 0u
@@ -1213,6 +1213,27 @@ run(const std::string& name)
                env.getVar("motionBlurEnabled").valueAsBool &&
                blurReply.motionBlur,
              "A version 8 request applies and reports motion blur");
+    GuestDisplayState hdrState;
+    hdrState.hdr = false;
+    hdrState.tonemapper = 1u;
+    hdrState.exposure = -1.25f;
+    hdrState.bloom = false;
+    hdrState.bloomIntensity = 0.125f;
+    hdrState.fxaa = false;
+    GuestDisplayState hdrReply;
+    testTrue(
+      counters,
+      displayRoundTrip({ true, hdrState }, 18, &hdrReply) &&
+        !env.getVar("hdrEnabled").valueAsBool &&
+        env.getVar("tonemapper").valueAsLong == 1 &&
+        std::fabs(env.getVar("exposure").valueAsDouble + 1.25) < 1e-3 &&
+        !env.getVar("bloomEnabled").valueAsBool &&
+        std::fabs(env.getVar("bloomIntensity").valueAsDouble - 0.125) < 1e-3 &&
+        !env.getVar("fxaaEnabled").valueAsBool && !hdrReply.hdr &&
+        hdrReply.tonemapper == 1u &&
+        std::fabs(hdrReply.exposure + 1.25f) < 1e-3f && !hdrReply.bloom &&
+        std::fabs(hdrReply.bloomIntensity - 0.125f) < 1e-3f && !hdrReply.fxaa,
+      "A version 9 request applies and reports HDR post-processing");
     GuestDisplayRequest decoded;
     GuestWireWriter future;
     future.u32(kGuestDisplayVersion + 1u);
@@ -1965,6 +1986,7 @@ main(int argc, char** argv)
       "Wasm.AudioServices\nIllumo.Wasm.GuestAudio\nIllumo.Wasm."
       "WorldFrameValidation\nIllumo.Wasm.WorldOperations\nIllumo.Wasm."
       "WorldAddressingValidation\nIllumo.Wasm.WorldsPerScene\nIllumo.Wasm."
+      "WorldV10Validation\nIllumo.Wasm."
       "VisualFrameValidation\nIllumo.Wasm.VisualOperations\nIllumo.Wasm."
       "RuntimeShell\nIllumo.Wasm.ServiceHarvest");
     return 0;

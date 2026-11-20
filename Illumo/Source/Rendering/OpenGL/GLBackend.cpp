@@ -48,6 +48,19 @@ GLBackend::Initialize()
       glViewport(0, 0, framebufferWidth, framebufferHeight);
     }
   }
+  glGenBuffers(1, &_zeroUniformBuffer);
+  if (_zeroUniformBuffer != 0) {
+    std::vector<unsigned char> zeros(16384u, 0u);
+    glBindBuffer(GL_UNIFORM_BUFFER, _zeroUniformBuffer);
+    glBufferData(GL_UNIFORM_BUFFER,
+                 static_cast<GLsizeiptr>(zeros.size()),
+                 zeros.data(),
+                 GL_STATIC_DRAW);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    for (GLuint slot = 0; slot < 36u; ++slot) {
+      glBindBufferBase(GL_UNIFORM_BUFFER, slot, _zeroUniformBuffer);
+    }
+  }
   logContextDescription();
   return true;
 }
@@ -72,6 +85,9 @@ GLBackend::logContextDescription()
   GLint maxTextureUnits = 0;
   GLint samples = 0;
   glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+  if (maxTextureSize > 0) {
+    m_maxTextureSize = maxTextureSize;
+  }
   glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxTextureUnits);
   glGetIntegerv(GL_SAMPLES, &samples);
   Logger::LogTrace("GPU limits: " + std::to_string(maxTextureSize) +
@@ -469,6 +485,10 @@ GLBackend::Shutdown()
   }
   _bufferRegistryLookup.clear();
   bufferHandles.clear();
+  if (_zeroUniformBuffer != 0) {
+    glDeleteBuffers(1, &_zeroUniformBuffer);
+    _zeroUniformBuffer = 0;
+  }
 
   delete device;
   device = nullptr;
@@ -1066,6 +1086,15 @@ GLBackend::DestroyBuffer(BufferHandle handle)
     return false;
   }
   if (it->second.bufferId != 0) {
+    if (it->second.usage == BufferUsage::Uniform && _zeroUniformBuffer != 0) {
+      for (GLuint slot = 0; slot < 36u; ++slot) {
+        GLint bound = 0;
+        glGetIntegeri_v(GL_UNIFORM_BUFFER_BINDING, slot, &bound);
+        if (static_cast<GLuint>(bound) == it->second.bufferId) {
+          glBindBufferBase(GL_UNIFORM_BUFFER, slot, _zeroUniformBuffer);
+        }
+      }
+    }
     glDeleteBuffers(1, &it->second.bufferId);
   }
   _bufferRegistryLookup.erase(it);

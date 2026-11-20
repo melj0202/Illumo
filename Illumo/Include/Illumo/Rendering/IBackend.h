@@ -9,6 +9,7 @@
 #include <Illumo/Rendering/ResourceHandle.h>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -41,10 +42,28 @@ enum class BufferUsage : unsigned char
   Uniform,  // uniform blocks (BindUniformBuffer)
 };
 
-// Shaders that declare this uniform block read it from this binding point;
-// backends bind it when a program links. Renderer owns its contents.
+// Shaders that declare these uniform blocks read them from their fixed binding
+// points; backends bind them when a program links. Renderer owns their
+// contents.
 inline constexpr const char* FrameUniformsBlockName = "FrameUniforms";
-inline constexpr unsigned int FrameUniformsBindingPoint = 0;
+inline constexpr unsigned int FrameUniformsBindingPoint = 0u;
+inline constexpr const char* LightUniformsBlockName = "LightUniforms";
+inline constexpr unsigned int LightUniformsBindingPoint = 1u;
+
+inline int
+namedUniformBlockBinding(const char* blockName)
+{
+  if (blockName == nullptr) {
+    return -1;
+  }
+  if (std::strcmp(blockName, FrameUniformsBlockName) == 0) {
+    return static_cast<int>(FrameUniformsBindingPoint);
+  }
+  if (std::strcmp(blockName, LightUniformsBlockName) == 0) {
+    return static_cast<int>(LightUniformsBindingPoint);
+  }
+  return -1;
+}
 
 class GameVisual;
 class SkyboxVisual;
@@ -202,6 +221,8 @@ public:
   virtual bool TexturesDrawWhenCreated() const { return true; }
   virtual bool IsTextureValid(TextureHandle handle) const = 0;
   virtual TextureInfo GetTextureInfo(TextureHandle handle) const = 0;
+  virtual int maxTextureSize() const { return 8192; }
+  virtual size_t renderPassBreaks() const { return 0; }
 
   // Framebuffers / render targets for offscreen passes, MRT, and shadows
   virtual FramebufferHandle CreateFramebuffer(

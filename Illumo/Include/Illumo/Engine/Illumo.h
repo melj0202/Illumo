@@ -2,6 +2,7 @@
 
 #include <Illumo/Engine/FrameProfiler.h>
 #include <Illumo/Engine/IllumoContext.h>
+#include <Illumo/Rendering/RenderPipelineConfig.h>
 
 #include <functional>
 #include <memory>
@@ -111,10 +112,19 @@ private:
   std::unique_ptr<CommandLine> m_commandLine;
   std::unique_ptr<InputManager> m_inputManager;
   std::unique_ptr<DrawList> m_scene;
+  enum class ConfiguredPipelineMode : unsigned char
+  {
+    None = 0,
+    LdrMotionBlur = 1,
+    HdrForward = 2,
+  };
+
   IllumoContext m_context{};
   bool m_initialized{ false };
-  bool m_motionBlurPipelineConfigured{ false };
-  float m_configuredBlurAmount{ 0.0f };
-  float m_configuredBlurMax{ 0.0f };
-  int m_configuredBlurSamples{ 0 };
+  bool m_pipelineConfigured{ false };
+  bool m_hdrFallbackWarned{ false };
+  ConfiguredPipelineMode m_configuredPipelineMode{
+    ConfiguredPipelineMode::None
+  };
+  RenderPipelineConfig m_configuredPipeline{};
 };

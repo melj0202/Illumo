@@ -75,6 +75,26 @@ public:
   float getMotionBlurAmount() const { return motionBlurAmount; }
   void setMotionBlurMax(float ndcUnits);
   float getMotionBlurMax() const { return motionBlurMax; }
+  void setAlbedoTexture(TextureHandle handle) { albedoTexture = handle; }
+  TextureHandle getAlbedoTexture() const { return albedoTexture; }
+  void setNormalTexture(TextureHandle handle) { normalTexture = handle; }
+  TextureHandle getNormalTexture() const { return normalTexture; }
+  void setMetallicRoughnessTexture(TextureHandle handle)
+  {
+    metallicRoughnessTexture = handle;
+  }
+  TextureHandle getMetallicRoughnessTexture() const
+  {
+    return metallicRoughnessTexture;
+  }
+  void setEmissiveTexture(TextureHandle handle) { emissiveTexture = handle; }
+  TextureHandle getEmissiveTexture() const { return emissiveTexture; }
+  void setMetallic(float value);
+  float getMetallic() const { return metallic; }
+  void setRoughness(float value);
+  float getRoughness() const { return roughness; }
+  void setEmissiveFactor(const glm::vec3& value);
+  const glm::vec3& getEmissiveFactor() const { return emissiveFactor; }
 
   void clearPrimitives();
   size_t addQuad(const glm::vec3& center,
@@ -129,6 +149,11 @@ public:
   bool AppendCommands(Renderer* renderer) override;
   void CollectShadowCasters(Renderer* renderer) override;
   void AppendShadowCommands(Renderer* renderer) override;
+  bool has3DWorldContent() const override
+  {
+    return isVisible() && (!lineVertices.empty() || !triangleVertices.empty() ||
+                           !sprites.empty() || meshAssetHandle.isValid());
+  }
   void appendSceneCommands(Renderer* renderer,
                            const Matrix4& worldTransform) override;
   bool getSceneLocalBounds(AxisAlignedBounds3* bounds) const override;
@@ -251,6 +276,15 @@ private:
   float shadowBias = 0.001f;
   float shadowSlopeScale = 0.004f;
   float shadowNormalOffset = 0.015f;
+  TextureHandle albedoTexture{};
+  TextureHandle normalTexture{};
+  TextureHandle metallicRoughnessTexture{};
+  TextureHandle emissiveTexture{};
+  float metallic = 0.0f;
+  float roughness = 0.8f;
+  glm::vec3 emissiveFactor = glm::vec3(0.0f);
+
+  void emitPbrMaterialTokens(Renderer* renderer, bool bindLightBlock) const;
 
   void ensureStyles();
   bool prepareForCommands(Renderer* renderer);

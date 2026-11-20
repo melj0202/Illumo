@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <string>
 
 // Display wire version. Version 2 appends hideSystemCursor to the state.
@@ -11,9 +12,11 @@
 // preference (read when the host window is created) and the samples of the
 // window now running. Version 5 appends the rendering backend the host saves
 // for its next launch and the one now running (version 6 is unused). Version 7
-// appends the display mode. Version 8 appends motionBlur. Hosts still accept
-// versions 1-7 and answer each request in its own version.
-inline constexpr std::uint32_t kGuestDisplayVersion = 8u;
+// appends the display mode. Version 8 appends motionBlur. Version 9 appends
+// HDR post-processing settings (hdr, tonemapper, exposure, bloom,
+// bloomIntensity, fxaa). Hosts still accept versions 1-8 and answer each
+// request in its own version.
+inline constexpr std::uint32_t kGuestDisplayVersion = 9u;
 
 struct GuestDisplayState
 {
@@ -53,6 +56,17 @@ struct GuestDisplayState
   std::uint32_t displayMode = kDisplayModeWindow;
   // Version 8.
   bool motionBlur = false;
+  // Version 9: HDR forward post-processing controls.
+  static constexpr std::uint32_t kExposureBiasThousandths = 10000u;
+  static constexpr std::uint32_t kMaximumExposureBiased = 20000u;
+  static constexpr std::uint32_t kMaximumBloomThousandths = 4000u;
+  bool hdr = true;
+  static constexpr std::uint32_t kMaximumTonemapper = 6u;
+  std::uint32_t tonemapper = 2u;
+  float exposure = 0.0f;
+  bool bloom = true;
+  float bloomIntensity = 0.04f;
+  bool fxaa = true;
   // The code for a GraphicsAPI setting value in any letter case; unset for
   // anything else.
   static std::uint32_t graphicsApiCode(const std::string& name)
@@ -93,6 +107,49 @@ struct GuestDisplayState
     return static_cast<float>(uiScaleHundredths(scale)) / 100.0f;
   }
 
+  static std::uint32_t exposureBiasedThousandths(float stops)
+  {
+    const float clamped =
+      std::isfinite(stops) ? std::clamp(stops, -10.0f, 10.0f) : 0.0f;
+    return static_cast<std::uint32_t>(
+      std::lround(clamped * 1000.0f) +
+      static_cast<long>(kExposureBiasThousandths));
+  }
+
+  static float quantizedExposure(float stops)
+  {
+    const long delta = static_cast<long>(exposureBiasedThousandths(stops)) -
+                       static_cast<long>(kExposureBiasThousandths);
+    return static_cast<float>(delta) / 1000.0f;
+  }
+
+  static std::string exposureText(float stops)
+  {
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "%.3f", quantizedExposure(stops));
+    return std::string(buffer);
+  }
+
+  static std::uint32_t bloomIntensityThousandths(float intensity)
+  {
+    const float clamped =
+      std::isfinite(intensity) ? std::clamp(intensity, 0.0f, 4.0f) : 0.04f;
+    return static_cast<std::uint32_t>(std::lround(clamped * 1000.0f));
+  }
+
+  static float quantizedBloomIntensity(float intensity)
+  {
+    return static_cast<float>(bloomIntensityThousandths(intensity)) / 1000.0f;
+  }
+
+  static std::string bloomIntensityText(float intensity)
+  {
+    char buffer[32];
+    std::snprintf(
+      buffer, sizeof(buffer), "%.3f", quantizedBloomIntensity(intensity));
+    return std::string(buffer);
+  }
+
   void write(GuestWireWriter& writer,
              std::uint32_t version = kGuestDisplayVersion) const
   {
@@ -124,6 +181,14 @@ struct GuestDisplayState
     }
     if (version >= 8u) {
       writer.u32(motionBlur ? 1u : 0u);
+    }
+    if (version >= 9u) {
+      writer.u32(hdr ? 1u : 0u);
+      writer.u32(tonemapper <= kMaximumTonemapper ? tonemapper : 2u);
+      writer.u32(exposureBiasedThousandths(exposure));
+      writer.u32(bloom ? 1u : 0u);
+      writer.u32(bloomIntensityThousandths(bloomIntensity));
+      writer.u32(fxaa ? 1u : 0u);
     }
   }
   static bool read(GuestWireReader& reader,
@@ -159,6 +224,20 @@ struct GuestDisplayState
     if (version >= 8u) {
       motionBlur = reader.u32();
     }
+    std::uint32_t hdr = 1u;
+    std::uint32_t tonemapper = 2u;
+    std::uint32_t exposureBiased = kExposureBiasThousandths;
+    std::uint32_t bloom = 1u;
+    std::uint32_t bloomThousandths = 40u;
+    std::uint32_t fxaa = 1u;
+    if (version >= 9u) {
+      hdr = reader.u32();
+      tonemapper = reader.u32();
+      exposureBiased = reader.u32();
+      bloom = reader.u32();
+      bloomThousandths = reader.u32();
+      fxaa = reader.u32();
+    }
     const bool scaleValid =
       version >= 3u ? scale == 0u || (scale >= kMinimumUiScaleHundredths &&
                                       scale <= kMaximumUiScaleHundredths)
@@ -177,9 +256,21 @@ struct GuestDisplayState
     state.displayMode = displayMode;
     state.fullscreen = displayMode != kDisplayModeWindow;
     state.motionBlur = motionBlur != 0u;
+    state.hdr = hdr != 0u;
+    state.tonemapper = tonemapper;
+    state.exposure =
+      static_cast<float>(static_cast<long>(exposureBiased) -
+                         static_cast<long>(kExposureBiasThousandths)) /
+      1000.0f;
+    state.bloom = bloom != 0u;
+    state.bloomIntensity = static_cast<float>(bloomThousandths) / 1000.0f;
+    state.fxaa = fxaa != 0u;
     return reader.valid() && fullscreen <= 1 && vsync <= 1 &&
            displayMode <= kDisplayModeExclusive && hideSystemCursor <= 1 &&
-           motionBlur <= 1 && fps <= 1000 && scaleValid && validMsaa(msaa) &&
+           motionBlur <= 1 && hdr <= 1 && tonemapper <= kMaximumTonemapper &&
+           exposureBiased <= kMaximumExposureBiased && bloom <= 1 &&
+           bloomThousandths <= kMaximumBloomThousandths && fxaa <= 1 &&
+           fps <= 1000 && scaleValid && validMsaa(msaa) &&
            (activeMsaa == kUnknownMsaa || validMsaa(activeMsaa)) &&
            graphicsApi <= kGraphicsApiVulkan &&
            activeGraphicsApi <= kGraphicsApiVulkan;

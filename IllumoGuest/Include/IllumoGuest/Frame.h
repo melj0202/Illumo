@@ -129,7 +129,11 @@ enum class GuestWorldOp : std::uint32_t
   // releases a world and everything in it. A version 7 frame is world 1.
   SelectWorld = 10,
   ShowWorld = 11,
-  DestroyWorld = 12
+  DestroyWorld = 12,
+  // Version 10: caller-numbered punctual lights in the selected world.
+  LightCreate = 13,
+  LightUpdate = 14,
+  LightDestroy = 15
 };
 
 struct GuestWorldMaterial
@@ -138,6 +142,28 @@ struct GuestWorldMaterial
   bool receivesShadow = true;
   bool castsShadow = true;
   bool blend = false;
+  // Version 10: optional 2D textures (empty: unbound) and PBR-lite factors.
+  GuestResourceId albedoTexture;
+  GuestResourceId normalTexture;
+  GuestResourceId metallicRoughnessTexture;
+  GuestResourceId emissiveTexture;
+  float metallic = 0.0f;
+  float roughness = 0.8f;
+  std::array<float, 3> emissiveFactor{ 0.0f, 0.0f, 0.0f };
+};
+
+struct GuestWorldLight
+{
+  std::uint32_t kind = 0; // 0: Point, 1: Spot
+  std::array<float, 3> position{ 0.0f, 0.0f, 0.0f };
+  std::array<float, 3> direction{ 0.0f, -1.0f, 0.0f };
+  std::array<float, 3> color{ 1.0f, 1.0f, 1.0f };
+  float intensity = 1.0f;
+  float range = 10.0f;
+  float innerCos = 0.9063078f;
+  float outerCos = 0.8191520f;
+  bool castsShadow = false;
+  bool visible = true;
 };
 
 struct GuestWorldEnvironment
@@ -173,6 +199,7 @@ struct GuestWorldOperation
   bool visible = true;                                       // Create/Update
   GuestWorldEnvironment environment;                         // Environment
   GuestResourceId texture;                                   // Skybox
+  GuestWorldLight light; // LightCreate/Update
 };
 
 // Frame schema v7 (HostRender): one change to a host-retained 2D visual.
@@ -311,6 +338,7 @@ struct GuestFrameLimits
   std::uint32_t worldOperations = 65536;
   std::uint32_t textBytes = 1024u * 1024u;  // version 7
   std::uint32_t compositionEntries = 16384; // version 7, per target
+  std::uint32_t maximumWorldLights = 1024;  // version 10, across worlds
 };
 
 // Version 4: a byte range written into a dynamic retained host mesh. Every
@@ -359,8 +387,9 @@ struct GuestFrame
   // windows. Version 6 adds host render world operations (HostRender).
   // Version 7 adds host-retained visuals and compositions. Version 8 adds
   // several worlds per guest (one per scene). Version 9 adds the Canvas
-  // batch's shader fade. The host accepts all nine.
-  static constexpr std::uint32_t Version = 9;
+  // batch's shader fade. Version 10 adds punctual world lights and textured
+  // PBR-lite world materials. The host accepts all ten.
+  static constexpr std::uint32_t Version = 10;
   static constexpr float MaximumCanvasFadeClock = 128.0f;
   static constexpr float MaximumCanvasFadeSpeed = 1000.0f;
   static constexpr std::uint32_t MaximumSurfaces = 8;
@@ -804,7 +833,28 @@ struct GuestFrame
         output.u32((operation.material.receivesShadow ? 1u : 0u) |
                    (operation.material.castsShadow ? 2u : 0u) |
                    (operation.material.blend ? 4u : 0u));
+        operation.material.albedoTexture.write(output);
+        operation.material.normalTexture.write(output);
+        operation.material.metallicRoughnessTexture.write(output);
+        operation.material.emissiveTexture.write(output);
+        output.f32(operation.material.metallic);
+        output.f32(operation.material.roughness);
+        writeFloats(output, operation.material.emissiveFactor.data(), 3);
         break;
+      case GuestWorldOp::LightCreate:
+      case GuestWorldOp::LightUpdate: {
+        const GuestWorldLight& light = operation.light;
+        output.u32(light.kind);
+        writeFloats(output, light.position.data(), 3);
+        writeFloats(output, light.direction.data(), 3);
+        writeFloats(output, light.color.data(), 3);
+        output.f32(light.intensity);
+        output.f32(light.range);
+        output.f32(light.innerCos);
+        output.f32(light.outerCos);
+        output.u32((light.castsShadow ? 1u : 0u) | (light.visible ? 2u : 0u));
+        break;
+      }
       case GuestWorldOp::InstanceCreate:
         operation.mesh.write(output);
         output.u32(operation.firstIndex);
@@ -846,6 +896,7 @@ struct GuestFrame
       case GuestWorldOp::SelectWorld:
       case GuestWorldOp::ShowWorld:
       case GuestWorldOp::DestroyWorld:
+      case GuestWorldOp::LightDestroy:
         break;
     }
   }
@@ -861,11 +912,13 @@ struct GuestFrame
     operation.id = reader.u32();
     if (!reader.valid() ||
         op < static_cast<std::uint32_t>(GuestWorldOp::MaterialCreate) ||
-        op > static_cast<std::uint32_t>(GuestWorldOp::DestroyWorld) ||
+        op > static_cast<std::uint32_t>(GuestWorldOp::LightDestroy) ||
         (op == static_cast<std::uint32_t>(GuestWorldOp::Skybox) &&
          version < 7) ||
         (op >= static_cast<std::uint32_t>(GuestWorldOp::SelectWorld) &&
-         version < 8)) {
+         version < 8) ||
+        (op >= static_cast<std::uint32_t>(GuestWorldOp::LightCreate) &&
+         version < 10)) {
       return false;
     }
     operation.op = static_cast<GuestWorldOp>(op);
@@ -887,7 +940,72 @@ struct GuestFrame
         operation.material.receivesShadow = (flags & 1u) != 0;
         operation.material.castsShadow = (flags & 2u) != 0;
         operation.material.blend = (flags & 4u) != 0;
-        return reader.valid() && flags <= 7u;
+        if (!reader.valid() || flags > 7u) {
+          return false;
+        }
+        if (version >= 10) {
+          GuestWorldMaterial& mat = operation.material;
+          mat.albedoTexture = GuestResourceId::read(reader);
+          mat.normalTexture = GuestResourceId::read(reader);
+          mat.metallicRoughnessTexture = GuestResourceId::read(reader);
+          mat.emissiveTexture = GuestResourceId::read(reader);
+          mat.metallic = reader.f32();
+          mat.roughness = reader.f32();
+          if (!reader.valid() ||
+              !(emptyId(mat.albedoTexture) ||
+                validTexture(mat.albedoTexture)) ||
+              !(emptyId(mat.normalTexture) ||
+                validTexture(mat.normalTexture)) ||
+              !(emptyId(mat.metallicRoughnessTexture) ||
+                validTexture(mat.metallicRoughnessTexture)) ||
+              !(emptyId(mat.emissiveTexture) ||
+                validTexture(mat.emissiveTexture)) ||
+              !std::isfinite(mat.metallic) || !std::isfinite(mat.roughness) ||
+              mat.metallic < 0.0f || mat.metallic > 1.0f ||
+              mat.roughness < 0.0f || mat.roughness > 1.0f ||
+              !readFloats(reader, mat.emissiveFactor.data(), 3) ||
+              mat.emissiveFactor[0] < 0.0f || mat.emissiveFactor[1] < 0.0f ||
+              mat.emissiveFactor[2] < 0.0f) {
+            return false;
+          }
+        }
+        return true;
+      case GuestWorldOp::LightCreate:
+      case GuestWorldOp::LightUpdate: {
+        GuestWorldLight& light = operation.light;
+        light.kind = reader.u32();
+        if (!reader.valid() || light.kind > 1u ||
+            !readFloats(reader, light.position.data(), 3) ||
+            !readFloats(reader, light.direction.data(), 3) ||
+            !readFloats(reader, light.color.data(), 3)) {
+          return false;
+        }
+        light.intensity = reader.f32();
+        light.range = reader.f32();
+        light.innerCos = reader.f32();
+        light.outerCos = reader.f32();
+        flags = reader.u32();
+        if (!reader.valid() || flags > 3u || !std::isfinite(light.intensity) ||
+            light.intensity < 0.0f || !std::isfinite(light.range) ||
+            light.range <= 0.0f || !std::isfinite(light.innerCos) ||
+            !std::isfinite(light.outerCos) || light.color[0] < 0.0f ||
+            light.color[1] < 0.0f || light.color[2] < 0.0f) {
+          return false;
+        }
+        if (light.kind == 1u) {
+          const float dirLenSq = light.direction[0] * light.direction[0] +
+                                 light.direction[1] * light.direction[1] +
+                                 light.direction[2] * light.direction[2];
+          if (!std::isfinite(dirLenSq) || dirLenSq <= 1e-8f ||
+              light.innerCos < light.outerCos || light.outerCos <= -1.0f ||
+              light.innerCos > 1.0f) {
+            return false;
+          }
+        }
+        light.castsShadow = (flags & 1u) != 0;
+        light.visible = (flags & 2u) != 0;
+        return true;
+      }
       case GuestWorldOp::InstanceCreate:
         operation.mesh = GuestResourceId::read(reader);
         operation.firstIndex = reader.u32();
@@ -956,6 +1074,7 @@ struct GuestFrame
       case GuestWorldOp::SelectWorld:
       case GuestWorldOp::ShowWorld:
       case GuestWorldOp::DestroyWorld:
+      case GuestWorldOp::LightDestroy:
         return true;
     }
     return false;

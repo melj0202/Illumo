@@ -190,6 +190,7 @@ void main() {
 
 static const char* kSkyboxFragmentShader = R"(
 #version 330 core
+#include <illumo/pbr_lighting.glsl>
 in vec3 vTexCoords;
 
 layout (location = 0) out vec4 FragColor;
@@ -199,7 +200,13 @@ uniform samplerCube uSkybox;
 uniform vec4 uTint;
 
 void main() {
-    FragColor = texture(uSkybox, vTexCoords) * uTint;
+    vec4 sampled = texture(uSkybox, vTexCoords);
+    if ((uLightCountsAndFlags.w & 2) != 0) {
+        vec3 lin = illumoSrgbToLinear(sampled.rgb) * illumoSrgbToLinear(uTint.rgb);
+        FragColor = vec4(max(lin, vec3(0.0)), sampled.a * uTint.a);
+    } else {
+        FragColor = sampled * uTint;
+    }
     FragVelocity = vec2(0.0);
 }
 )";
@@ -221,6 +228,7 @@ void main() {
 
 static const char* kGroundPlaneFragmentShader = R"(
 #version 330 core
+#include <illumo/pbr_lighting.glsl>
 in vec3 vWorldDir;
 
 layout (location = 0) out vec4 FragColor;
@@ -243,76 +251,6 @@ uniform float uShadowBias;
 uniform float uShadowSlopeScale;
 uniform float uShadowNormalOffset;
 uniform int uShadowPcf;
-
-float calculateShadow(vec3 fragPos, vec3 normal, vec3 lightDir)
-{
-    if (uShadowsEnabled == 0) {
-        return 0.0;
-    }
-
-    float nDotL = dot(normal, lightDir);
-    if (nDotL <= 0.0) {
-        return 1.0;
-    }
-
-    vec2 mapSize = vec2(textureSize(uShadowMap, 0));
-    vec2 texelSize = 1.0 / mapSize;
-    float invHalfExtent = length(vec3(
-        uLightSpaceMatrix[0].x, uLightSpaceMatrix[1].x, uLightSpaceMatrix[2].x));
-    float worldTexel =
-        invHalfExtent > 1e-5 ? 2.0 / (invHalfExtent * mapSize.x) : 0.0;
-
-    float sinTheta = sqrt(max(1.0 - nDotL * nDotL, 0.0));
-    float pcfTexelRadius = uShadowPcf > 0 ? 2.5 : 1.25;
-    float minTexelOffset =
-        uShadowNormalOffset > 0.0 ? pcfTexelRadius * worldTexel : 0.0;
-    vec3 offsetPos =
-        fragPos + normal * (max(uShadowNormalOffset, minTexelOffset) * sinTheta);
-
-    vec4 lightClip = uLightSpaceMatrix * vec4(offsetPos, 1.0);
-    vec3 projCoords = lightClip.xyz / lightClip.w;
-    projCoords = projCoords * 0.5 + 0.5;
-
-    if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 ||
-        projCoords.y < 0.0 || projCoords.y > 1.0) {
-        return 0.0;
-    }
-
-    float currentDepth = projCoords.z;
-    float invHalfDepthSpan = length(vec3(
-        uLightSpaceMatrix[0].z, uLightSpaceMatrix[1].z, uLightSpaceMatrix[2].z));
-    const float kReferenceDepthSpan = 16.0;
-    float depthScale = invHalfDepthSpan > 1e-5
-        ? (0.5 * kReferenceDepthSpan * invHalfDepthSpan)
-        : 1.0;
-    float tanTheta = min(sinTheta / max(nDotL, 0.1), 3.0);
-    float bias = (uShadowBias + uShadowSlopeScale * (1.0 - nDotL) +
-        uShadowBias * tanTheta) * depthScale;
-
-    if (uShadowPcf <= 0) {
-        float pcfDepth = texture(uShadowMap, projCoords.xy).r;
-        return currentDepth - bias > pcfDepth ? 1.0 : 0.0;
-    }
-
-    vec2 texelPos = projCoords.xy * mapSize - 0.5;
-    vec2 baseTexel = floor(texelPos);
-    vec2 frac = texelPos - baseTexel;
-    vec2 baseUv = (baseTexel + 0.5) * texelSize;
-    vec4 wx = vec4(1.0 - frac.x, 1.0, 1.0, frac.x);
-    vec4 wy = vec4(1.0 - frac.y, 1.0, 1.0, frac.y);
-
-    float shadow = 0.0;
-    for (int ix = 0; ix < 4; ++ix) {
-        for (int iy = 0; iy < 4; ++iy) {
-            vec2 sampleUv =
-                baseUv + vec2(float(ix - 1), float(iy - 1)) * texelSize;
-            float pcfDepth = texture(uShadowMap, sampleUv).r;
-            float occluded = currentDepth - bias > pcfDepth ? 1.0 : 0.0;
-            shadow += occluded * wx[ix] * wy[iy];
-        }
-    }
-    return shadow / 9.0;
-}
 
 void main() {
     vec3 dir = normalize(vWorldDir);
@@ -347,13 +285,92 @@ void main() {
     vec4 baseColor = mix(uColor0, uColor1, check);
 
     vec3 norm = (deltaY < 0.0) ? vec3(0.0, 1.0, 0.0) : vec3(0.0, -1.0, 0.0);
-    vec3 lightDir = normalize(uLightDir);
-    float diff = max(dot(norm, lightDir), 0.0);
-    vec3 diffuse = diff * uLightColor;
-    float shadow = calculateShadow(fragPos, norm, lightDir);
+    float lLenSq = dot(uLightDir, uLightDir);
+    vec3 lightDir = lLenSq > 1e-8 ? (uLightDir * inversesqrt(lLenSq)) : vec3(0.0, 1.0, 0.0);
+    float shadow = uShadowsEnabled != 0
+        ? illumoCalculateDirectionalShadow(
+            uShadowMap,
+            fragPos,
+            norm,
+            lightDir,
+            clipPos.w,
+            uLightSpaceMatrix,
+            uShadowBias,
+            uShadowSlopeScale,
+            uShadowNormalOffset,
+            uShadowPcf)
+        : 0.0;
 
-    vec3 lighting = uAmbientColor + (1.0 - shadow) * diffuse;
-    FragColor = vec4(lighting * baseColor.rgb, baseColor.a);
+    int punctualCount = clamp(uLightCountsAndFlags.x, 0, 64);
+    bool hdrTarget = (uLightCountsAndFlags.w & 2) != 0;
+    if (!hdrTarget && punctualCount == 0) {
+        float diff = max(dot(norm, lightDir), 0.0);
+        vec3 lighting = uAmbientColor + (1.0 - shadow) * diff * uLightColor;
+        FragColor = vec4(lighting * baseColor.rgb, baseColor.a);
+        FragVelocity = vec2(0.0);
+        return;
+    }
+
+    vec3 albedo = illumoSrgbToLinear(baseColor.rgb);
+    vec3 V = normalize(uCameraPos - fragPos);
+    vec3 radiance = max(uAmbientColor, vec3(0.0)) * albedo;
+    radiance += (1.0 - shadow) * illumoEvaluateDirectLight(
+        norm, V, lightDir, max(uLightColor, vec3(0.0)), albedo, 0.0, 0.9);
+    for (int li = 0; li < punctualCount; ++li) {
+        IllumoPunctualLight light = uPunctualLights[li];
+        vec3 toLight = light.positionAndInvRange.xyz - fragPos;
+        float distSq = dot(toLight, toLight);
+        float invRange = light.positionAndInvRange.w;
+        float rangeRatio2 = distSq * (invRange * invRange);
+        if (rangeRatio2 >= 1.0) {
+            continue;
+        }
+        float dist = sqrt(max(distSq, 1e-8));
+        vec3 L = dist > 1e-4 ? (toLight / dist) : vec3(0.0, 1.0, 0.0);
+        float window = max(1.0 - rangeRatio2 * rangeRatio2, 0.0);
+        float attenuation = (window * window) / max(distSq, 0.01);
+        float outerCos = light.radianceAndOuterCos.w;
+        if (outerCos > -1.5) {
+            float cd = dot(-L, light.directionAndAngleScale.xyz);
+            float spot = clamp((cd - outerCos) * light.directionAndAngleScale.w, 0.0, 1.0);
+            attenuation *= spot * spot;
+        }
+        if (attenuation > 0.0) {
+            float spotShadow = 0.0;
+            if (uShadowsEnabled != 0 && (uLightCountsAndFlags.w & 4) != 0 &&
+                li == uLightCountsAndFlags.z) {
+                float spotNDotL = dot(norm, L);
+                spotShadow = spotNDotL > 0.0
+                    ? illumoSampleShadowQuadrant(
+                        uShadowMap,
+                        fragPos,
+                        norm,
+                        spotNDotL,
+                        uAtlasLightMatrices[3],
+                        3,
+                        uShadowBias,
+                        uShadowSlopeScale,
+                        uShadowNormalOffset,
+                        uShadowPcf,
+                        true)
+                    : 1.0;
+            }
+            if (spotShadow < 1.0) {
+                radiance += (1.0 - spotShadow) * illumoEvaluateDirectLight(
+                    norm,
+                    V,
+                    L,
+                    light.radianceAndOuterCos.rgb * attenuation,
+                    albedo,
+                    0.0,
+                    0.9);
+            }
+        }
+    }
+    vec3 outRgb = hdrTarget
+        ? max(radiance, vec3(0.0))
+        : illumoLinearToSrgb(clamp(radiance, 0.0, 1.0));
+    FragColor = vec4(outRgb, baseColor.a);
     FragVelocity = vec2(0.0);
 }
 )";
@@ -380,6 +397,336 @@ void main() {
         age = 0.0;
     }
     FragColor = vec4(mix(to.rgb, from.rgb, exp(-uCanvasFade.y * age)), 1.0);
+}
+)";
+
+static const char* kBloomDownsampleFragmentShader = R"(
+#version 330 core
+in vec2 vTexCoord;
+out vec4 FragColor;
+
+uniform sampler2D uSourceTexture;
+uniform int uKarisAverage;
+
+vec3 sanitizeHdr(vec3 c) {
+    bvec3 invalid = bvec3(
+        isnan(c.r) || isinf(c.r),
+        isnan(c.g) || isinf(c.g),
+        isnan(c.b) || isinf(c.b));
+    vec3 safe = mix(c, vec3(0.0), invalid);
+    return clamp(safe, vec3(0.0), vec3(65504.0));
+}
+
+float karisWeight(vec3 box) {
+    float luma = dot(box, vec3(0.2126, 0.7152, 0.0722));
+    return 1.0 / (1.0 + max(luma, 0.0));
+}
+
+void main() {
+    vec2 texel = 1.0 / vec2(textureSize(uSourceTexture, 0));
+    float x = texel.x;
+    float y = texel.y;
+    vec2 uv = vTexCoord;
+
+    vec3 a = sanitizeHdr(texture(uSourceTexture, vec2(uv.x - 2.0 * x, uv.y + 2.0 * y)).rgb);
+    vec3 b = sanitizeHdr(texture(uSourceTexture, vec2(uv.x,           uv.y + 2.0 * y)).rgb);
+    vec3 c = sanitizeHdr(texture(uSourceTexture, vec2(uv.x + 2.0 * x, uv.y + 2.0 * y)).rgb);
+
+    vec3 d = sanitizeHdr(texture(uSourceTexture, vec2(uv.x - 2.0 * x, uv.y)).rgb);
+    vec3 e = sanitizeHdr(texture(uSourceTexture, vec2(uv.x,           uv.y)).rgb);
+    vec3 f = sanitizeHdr(texture(uSourceTexture, vec2(uv.x + 2.0 * x, uv.y)).rgb);
+
+    vec3 g = sanitizeHdr(texture(uSourceTexture, vec2(uv.x - 2.0 * x, uv.y - 2.0 * y)).rgb);
+    vec3 h = sanitizeHdr(texture(uSourceTexture, vec2(uv.x,           uv.y - 2.0 * y)).rgb);
+    vec3 i = sanitizeHdr(texture(uSourceTexture, vec2(uv.x + 2.0 * x, uv.y - 2.0 * y)).rgb);
+
+    vec3 j = sanitizeHdr(texture(uSourceTexture, vec2(uv.x - x, uv.y + y)).rgb);
+    vec3 k = sanitizeHdr(texture(uSourceTexture, vec2(uv.x + x, uv.y + y)).rgb);
+    vec3 l = sanitizeHdr(texture(uSourceTexture, vec2(uv.x - x, uv.y - y)).rgb);
+    vec3 m = sanitizeHdr(texture(uSourceTexture, vec2(uv.x + x, uv.y - y)).rgb);
+
+    vec3 result = vec3(0.0);
+    if (uKarisAverage != 0) {
+        vec3 g0 = (a + b + d + e) * 0.25;
+        vec3 g1 = (b + c + e + f) * 0.25;
+        vec3 g2 = (d + e + g + h) * 0.25;
+        vec3 g3 = (e + f + h + i) * 0.25;
+        vec3 g4 = (j + k + l + m) * 0.25;
+        float w0 = 0.125 * karisWeight(g0);
+        float w1 = 0.125 * karisWeight(g1);
+        float w2 = 0.125 * karisWeight(g2);
+        float w3 = 0.125 * karisWeight(g3);
+        float w4 = 0.5 * karisWeight(g4);
+        float wSum = max(w0 + w1 + w2 + w3 + w4, 1e-5);
+        result = (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3 + g4 * w4) / wSum;
+    } else {
+        result = e * 0.125 +
+                 (a + c + g + i) * 0.03125 +
+                 (b + d + f + h) * 0.0625 +
+                 (j + k + l + m) * 0.125;
+    }
+    FragColor = vec4(max(result, vec3(0.0)), 1.0);
+}
+)";
+
+static const char* kBloomUpsampleFragmentShader = R"(
+#version 330 core
+in vec2 vTexCoord;
+out vec4 FragColor;
+
+uniform sampler2D uSourceTexture;
+uniform float uFilterRadius;
+
+void main() {
+    vec2 texel = (1.0 / vec2(textureSize(uSourceTexture, 0))) * max(uFilterRadius, 0.25);
+    float x = texel.x;
+    float y = texel.y;
+    vec2 uv = vTexCoord;
+
+    vec3 a = texture(uSourceTexture, vec2(uv.x - x, uv.y + y)).rgb;
+    vec3 b = texture(uSourceTexture, vec2(uv.x,     uv.y + y)).rgb;
+    vec3 c = texture(uSourceTexture, vec2(uv.x + x, uv.y + y)).rgb;
+
+    vec3 d = texture(uSourceTexture, vec2(uv.x - x, uv.y)).rgb;
+    vec3 e = texture(uSourceTexture, vec2(uv.x,     uv.y)).rgb;
+    vec3 f = texture(uSourceTexture, vec2(uv.x + x, uv.y)).rgb;
+
+    vec3 g = texture(uSourceTexture, vec2(uv.x - x, uv.y - y)).rgb;
+    vec3 h = texture(uSourceTexture, vec2(uv.x,     uv.y - y)).rgb;
+    vec3 i = texture(uSourceTexture, vec2(uv.x + x, uv.y - y)).rgb;
+
+    vec3 upsample = e * 4.0 + (b + d + f + h) * 2.0 + (a + c + g + i);
+    FragColor = vec4(max(upsample * (1.0 / 16.0), vec3(0.0)), 1.0);
+}
+)";
+
+static const char* kHdrCompositeFragmentShader = R"(
+#version 330 core
+#include <illumo/pbr_lighting.glsl>
+in vec2 vTexCoord;
+out vec4 FragColor;
+
+uniform sampler2D uColorTexture;
+uniform sampler2D uVelocityTexture;
+uniform sampler2D uBloomTexture;
+uniform int uMotionBlurEnabled;
+uniform float uMotionBlurAmount;
+uniform float uMotionBlurMax;
+uniform int uMotionBlurSamples;
+uniform int uBloomEnabled;
+uniform float uBloomIntensity;
+uniform float uExposure;
+uniform int uTonemapper;
+uniform int uStoreLumaInAlpha;
+
+vec3 sanitizeHdrSample(vec3 c) {
+    bvec3 invalid = bvec3(
+        isnan(c.r) || isinf(c.r),
+        isnan(c.g) || isinf(c.g),
+        isnan(c.b) || isinf(c.b));
+    return clamp(mix(c, vec3(0.0), invalid), vec3(0.0), vec3(65504.0));
+}
+
+vec3 agxDefaultContrastApprox(vec3 x) {
+    vec3 x2 = x * x;
+    vec3 x4 = x2 * x2;
+    return 15.5 * x4 * x2
+         - 40.14 * x4 * x
+         + 31.96 * x4
+         - 6.868 * x2 * x
+         + 0.4298 * x2
+         + 0.1191 * x
+         - 0.00232;
+}
+
+vec3 tonemapAgxLinear(vec3 val, bool punchy) {
+    const mat3 agxMat = mat3(
+        0.842479062253094, 0.0423282422610123, 0.0423756549057051,
+        0.0784335999999992, 0.878468636469772, 0.0784336,
+        0.0792237451477643, 0.0791661274605434, 0.879142973793104);
+    const mat3 agxMatInv = mat3(
+        1.19687900512017, -0.0528968517574562, -0.0529716355144438,
+        -0.0980208811401368, 1.15190312990417, -0.0980434501171241,
+        -0.0990297440797205, -0.0989611768448433, 1.15107367264116);
+    const float minEv = -12.47393;
+    const float maxEv = 4.026069;
+
+    vec3 inset = agxMat * max(val, vec3(1e-10));
+    vec3 logVal = clamp(log2(max(inset, vec3(1e-10))), minEv, maxEv);
+    logVal = (logVal - minEv) / (maxEv - minEv);
+    vec3 curved = clamp(agxDefaultContrastApprox(logVal), vec3(0.0), vec3(1.0));
+    if (punchy) {
+        const vec3 lw = vec3(0.2126, 0.7152, 0.0722);
+        curved = pow(max(curved, vec3(0.0)), vec3(1.35));
+        float luma = dot(curved, lw);
+        curved = luma + 1.4 * (curved - vec3(luma));
+    }
+    vec3 outset = agxMatInv * curved;
+    return clamp(pow(max(outset, vec3(0.0)), vec3(2.2)), vec3(0.0), vec3(1.0));
+}
+
+vec3 tonemapKhronosNeutralLinear(vec3 color) {
+    const float startCompression = 0.8 - 0.04;
+    const float desaturation = 0.15;
+
+    color = max(color, vec3(0.0));
+    float x = min(color.r, min(color.g, color.b));
+    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+    color -= offset;
+
+    float peak = max(color.r, max(color.g, color.b));
+    if (peak < startCompression) {
+        return clamp(color, vec3(0.0), vec3(1.0));
+    }
+    const float d = 1.0 - startCompression;
+    float newPeak = 1.0 - d * d / (peak + d - startCompression);
+    color *= newPeak / peak;
+
+    float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+    return clamp(mix(color, vec3(newPeak), g), vec3(0.0), vec3(1.0));
+}
+
+vec3 tonemapAcesFilmicLinear(vec3 val) {
+    const mat3 acesInput = mat3(
+        0.59719, 0.07600, 0.02840,
+        0.35458, 0.90834, 0.13383,
+        0.04823, 0.01566, 0.83777);
+    const mat3 acesOutput = mat3(
+         1.60475, -0.10208, -0.00327,
+        -0.53108,  1.10813, -0.07276,
+        -0.07367, -0.00605,  1.07602);
+    vec3 v = acesInput * max(val, vec3(0.0));
+    vec3 a = v * (v + 0.0245786) - 0.000090537;
+    vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
+    return clamp(acesOutput * (a / b), vec3(0.0), vec3(1.0));
+}
+
+vec3 tonemapUchimuraLinear(vec3 x) {
+    const float P = 1.0;
+    const float a = 1.0;
+    const float m = 0.22;
+    const float l = 0.4;
+    const float c = 1.33;
+    const float b = 0.0;
+
+    float l0 = ((P - m) * l) / a;
+    float S0 = m + l0;
+    float S1 = m + a * l0;
+    float C2 = (a * P) / (P - S1);
+    float CP = -C2 / P;
+
+    vec3 v = max(x, vec3(0.0));
+    vec3 w0 = vec3(1.0) - smoothstep(vec3(0.0), vec3(m), v);
+    vec3 w2 = step(vec3(m + l0), v);
+    vec3 w1 = vec3(1.0) - w0 - w2;
+
+    vec3 T = vec3(m) * pow(max(v / m, vec3(0.0)), vec3(c)) + vec3(b);
+    vec3 S = vec3(P) - (P - S1) * exp(CP * (v - vec3(S0)));
+    vec3 L = vec3(m) + a * (v - vec3(m));
+
+    return clamp(T * w0 + L * w1 + S * w2, vec3(0.0), vec3(1.0));
+}
+
+void main() {
+    vec3 hdrScene = sanitizeHdrSample(texture(uColorTexture, vTexCoord).rgb);
+    if (uMotionBlurEnabled != 0) {
+        vec2 velocity = texture(uVelocityTexture, vTexCoord).rg * uMotionBlurAmount;
+        float speed = length(velocity);
+        float maxSpeed = max(uMotionBlurMax, 0.0);
+        if (speed > maxSpeed && speed > 0.0) {
+            velocity = (velocity / speed) * maxSpeed;
+        }
+        int samples = (uMotionBlurSamples <= 0) ? 8 : min(uMotionBlurSamples, 16);
+        if (speed >= 0.0001 && samples > 1) {
+            vec3 accum = vec3(0.0);
+            for (int i = 0; i < samples; ++i) {
+                float t = float(i) / float(samples - 1) - 0.5;
+                accum += sanitizeHdrSample(texture(uColorTexture, vTexCoord + velocity * t).rgb);
+            }
+            hdrScene = accum / float(samples);
+        }
+    }
+
+    if (uBloomEnabled != 0) {
+        vec3 bloom = sanitizeHdrSample(texture(uBloomTexture, vTexCoord).rgb);
+        hdrScene = mix(hdrScene, bloom, clamp(uBloomIntensity, 0.0, 1.0));
+    }
+
+    hdrScene *= exp2(clamp(uExposure, -8.0, 8.0));
+
+    vec3 ldrLinear = vec3(0.0);
+    if (uTonemapper == 6) {
+        ldrLinear = tonemapUchimuraLinear(hdrScene);
+    } else if (uTonemapper == 5) {
+        ldrLinear = tonemapAcesFilmicLinear(hdrScene);
+    } else if (uTonemapper == 4) {
+        ldrLinear = tonemapAgxLinear(hdrScene, true);
+    } else if (uTonemapper == 3) {
+        ldrLinear = tonemapKhronosNeutralLinear(hdrScene);
+    } else if (uTonemapper == 2) {
+        ldrLinear = tonemapAgxLinear(hdrScene, false);
+    } else if (uTonemapper == 1) {
+        vec3 pos = max(hdrScene, vec3(0.0));
+        ldrLinear = pos / (vec3(1.0) + pos);
+    } else {
+        ldrLinear = clamp(hdrScene, vec3(0.0), vec3(1.0));
+    }
+
+    vec3 srgb = clamp(illumoLinearToSrgb(ldrLinear), vec3(0.0), vec3(1.0));
+    float outAlpha = uStoreLumaInAlpha != 0
+        ? dot(srgb, vec3(0.299, 0.587, 0.114))
+        : 1.0;
+    FragColor = vec4(srgb, outAlpha);
+}
+)";
+
+static const char* kFxaaResolveFragmentShader = R"(
+#version 330 core
+in vec2 vTexCoord;
+out vec4 FragColor;
+
+uniform sampler2D uColorTexture;
+
+float sampleLuma(vec4 rgba) {
+    return rgba.a;
+}
+
+void main() {
+    vec2 invTex = 1.0 / vec2(textureSize(uColorTexture, 0));
+    vec4 centerSample = texture(uColorTexture, vTexCoord);
+    float lumaM = sampleLuma(centerSample);
+    float lumaNW = sampleLuma(texture(uColorTexture, vTexCoord + vec2(-1.0,  1.0) * invTex));
+    float lumaNE = sampleLuma(texture(uColorTexture, vTexCoord + vec2( 1.0,  1.0) * invTex));
+    float lumaSW = sampleLuma(texture(uColorTexture, vTexCoord + vec2(-1.0, -1.0) * invTex));
+    float lumaSE = sampleLuma(texture(uColorTexture, vTexCoord + vec2( 1.0, -1.0) * invTex));
+
+    float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
+    float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+    float lumaRange = lumaMax - lumaMin;
+    if (lumaRange < max(0.0312, lumaMax * 0.125)) {
+        FragColor = vec4(centerSample.rgb, 1.0);
+        return;
+    }
+
+    vec2 dir;
+    dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));
+    dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));
+
+    float dirReduce = max(
+        (lumaNW + lumaNE + lumaSW + lumaSE) * (0.25 * (1.0 / 8.0)),
+        1.0 / 128.0);
+    float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = clamp(dir * rcpDirMin, vec2(-8.0), vec2(8.0)) * invTex;
+
+    vec3 rgbA = 0.5 * (
+        texture(uColorTexture, vTexCoord + dir * (1.0 / 3.0 - 0.5)).rgb +
+        texture(uColorTexture, vTexCoord + dir * (2.0 / 3.0 - 0.5)).rgb);
+    vec3 rgbB = rgbA * 0.5 + 0.25 * (
+        texture(uColorTexture, vTexCoord + dir * -0.5).rgb +
+        texture(uColorTexture, vTexCoord + dir *  0.5).rgb);
+    float lumaB = dot(rgbB, vec3(0.299, 0.587, 0.114));
+    vec3 resolved = (lumaB < lumaMin || lumaB > lumaMax) ? rgbA : rgbB;
+    FragColor = vec4(clamp(resolved, vec3(0.0), vec3(1.0)), 1.0);
 }
 )";
 
@@ -599,6 +946,61 @@ Renderer::ensureBuiltinStyles()
       createStyle(style);
   }
 
+  // HDR Bloom Downsample (Jimenez 13-tap + optional Karis average).
+  {
+    RenderStyle style;
+    fillCanvasPipeline(style.pipeline);
+    ShaderSources sources;
+    sources.vertexSource = kMotionBlurVertexShader;
+    sources.fragmentSource = kBloomDownsampleFragmentShader;
+    style.shaderHandle = enrollShader(sources);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::BloomDownsample)] =
+      createStyle(style);
+  }
+
+  // HDR Bloom Upsample (3x3 tent additive blend).
+  {
+    RenderStyle style;
+    fillCanvasPipeline(style.pipeline);
+    style.pipeline.blendEnabled = true;
+    style.pipeline.blendSrc = BlendFactor::One;
+    style.pipeline.blendDst = BlendFactor::One;
+    ShaderSources sources;
+    sources.vertexSource = kMotionBlurVertexShader;
+    sources.fragmentSource = kBloomUpsampleFragmentShader;
+    style.shaderHandle = enrollShader(sources);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::BloomUpsample)] =
+      createStyle(style);
+  }
+
+  // Linear HDR Composite (motion blur + bloom mix + exposure + tonemap).
+  {
+    RenderStyle style;
+    fillCanvasPipeline(style.pipeline);
+    ShaderSources sources;
+    sources.vertexSource = kMotionBlurVertexShader;
+    sources.fragmentSource = kHdrCompositeFragmentShader;
+    style.shaderHandle = enrollShader(sources);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::HdrComposite)] =
+      createStyle(style);
+  }
+
+  // Single-pass FXAA resolve.
+  {
+    RenderStyle style;
+    fillCanvasPipeline(style.pipeline);
+    ShaderSources sources;
+    sources.vertexSource = kMotionBlurVertexShader;
+    sources.fragmentSource = kFxaaResolveFragmentShader;
+    style.shaderHandle = enrollShader(sources);
+    style.ready = style.shaderHandle.isValid();
+    builtinStyleHandles[renderStyleIndex(RenderStyleId::FxaaResolve)] =
+      createStyle(style);
+  }
+
   _builtinStylesReady = true;
 }
 
@@ -616,6 +1018,38 @@ Renderer::whiteTexture()
   options.wrapY = TextureWrap::ClampToEdge;
   _whiteTextureHandle = enrollTexture(white.data(), 1, 1, 4, options);
   return _whiteTextureHandle;
+}
+
+TextureHandle
+Renderer::flatNormalTexture()
+{
+  if (_flatNormalTextureHandle.isValid() || _backend == nullptr ||
+      !_backend->TexturesDrawWhenCreated()) {
+    return _flatNormalTextureHandle;
+  }
+  const std::array<unsigned char, 4> flatNormal{ 128, 128, 255, 255 };
+  TextureOptions options;
+  options.filter = TextureFilter::Nearest;
+  options.wrapX = TextureWrap::ClampToEdge;
+  options.wrapY = TextureWrap::ClampToEdge;
+  _flatNormalTextureHandle = enrollTexture(flatNormal.data(), 1, 1, 4, options);
+  return _flatNormalTextureHandle;
+}
+
+TextureHandle
+Renderer::defaultOrmTexture()
+{
+  if (_defaultOrmTextureHandle.isValid() || _backend == nullptr ||
+      !_backend->TexturesDrawWhenCreated()) {
+    return _defaultOrmTextureHandle;
+  }
+  const std::array<unsigned char, 4> orm{ 255, 255, 255, 255 };
+  TextureOptions options;
+  options.filter = TextureFilter::Nearest;
+  options.wrapX = TextureWrap::ClampToEdge;
+  options.wrapY = TextureWrap::ClampToEdge;
+  _defaultOrmTextureHandle = enrollTexture(orm.data(), 1, 1, 4, options);
+  return _defaultOrmTextureHandle;
 }
 
 RenderStyleHandle

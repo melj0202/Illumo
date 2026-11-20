@@ -71,6 +71,44 @@ public:
     std::array<float, 4> shadowState{ 0.0f, 0.0f, 0.0f, 0.0f };
   };
 
+  static constexpr size_t kShadowAtlasQuadrants = 4u;
+  static constexpr size_t kMaximumForwardLights = 64u;
+
+  struct GpuPunctualLight
+  {
+    // xyz: world position, w: inverse range (1.0f / max(range, 1e-4f))
+    std::array<float, 4> positionAndInvRange{};
+    // rgb: linear color * intensity, w: cos(outerConeAngle) (-2.0f for point)
+    std::array<float, 4> radianceAndOuterCos{};
+    // xyz: normalized spot direction, w: 1.0f / max(cosInner - cosOuter, 1e-4f)
+    std::array<float, 4> directionAndAngleScale{};
+  };
+
+  struct SpotShadowLightDesc
+  {
+    std::array<float, 3> position{ 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> direction{ 0.0f, -1.0f, 0.0f };
+    float range = 10.0f;
+    float outerConeCos = 0.8191520f;
+    int lightIndex = -1;
+  };
+
+  // Mirrors the std140 `LightUniforms` block at binding point 1.
+  struct LightUniforms
+  {
+    std::array<std::array<float, 16>, kShadowAtlasQuadrants>
+      atlasLightMatrices{};
+    // xyz: view-space far depths of cascades 0..2, w: atlas texel size
+    std::array<float, 4> cascadeSplitsAndTexel{};
+    // x: punctualCount, y: cascadeCount (0..3), z: spotShadowLightIdx (-1),
+    // w: bit 0 shadowPcf, bit 1 hdrLinearOutput, bit 2 shadowAtlasActive
+    std::array<int, 4> countsAndFlags{ 0, 0, -1, 0 };
+    // xyz: world camera eye (or view ray when w < 0), w: 1 perspective, -1
+    // ortho, 0 unset
+    std::array<float, 4> cameraPositionAndMode{ 0.0f, 0.0f, 0.0f, 0.0f };
+    std::array<GpuPunctualLight, kMaximumForwardLights> punctualLights{};
+  };
+
   struct ShadowFrameContext
   {
     std::array<float, 16> lightSpaceMatrix{ 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
@@ -79,6 +117,30 @@ public:
     std::array<float, 3> lightDirection{ 0.5f, 1.0f, 0.3f };
     TextureHandle depthTexture{};
     bool active = false;
+  };
+
+  // Optional live host-side shadow overrides driven by developer tools.
+  // Inactive by default so scene-authored RenderEnvironment values govern.
+  struct ShadowDebugOverrides
+  {
+    bool active = false;
+    bool shadowsEnabled = true;
+    bool shadowPcf = true;
+    int shadowMapSize = 1024;
+    float shadowBias = 0.001f;
+    float shadowSlopeScale = 0.004f;
+    float shadowNormalOffset = 0.015f;
+    uint64_t revision = 0;
+
+    bool sameValues(const ShadowDebugOverrides& other) const
+    {
+      return active == other.active && shadowsEnabled == other.shadowsEnabled &&
+             shadowPcf == other.shadowPcf &&
+             shadowMapSize == other.shadowMapSize &&
+             shadowBias == other.shadowBias &&
+             shadowSlopeScale == other.shadowSlopeScale &&
+             shadowNormalOffset == other.shadowNormalOffset;
+    }
   };
 
 private:
@@ -103,6 +165,8 @@ private:
     builtinStyleHandles{};
   bool _builtinStylesReady = false;
   TextureHandle _whiteTextureHandle{};
+  TextureHandle _flatNormalTextureHandle{};
+  TextureHandle _defaultOrmTextureHandle{};
 
   // Proof-quad resources.
   bool _proofReady = false;
@@ -116,6 +180,7 @@ private:
   MeshHandle _fullscreenQuadMeshHandle{};
   FramebufferHandle _currentPassFbo{};
   std::array<int, 4> _currentPassViewport{ 0, 0, 0, 0 };
+  ShadowDebugOverrides m_shadowDebugOverrides{};
 
   struct ScissorState
   {
@@ -179,12 +244,36 @@ private:
   mutable uint64_t m_cullRevision = 1;
   mutable bool m_cullActive = false;
   mutable BoundsFrustum m_cullFrustum;
-  mutable uint64_t m_shadowCullRevision = 1;
-  mutable bool m_shadowCullActive = false;
-  mutable bool m_shadowCullVolumeValid = false;
-  mutable AxisAlignedBounds3 m_shadowCullVolume{};
-  mutable BoundsFrustum m_shadowCullCasterFrustum;
-  mutable BoundsFrustum m_shadowCullFrustum;
+  struct ShadowQuadrantCullCache
+  {
+    uint64_t revision = 1;
+    bool active = false;
+    bool volumeValid = false;
+    AxisAlignedBounds3 volume{};
+    BoundsFrustum casterFrustum;
+    BoundsFrustum frustum;
+  };
+  mutable std::array<ShadowQuadrantCullCache, kShadowAtlasQuadrants>
+    m_shadowQuadrantCullCache{};
+  std::array<bool, kShadowAtlasQuadrants> m_shadowQuadrantActive{};
+  std::array<std::array<float, 16>, kShadowAtlasQuadrants>
+    m_shadowQuadrantMatrices{};
+  std::array<BoundsFrustum, kShadowAtlasQuadrants> m_shadowQuadrantFrustums{};
+  std::array<BoundsFrustum, kShadowAtlasQuadrants>
+    m_shadowQuadrantCasterFrustums{};
+  std::array<AxisAlignedBounds3, kShadowAtlasQuadrants>
+    m_shadowQuadrantCasterVolumes{};
+  std::array<bool, kShadowAtlasQuadrants> m_shadowQuadrantCasterVolumeValid{};
+  std::array<float, 3> m_stabilizedCascadeHalfExtents{};
+  std::array<float, 3> m_shadowCascadeClipSplits{};
+  std::array<float, 16> m_primaryLightSpaceMatrix{ 1.0f, 0.0f, 0.0f, 0.0f,
+                                                   0.0f, 1.0f, 0.0f, 0.0f,
+                                                   0.0f, 0.0f, 1.0f, 0.0f,
+                                                   0.0f, 0.0f, 0.0f, 1.0f };
+  size_t m_activeShadowQuadrant = 0;
+  int m_shadowCascadeCount = 0;
+  int m_shadowQuadrantSize = 0;
+  bool m_shadowAtlasActive = false;
   std::vector<ShadowCasterDesc> shadowCasters;
   ShadowFrameContext shadowFrameContext;
   std::array<float, 16> m_nextWorldViewProjection{};
@@ -195,6 +284,17 @@ private:
   bool m_frameUniformBufferAttempted = false;
   FrameUniforms m_frameUniforms;
   uint64_t m_frameUniformsSerial = 0;
+  BufferHandle m_lightUniformBuffer{};
+  bool m_lightUniformBufferAttempted = false;
+  LightUniforms m_lightUniforms;
+  uint64_t m_lightUniformsSerial = 0;
+  std::array<GpuPunctualLight, kMaximumForwardLights> m_framePunctualLights{};
+  size_t m_framePunctualLightCount = 0;
+  SpotShadowLightDesc m_frameSpotShadow{};
+  bool m_hasFrameSpotShadow = false;
+  std::array<float, 4> m_worldCameraPosAndMode{ 0.0f, 0.0f, 0.0f, 0.0f };
+  std::array<float, 3> m_worldCameraReferencePos{ 0.0f, 0.0f, 0.0f };
+  bool m_hdrLinearWorldTarget = false;
   std::array<float, 16> m_viewProjection{};
   std::array<float, 16> m_previousViewProjection{};
   bool m_hasViewProjection = false;
@@ -282,11 +382,17 @@ public:
   void setNextWorldViewProjection(const std::array<float, 16>& matrix);
   bool isWorldBoundsVisible(const AxisAlignedBounds3& bounds) const;
   bool isShadowCasterRelevant(const AxisAlignedBounds3& bounds) const;
+  size_t getActiveShadowQuadrant() const { return m_activeShadowQuadrant; }
+  bool isShadowQuadrantRelevant(size_t quadrant,
+                                const AxisAlignedBounds3& bounds) const;
+  bool isShadowAtlasActive() const { return m_shadowAtlasActive; }
+  int getShadowCascadeCount() const { return m_shadowCascadeCount; }
   // Change whenever the answers of isWorldBoundsVisible and
   // isShadowCasterRelevant may change (camera, shadow fit, frame state), so a
   // caller may keep a culling result while its revision holds.
   uint64_t getCullRevision() const;
   uint64_t getShadowCullRevision() const;
+  uint64_t getShadowQuadrantCullRevision(size_t quadrant) const;
 
   // =========================================================================
   // Asset enrollment (not mixed into the per-frame token stream — D-007)
@@ -381,6 +487,16 @@ public:
   // shadow fitting. False when the backend has no uniform buffers.
   bool useFrameUniforms();
   const FrameUniforms& getFrameUniforms() const { return m_frameUniforms; }
+  bool ensureLightUniformBuffer();
+  bool useLightUniforms();
+  const LightUniforms& getLightUniforms() const { return m_lightUniforms; }
+  void setFramePunctualLights(const GpuPunctualLight* lights,
+                              size_t count,
+                              const SpotShadowLightDesc* spotShadow = nullptr);
+  std::array<float, 3> getWorldCameraReferencePosition() const
+  {
+    return m_worldCameraReferencePos;
+  }
 
   // Between these, push helpers append to `list` instead of the frame queue
   // (bindStyle included). Matrices are copied into the list. Record outside
@@ -415,6 +531,8 @@ public:
   // Invalid when the backend cannot create it or cannot draw a texture in the
   // frame that creates it (IBackend::TexturesDrawWhenCreated).
   TextureHandle whiteTexture();
+  TextureHandle flatNormalTexture();
+  TextureHandle defaultOrmTexture();
 
   // =========================================================================
   // Frame lifecycle
@@ -561,6 +679,19 @@ public:
   // =========================================================================
 
   void RenderScene(DrawList* scene, Camera* camera);
+
+  void setShadowDebugOverrides(const ShadowDebugOverrides& overrides)
+  {
+    if (!m_shadowDebugOverrides.sameValues(overrides)) {
+      const uint64_t nextRevision = m_shadowDebugOverrides.revision + 1;
+      m_shadowDebugOverrides = overrides;
+      m_shadowDebugOverrides.revision = nextRevision;
+    }
+  }
+  const ShadowDebugOverrides& getShadowDebugOverrides() const
+  {
+    return m_shadowDebugOverrides;
+  }
 
   // =========================================================================
   // Token proof helpers (test / sample only — not called by Illumo::render)

@@ -429,6 +429,18 @@ VulkanBackend::GetTextureInfo(TextureHandle handle) const
   return m_device->textureInfo(handle);
 }
 
+int
+VulkanBackend::maxTextureSize() const
+{
+  return m_device ? m_device->maxTextureSize() : 8192;
+}
+
+size_t
+VulkanBackend::renderPassBreaks() const
+{
+  return m_device ? m_device->frameStats().renderPassBreaks : 0;
+}
+
 FramebufferHandle
 VulkanBackend::CreateFramebuffer(const FramebufferDesc& desc,
                                  FramebufferAttachments* outAttachments)

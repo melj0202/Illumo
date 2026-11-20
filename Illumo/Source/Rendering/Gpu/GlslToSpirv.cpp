@@ -1,5 +1,6 @@
 #include "GlslToSpirv.h"
 
+#include <Illumo/Rendering/IBackend.h>
 #include <SPIRV/GlslangToSpv.h>
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
@@ -275,6 +276,9 @@ compileGlslProgram(const std::string& vertexSource,
       program->defaultBlockSize = binding.size;
     } else {
       binding.kind = GlslBindingKind::NamedBlock;
+      const int knownSlot = namedUniformBlockBinding(block.name.c_str());
+      binding.blockSlot =
+        knownSlot >= 0 ? static_cast<unsigned>(knownSlot) : 0u;
     }
     if (block.getBinding() < 0) {
       *error = "Uniform block " + block.name + " has no binding";

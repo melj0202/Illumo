@@ -1,6 +1,7 @@
 #pragma once
 #include <Illumo/Foundation/Fatal.h>
 #include <Illumo/Rendering/IRenderWindow.h>
+#include <Illumo/Rendering/RenderPipelineConfig.h>
 #include <Illumo/Rendering/UiScale.h>
 #include <Illumo/Services/IEnvVars.h>
 #include <IllumoGuest/Display.h>
@@ -72,6 +73,16 @@ public:
     desired.activeGraphicsApi = m_activeGraphicsApi;
     const EnvVar& motionBlur = m_environment->getVar("motionBlurEnabled");
     desired.motionBlur = !motionBlur.value.empty() && motionBlur.valueAsBool;
+    const RenderPipelineConfig pipeline =
+      RenderPipelineConfig::fromEnv(m_environment);
+    desired.hdr = pipeline.hdrEnabled;
+    desired.tonemapper = static_cast<std::uint32_t>(
+      std::clamp(pipeline.tonemapper, 0, RenderPipelineConfig::kMaxTonemapper));
+    desired.exposure = GuestDisplayState::quantizedExposure(pipeline.exposure);
+    desired.bloom = pipeline.bloomEnabled;
+    desired.bloomIntensity =
+      GuestDisplayState::quantizedBloomIntensity(pipeline.bloomIntensity);
+    desired.fxaa = pipeline.fxaaEnabled;
     if (!m_requestedDisplay || desired != m_desired) {
       m_display->apply(desired);
       m_desired = desired;
@@ -89,6 +100,15 @@ public:
       m_environment->setVar("uiScale", UiScale::text(actual.uiScale));
       m_environment->setVar("msaa", static_cast<long>(actual.msaa));
       m_environment->setVar("motionBlurEnabled", actual.motionBlur);
+      m_environment->setVar("hdrEnabled", actual.hdr);
+      m_environment->setVar("tonemapper", static_cast<long>(actual.tonemapper));
+      m_environment->setVar("exposure",
+                            GuestDisplayState::exposureText(actual.exposure));
+      m_environment->setVar("bloomEnabled", actual.bloom);
+      m_environment->setVar(
+        "bloomIntensity",
+        GuestDisplayState::bloomIntensityText(actual.bloomIntensity));
+      m_environment->setVar("fxaaEnabled", actual.fxaa);
       m_activeMsaa = actual.activeMsaa;
       m_savedGraphicsApi = actual.graphicsApi;
       m_activeGraphicsApi = actual.activeGraphicsApi;

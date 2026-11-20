@@ -1,3 +1,4 @@
+#include "EditorClipboard.h"
 #include "EditorInspector.h"
 #include "PanelTestHelpers.h"
 #include <Illumo/Content/IlscCodec.h>
@@ -786,9 +787,130 @@ testInspectorRefinements()
   return counters.failures;
 }
 
+static int
+testInspectorPbrMeshAndPunctualLights()
+{
+  TestCounters counters;
+  HeadlessRenderFixture fixture(1280, 720);
+  EditorInspector inspector(&fixture.window, &fixture.renderer);
+  inspector.setPlacement(panelArea(1040.0f, 100.0f, 240.0f, 600.0f));
+  InputManager input(nullptr);
+  EditorDocument document;
+  EditorSelection selection;
+
+  SceneDocument scene;
+  scene.assets.push_back(asset("mesh", SceneAssetType::Mesh, "meshes/m.obj"));
+  scene.assets.push_back(
+    asset("albedo", SceneAssetType::Texture, "textures/albedo.png"));
+  scene.assets.push_back(
+    asset("normal", SceneAssetType::Texture, "textures/normal.png"));
+  scene.assets.push_back(
+    asset("unused_tex", SceneAssetType::Texture, "textures/unused.png"));
+  SceneNode node;
+  node.id = "m";
+  node.name = "LitMesh";
+  SceneComponent meshComponent;
+  SceneMeshRenderer rendererComp;
+  rendererComp.asset = "mesh";
+  meshComponent.value = rendererComp;
+  node.components.push_back(meshComponent);
+  SceneComponent lightComponent;
+  lightComponent.value = SceneLight{};
+  node.components.push_back(lightComponent);
+  scene.nodes.push_back(node);
+  std::string error;
+  testTrue(counters,
+           document.loadFromText(IlscCodec::encode(scene), &error),
+           "v2.1 mesh and light scene loads");
+
+  selection.set("m");
+  inspector.update(&input, &document, &selection, 0.016f);
+  testTrue(counters,
+           inspector.field("light.kind") != nullptr &&
+             inspector.field("light.range") == nullptr &&
+             inspector.field("light.inner_angle") == nullptr,
+           "directional light hides range and cone");
+
+  // Cycle directional -> point -> spot.
+  inspector.activateField("light.kind", &document, &selection);
+  inspector.update(&input, &document, &selection, 0.016f);
+  const SceneLight& asPoint = std::get<SceneLight>(
+    document.findNode("m")->find(SceneComponentType::Light)->value);
+  testTrue(counters,
+           asPoint.kind == SceneLightKind::Point &&
+             inspector.field("light.range") != nullptr &&
+             inspector.field("light.inner_angle") == nullptr,
+           "point light exposes range without cone");
+
+  inspector.activateField("light.kind", &document, &selection);
+  inspector.update(&input, &document, &selection, 0.016f);
+  inspector.activateField("light.range", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "14.5");
+  inspector.activateField("light.inner_angle", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "18");
+  inspector.activateField("light.outer_angle", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "32");
+  const SceneLight& asSpot = std::get<SceneLight>(
+    document.findNode("m")->find(SceneComponentType::Light)->value);
+  testTrue(counters,
+           asSpot.kind == SceneLightKind::Spot &&
+             std::fabs(asSpot.range - 14.5f) < 1e-4f &&
+             std::fabs(asSpot.innerAngleDegrees - 18.0f) < 1e-4f &&
+             std::fabs(asSpot.outerAngleDegrees - 32.0f) < 1e-4f,
+           "spot light edits range and cone angles");
+
+  // Edit PBR textures and factors on SceneMeshRenderer.
+  inspector.activateField("mesh.albedo_texture", &document, &selection);
+  inspector.activateField("mesh.normal_texture", &document, &selection);
+  inspector.activateField("mesh.normal_texture", &document, &selection);
+  inspector.activateField("mesh.metallic", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "0.85");
+  inspector.activateField("mesh.roughness", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "0.25");
+  inspector.activateField("mesh.emissive.r", &document, &selection);
+  typeAndFinish(inspector, input, document, selection, "2.5");
+  const SceneMeshRenderer& editedMesh = std::get<SceneMeshRenderer>(
+    document.findNode("m")->find(SceneComponentType::Mesh)->value);
+  testTrue(counters,
+           editedMesh.albedoTexture == "albedo" &&
+             editedMesh.normalTexture == "normal" &&
+             std::fabs(editedMesh.metallic - 0.85f) < 1e-4f &&
+             std::fabs(editedMesh.roughness - 0.25f) < 1e-4f &&
+             std::fabs(editedMesh.emissive.x - 2.5f) < 1e-4f,
+           "mesh PBR textures, metallic/roughness and HDR emissive apply");
+
+  // Scene asset table protects referenced PBR textures from Remove.
+  selection.clear();
+  inspector.update(&input, &document, &selection, 0.016f);
+  testTrue(counters,
+           inspector.field("asset.remove:albedo") == nullptr &&
+             inspector.field("asset.remove:normal") == nullptr &&
+             inspector.field("asset.remove:unused_tex") != nullptr,
+           "bound PBR textures do not offer Remove");
+
+  // Clipboard copy + paste into a fresh document preserves PBR texture assets.
+  const std::string clip =
+    EditorClipboard::copy(document.scene(), std::vector<std::string>{ "m" });
+  SceneDocument fragment;
+  std::string pasteErr;
+  EditorDocument targetDoc;
+  const std::vector<std::string> pasted =
+    EditorClipboard::read(clip, fragment, pasteErr)
+      ? targetDoc.paste(fragment, {}, {})
+      : std::vector<std::string>{};
+  testTrue(counters,
+           pasted.size() == 1 &&
+             targetDoc.scene().document().findAsset("albedo") != nullptr &&
+             targetDoc.scene().document().findAsset("normal") != nullptr,
+           "clipboard paste carries PBR texture assets");
+  return counters.failures;
+}
+
 void
 registerEditorInspectorTests(IllumoTestRegistry& registry)
 {
+  registry.add("IllEd.Inspector.PbrMeshAndPunctualLights",
+               []() { return testInspectorPbrMeshAndPunctualLights(); });
   registry.add("IllEd.Inspector.Refinements",
                []() { return testInspectorRefinements(); });
   registry.add("IllEd.Inspector.ColorPicker",
