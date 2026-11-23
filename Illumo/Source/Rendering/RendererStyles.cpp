@@ -82,16 +82,16 @@ in vec4 ourColor;
 in vec4 vCurrentClip;
 in vec4 vPrevClip;
 layout (location = 0) out vec4 FragColor;
-layout (location = 1) out vec2 FragVelocity;
+layout (location = 1) out vec4 FragVelocity;
 uniform int uMotionBlurEnabled;
 void main() {
     FragColor = ourColor;
     if (uMotionBlurEnabled != 0) {
         vec2 currentNdc = vCurrentClip.xy / max(abs(vCurrentClip.w), 1e-5);
         vec2 prevNdc = vPrevClip.xy / max(abs(vPrevClip.w), 1e-5);
-        FragVelocity = (currentNdc - prevNdc) * 0.5;
+        FragVelocity = vec4((currentNdc - prevNdc) * 0.5, 0.0, 1.0);
     } else {
-        FragVelocity = vec2(0.0);
+        FragVelocity = vec4(0.0, 0.0, 0.0, 1.0);
     }
 }
 )";

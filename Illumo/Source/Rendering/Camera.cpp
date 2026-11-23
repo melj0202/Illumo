@@ -23,6 +23,7 @@ Camera::Camera(const glm::vec2& initialPos,
   , perspectiveFar(100.0f)
   , orthographicNear(-1024.0f)
   , orthographicFar(1024.0f)
+  , orthographicLookAt(false)
 {
 }
 
@@ -125,15 +126,30 @@ Camera::lookAt(const glm::vec3& eyePos,
 void
 Camera::setPerspective(float fovDegrees, float nearPlane, float farPlane)
 {
+  orthographicLookAt = false;
   fieldOfViewDegrees = std::clamp(fovDegrees, 1.0f, 179.0f);
   perspectiveNear = std::max(nearPlane, 0.0001f);
   perspectiveFar = std::max(farPlane, perspectiveNear + 0.0001f);
 }
 
+void
+Camera::setOrthographicView(float pixelsPerWorldUnit,
+                            float nearPlane,
+                            float farPlane)
+{
+  projectionType = ProjectionType::Orthographic;
+  orthographicLookAt = true;
+  const float safeZoom = std::max(pixelsPerWorldUnit, 0.01f);
+  zoom = safeZoom;
+  targetZoom = safeZoom;
+  orthographicNear = nearPlane;
+  orthographicFar = std::max(farPlane, nearPlane + 0.0001f);
+}
+
 glm::mat4
 Camera::GetViewMatrix() const
 {
-  if (projectionType == ProjectionType::Perspective) {
+  if (projectionType == ProjectionType::Perspective || orthographicLookAt) {
     return glm::lookAt(eye, target, up);
   }
 
@@ -171,6 +187,23 @@ Camera::GetProjectionMatrix(float aspectRatio) const
                             aspect,
                             perspectiveNear,
                             perspectiveFar);
+  }
+
+  if (projectionType == ProjectionType::Orthographic && orthographicLookAt) {
+    float aspect = aspectRatio;
+    if (!(aspect > 0.0f)) {
+      aspect = static_cast<float>(winDims[0]) /
+               static_cast<float>(winDims[1] > 0 ? winDims[1] : 1);
+    }
+    const float safeZoom = std::max(zoom, 0.01f);
+    const float halfHeight = (0.5f * kOrtho3DReferenceHeight) / safeZoom;
+    const float halfWidth = halfHeight * aspect;
+    return glm::ortho(-halfWidth,
+                      halfWidth,
+                      -halfHeight,
+                      halfHeight,
+                      orthographicNear,
+                      orthographicFar);
   }
 
   // Orthographic projection mapping screen pixel space to NDC [-1, 1], with

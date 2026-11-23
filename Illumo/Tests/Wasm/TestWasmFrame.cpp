@@ -1924,6 +1924,109 @@ run(const std::string& name)
   testTrue(counters,
            !bridge.accept(wire.data()),
            "Retired owner cannot publish another frame");
+
+  // World-layer Shape batches (such as debug wireframe lines) carry previous
+  // frame MVP and uMotionBlurEnabled = 1 so MotionFeedback subtracts camera
+  // pan velocity cleanly, while UI Shape batches keep uMotionBlurEnabled = 0.
+  {
+    struct ShapeUniformLog final : MockBackend
+    {
+      std::vector<std::array<float, 16>> prevMvps;
+      std::vector<int> motionFlags;
+      void PushToCommandQueue(RenderCommand command) override
+      {
+        if (command.commandType == CommandType::SetUniformMat4 &&
+            std::strcmp(command.uniformMat4.name, WorldLook::kPrevMvpUniform) ==
+              0 &&
+            command.uniformMat4.value != nullptr) {
+          std::array<float, 16> mat{};
+          std::memcpy(mat.data(), command.uniformMat4.value, sizeof(mat));
+          prevMvps.push_back(mat);
+        } else if (command.commandType == CommandType::SetUniformInt &&
+                   std::strcmp(command.uniformInt.name,
+                               WorldLook::kMotionBlurEnabledUniform) == 0) {
+          motionFlags.push_back(command.uniformInt.value);
+        }
+        MockBackend::PushToCommandQueue(command);
+      }
+    };
+    ShapeUniformLog logMock;
+    logMock.Initialize();
+    Renderer shapeRenderer(&window, &env, &camera, &logMock, false);
+    shapeRenderer.ensureBuiltinStyles();
+    WasmFrameRenderer shapeBridge(shapeRenderer, 701);
+    const std::array<float, 16> camA{ 1, 0, 0, 0, 0, 1, 0, 0,
+                                      0, 0, 1, 0, 1, 0, 0, 1 };
+    const std::array<float, 16> camB{ 1, 0, 0, 0, 0, 1, 0, 0,
+                                      0, 0, 1, 0, 2, 0, 0, 1 };
+    const std::array<float, 16> camC{ 1, 0, 0, 0, 0, 1, 0, 0,
+                                      0, 0, 1, 0, 3, 0, 0, 1 };
+    const std::function<GuestBatch(const std::array<float, 16>&)>
+      makeWorldLine = [](const std::array<float, 16>& mvp) {
+        GuestBatch line;
+        line.style = GuestBatchStyle::Shape;
+        line.layer = GuestLayer::World;
+        line.primitive = GuestPrimitive::Lines;
+        line.depthTest = true;
+        line.blend = true;
+        line.mvp = mvp;
+        line.vertices = { { { 0.0f, 0.0f, 0.0f }, 0x40ffffffu, {}, {} },
+                          { { 1.0f, 0.0f, 0.0f }, 0x40ffffffu, {}, {} } };
+        line.indices = { 0, 1 };
+        return line;
+      };
+    const std::function<bool(const GuestFrame&)> submitFrame =
+      [&](const GuestFrame& guestFrame) {
+        GuestWireWriter out;
+        guestFrame.write(out);
+        const bool ok = shapeBridge.accept(out.data());
+        logMock.prevMvps.clear();
+        logMock.motionFlags.clear();
+        DrawList drawScene(&window, &camera);
+        shapeBridge.dispatch(drawScene);
+        shapeRenderer.BeginFrame();
+        shapeRenderer.RenderScene(&drawScene, &camera);
+        shapeRenderer.EndFrame();
+        return ok && shapeRenderer.frameError().empty();
+      };
+
+    // Frame 1: camera at camA with both a World line batch and a UI Shape.
+    GuestFrame f1 = makeFrame();
+    f1.hasCamera = true;
+    f1.camera = camA;
+    f1.batches.insert(f1.batches.begin(), makeWorldLine(camA));
+    testTrue(counters, submitFrame(f1), "World shape lines frame 1 renders");
+
+    // Frame 2: camera moves to camB; World line batch gets prevMvp == camA.
+    GuestFrame f2 = makeFrame();
+    f2.hasCamera = true;
+    f2.camera = camB;
+    f2.batches.insert(f2.batches.begin(), makeWorldLine(camB));
+    testTrue(counters, submitFrame(f2), "World shape lines frame 2 renders");
+    testTrue(counters,
+             logMock.motionFlags.size() >= 2 && logMock.motionFlags[0] == 1 &&
+               logMock.motionFlags[1] == 0 && !logMock.prevMvps.empty() &&
+               logMock.prevMvps[0] == camA,
+             "World shape batches carry previous MVP and motion flag while UI "
+             "shape batches keep motion disabled");
+
+    // Frame 3: remove world lines at camB, then toggle them back on at camC ->
+    // fallback uses previous world camera (camB) so frame 1 has zero trail.
+    GuestFrame f3Off = makeFrame();
+    f3Off.hasCamera = true;
+    f3Off.camera = camB;
+    testTrue(counters, submitFrame(f3Off), "Frame without world lines renders");
+    GuestFrame f4On = makeFrame();
+    f4On.hasCamera = true;
+    f4On.camera = camC;
+    f4On.batches.insert(f4On.batches.begin(), makeWorldLine(camC));
+    testTrue(counters, submitFrame(f4On), "Toggled-on world lines render");
+    testTrue(counters,
+             !logMock.prevMvps.empty() && logMock.prevMvps[0] == camB &&
+               !logMock.motionFlags.empty() && logMock.motionFlags[0] == 1,
+             "Freshly enabled world shape lines inherit previous world camera "
+             "as uPrevMVP");
+  }
   return counters.failures == 0;
 }
 

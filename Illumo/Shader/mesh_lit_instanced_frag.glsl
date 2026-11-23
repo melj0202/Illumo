@@ -40,6 +40,7 @@ uniform sampler2D uOrmMap;
 uniform sampler2D uEmissiveMap;
 uniform vec4 uMaterialFactors;
 uniform vec3 uEmissiveFactor;
+uniform int uDitherAlpha;
 
 float calculateShadow(vec3 fragPos, vec3 normal, vec3 lightDir)
 {
@@ -85,6 +86,11 @@ void main()
 
     vec3 albedo = illumoSrgbToLinear(srgbBase.rgb) * illumoSrgbToLinear(albedoTex.rgb);
     float alpha = srgbBase.a * albedoTex.a;
+    if (uDitherAlpha != 0 && alpha < 0.999) {
+        if (alpha <= illumoBayer4x4(gl_FragCoord.xy)) {
+            discard;
+        }
+    }
     float ao = clamp(ormTex.r, 0.0, 1.0);
     vec3 V = illumoResolveViewVector(vFragPos, N);
 

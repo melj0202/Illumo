@@ -51,6 +51,7 @@ struct SceneInstance::WorldBinding
   RenderMaterialId customMaterialId = 0;
   RenderInstanceId id = 0;
   std::array<float, 16> sent{};
+  std::array<float, 4> sentTint{ 1.0f, 1.0f, 1.0f, 1.0f };
   bool sentVisible = true;
 };
 
@@ -186,6 +187,7 @@ SceneInstance::clear()
   m_packageRoot.clear();
   m_warnings.clear();
   m_viewHidden.clear();
+  m_viewOpacities.clear();
   m_lighting = SceneLighting{};
   m_lightingDirty = true;
   touch();
@@ -525,6 +527,15 @@ matrixValues(const Matrix4& matrix)
   return values;
 }
 
+static std::array<float, 4>
+effectiveTintValues(const ColorRgba& base, float opacity)
+{
+  return { static_cast<float>(base.r) / 255.0f,
+           static_cast<float>(base.g) / 255.0f,
+           static_cast<float>(base.b) / 255.0f,
+           (static_cast<float>(base.a) / 255.0f) * opacity };
+}
+
 void
 SceneInstance::bindWorld(Record& entry, size_t index)
 {
@@ -550,10 +561,7 @@ SceneInstance::bindWorld(Record& entry, size_t index)
     desc.material = m_worldMaterials[entry.castShadows[index] ? 0 : 1];
   }
   desc.world = matrixValues(world * visual.getModelMatrix());
-  desc.tint = { static_cast<float>(binding.tint.r) / 255.0f,
-                static_cast<float>(binding.tint.g) / 255.0f,
-                static_cast<float>(binding.tint.b) / 255.0f,
-                static_cast<float>(binding.tint.a) / 255.0f };
+  desc.tint = effectiveTintValues(binding.tint, viewOpacity(entry.node.id));
   desc.visible = m_graph.isEffectivelyVisible(entry.handle);
   desc.hasBounds = true;
   desc.localBounds = { binding.mesh.minBounds, binding.mesh.maxBounds };
@@ -568,6 +576,7 @@ SceneInstance::bindWorld(Record& entry, size_t index)
   m_graph.invalidateSnapshots();
   binding.id = id;
   binding.sent = desc.world;
+  binding.sentTint = desc.tint;
   binding.sentVisible = desc.visible;
   visual.setVisible(false);
 }
@@ -612,6 +621,8 @@ SceneInstance::syncWorld()
     Matrix4 world(1.0f);
     bool resolved = false;
     bool visible = false;
+    const float opacity =
+      m_viewOpacities.empty() ? 1.0f : viewOpacity(entry.node.id);
     for (size_t index = 0; index < entry.world.size(); ++index) {
       WorldBinding& binding = entry.world[index];
       if (binding.id == 0) {
@@ -627,6 +638,12 @@ SceneInstance::syncWorld()
       if (values != binding.sent) {
         m_world->setInstanceTransform(binding.id, values);
         binding.sent = values;
+      }
+      const std::array<float, 4> tint =
+        effectiveTintValues(binding.tint, opacity);
+      if (tint != binding.sentTint) {
+        m_world->setInstanceTint(binding.id, tint);
+        binding.sentTint = tint;
       }
       if (visible != binding.sentVisible) {
         m_world->setInstanceVisible(binding.id, visible);
@@ -1321,6 +1338,7 @@ SceneInstance::buildAttachments(Record& entry)
       visual->prepare(m_renderer);
     }
     applyLightingTo(*visual, castShadows);
+    visual->setOpacity(viewOpacity(entry.node.id));
     m_graph.addAttachment(entry.handle, visual.get());
     entry.visuals.push_back(std::move(visual));
     entry.castShadows.push_back(castShadows);
@@ -1387,6 +1405,7 @@ SceneInstance::reconfigureAttachments(Record& entry,
       *entry.visuals[index], *visuals[index], &castShadows, &binding);
     entry.castShadows[index] = castShadows;
     applyLightingTo(*entry.visuals[index], castShadows);
+    entry.visuals[index]->setOpacity(viewOpacity(entry.node.id));
     bindWorld(entry, index);
   }
   m_lightingDirty = m_lightingDirty || hasLight || entry.hasLight;
@@ -1494,6 +1513,7 @@ SceneInstance::removeSubtree(std::string_view id)
   m_graph.destroyNode(handleOf(id));
   for (const std::string& member : ids) {
     m_records.erase(member);
+    m_viewOpacities.erase(member);
   }
   touch();
   return true;
@@ -1845,6 +1865,56 @@ SceneInstance::setViewHidden(const std::vector<std::string>& ids)
   m_lightingDirty = true;
 }
 
+void
+SceneInstance::setViewOpacity(std::string_view id, float opacity)
+{
+  if (!std::isfinite(opacity)) {
+    return;
+  }
+  Record* entry = record(id);
+  if (entry == nullptr) {
+    return;
+  }
+  const float clamped = std::clamp(opacity, 0.0f, 1.0f);
+  const float effective = clamped >= 0.9999f ? 1.0f : clamped;
+  if (effective >= 1.0f) {
+    m_viewOpacities.erase(entry->node.id);
+  } else {
+    m_viewOpacities[entry->node.id] = effective;
+  }
+  for (std::unique_ptr<MeshVisual>& visual : entry->visuals) {
+    visual->setOpacity(effective);
+  }
+}
+
+float
+SceneInstance::viewOpacity(std::string_view id) const
+{
+  if (m_viewOpacities.empty()) {
+    return 1.0f;
+  }
+  const std::unordered_map<std::string, float>::const_iterator found =
+    m_viewOpacities.find(std::string(id));
+  return found == m_viewOpacities.end() ? 1.0f : found->second;
+}
+
+void
+SceneInstance::clearViewOpacities()
+{
+  if (m_viewOpacities.empty()) {
+    return;
+  }
+  for (const std::pair<const std::string, float>& entry : m_viewOpacities) {
+    Record* nodeRecord = record(entry.first);
+    if (nodeRecord != nullptr) {
+      for (std::unique_ptr<MeshVisual>& visual : nodeRecord->visuals) {
+        visual->setOpacity(1.0f);
+      }
+    }
+  }
+  m_viewOpacities.clear();
+}
+
 bool
 SceneInstance::localBounds(std::string_view id,
                            AxisAlignedBounds3* bounds) const
@@ -2017,6 +2087,19 @@ SceneInstance::applyCamera(std::string_view id, Camera& camera) const
   const Matrix4 world = worldMatrix(id);
   const Vector3 eye(world[3]);
   if (settings.projection == SceneProjection::Orthographic) {
+    if (m_state.worldMode == SceneWorldMode::World3D) {
+      Vector3 forward(world * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
+      Vector3 up(world * glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
+      if (glm::length(forward) < 1.0e-6f || glm::length(up) < 1.0e-6f) {
+        return false;
+      }
+      forward = glm::normalize(forward);
+      up = glm::normalize(up);
+      camera.lookAt(eye, eye + forward, up);
+      camera.setOrthographicView(
+        settings.zoom, settings.nearPlane, settings.farPlane);
+      return true;
+    }
     camera.setProjectionType(ProjectionType::Orthographic);
     camera.SetPositionPrecise(eye.x, eye.y);
     camera.SetZoom(settings.zoom);

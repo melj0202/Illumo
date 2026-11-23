@@ -544,6 +544,19 @@ float illumoCalculateDirectionalShadow(
         shadowPcf);
 }
 
+float illumoBayer4x4(vec2 fragCoord)
+{
+    ivec2 cell = ivec2(fragCoord) & ivec2(3);
+    int index = cell.y * 4 + cell.x;
+    const float kBayer[16] = float[16](
+         0.5 / 16.0,  8.5 / 16.0,  2.5 / 16.0, 10.5 / 16.0,
+        12.5 / 16.0,  4.5 / 16.0, 14.5 / 16.0,  6.5 / 16.0,
+         3.5 / 16.0, 11.5 / 16.0,  1.5 / 16.0,  9.5 / 16.0,
+        15.5 / 16.0,  7.5 / 16.0, 13.5 / 16.0,  5.5 / 16.0
+    );
+    return kBayer[index];
+}
+
 #endif
 )";
 

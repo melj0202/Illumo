@@ -181,6 +181,14 @@ MeshVisual::setEmissiveFactor(const glm::vec3& value)
 }
 
 void
+MeshVisual::setOpacity(float value)
+{
+  if (std::isfinite(value)) {
+    opacity = std::clamp(value, 0.0f, 1.0f);
+  }
+}
+
+void
 MeshVisual::clearPrimitives()
 {
   lineVertices.clear();
@@ -861,7 +869,9 @@ MeshVisual::ensureStyles()
   if (shapeStyle != nullptr && !lineStyleHandle.isValid()) {
     RenderStyle lineStyle = *shapeStyle;
     lineStyle.pipeline.depthTestEnabled = true;
-    lineStyle.pipeline.blendEnabled = false;
+    lineStyle.pipeline.blendEnabled = true;
+    lineStyle.pipeline.blendSrc = BlendFactor::SrcAlpha;
+    lineStyle.pipeline.blendDst = BlendFactor::OneMinusSrcAlpha;
     lineStyle.pipeline.faceCullingEnabled = false;
     lineStyle.pipeline.primitives = Primitives::Lines;
     lineStyleHandle = renderer->createStyle(lineStyle);
@@ -1300,7 +1310,9 @@ MeshVisual::appendCommandsWithWorld(Renderer* value,
       value->pushUniformFloat(WorldLook::kMotionBlurAmountUniform,
                               motionBlurAmount);
       value->pushUniformFloat(WorldLook::kMotionBlurMaxUniform, motionBlurMax);
-      value->pushUniformVec4(WorldLook::kTintUniform, 1.0f, 1.0f, 1.0f, 1.0f);
+      value->pushUniformVec4(
+        WorldLook::kTintUniform, 1.0f, 1.0f, 1.0f, opacity);
+      value->pushUniformInt(WorldLook::kDitherAlphaUniform, 1);
       emitPbrMaterialTokens(value, true);
 
       if (shadowMapBound) {
@@ -1365,7 +1377,9 @@ MeshVisual::appendCommandsWithWorld(Renderer* value,
                            static_cast<float>(meshAssetTint.r) / 255.0f,
                            static_cast<float>(meshAssetTint.g) / 255.0f,
                            static_cast<float>(meshAssetTint.b) / 255.0f,
-                           static_cast<float>(meshAssetTint.a) / 255.0f);
+                           (static_cast<float>(meshAssetTint.a) / 255.0f) *
+                             opacity);
+    value->pushUniformInt(WorldLook::kDitherAlphaUniform, 1);
     emitPbrMaterialTokens(value, lightingEnabled);
     if (lightingEnabled && shadowMapBound) {
       value->pushSetTexture(shadow.depthTexture, WorldLook::kShadowTextureUnit);

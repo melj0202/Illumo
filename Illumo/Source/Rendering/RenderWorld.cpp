@@ -732,6 +732,8 @@ RenderWorld::recordColor(Renderer* renderer, Bucket& bucket)
                             std::max(material.emissiveFactor[0], 0.0f),
                             std::max(material.emissiveFactor[1], 0.0f),
                             std::max(material.emissiveFactor[2], 0.0f));
+  renderer->pushUniformInt(WorldLook::kDitherAlphaUniform,
+                           material.blend ? 0 : 1);
   renderer->pushSetMesh(
     MeshHandle{ bucket.key.meshSlot, bucket.key.meshGeneration });
   renderer->pushInstanceStream(

@@ -19,6 +19,11 @@ enum class ProjectionType
 class Camera
 {
 public:
+  // Logical reference viewport height used to convert SceneCamera::zoom
+  // (pixels per world unit) into a resolution-independent 3D orthographic
+  // frustum height: halfHeight = (0.5 * kOrtho3DReferenceHeight) / zoom.
+  static constexpr float kOrtho3DReferenceHeight = 720.0f;
+
   Camera(const glm::vec2& initialPos = glm::vec2(0.0f, 0.0f),
          float initialZoom = 1.0f,
          IEnvVars* vars = nullptr);
@@ -64,13 +69,21 @@ public:
   void SetSmoothingSpeed(float speed) { smoothingSpeed = speed; }
   float GetSmoothingSpeed() const { return smoothingSpeed; }
 
-  void setProjectionType(ProjectionType type) { projectionType = type; }
+  void setProjectionType(ProjectionType type)
+  {
+    projectionType = type;
+    orthographicLookAt = false;
+  }
   ProjectionType getProjectionType() const { return projectionType; }
+  bool isOrthographicLookAt() const { return orthographicLookAt; }
 
   void lookAt(const glm::vec3& eyePos,
               const glm::vec3& targetPos,
               const glm::vec3& upDir);
   void setPerspective(float fovDegrees, float nearPlane, float farPlane);
+  void setOrthographicView(float pixelsPerWorldUnit,
+                           float nearPlane,
+                           float farPlane);
   const glm::vec3& getEye() const { return eye; }
   const glm::vec3& getTarget() const { return target; }
   const glm::vec3& getUp() const { return up; }
@@ -115,4 +128,5 @@ private:
   float perspectiveFar;
   float orthographicNear;
   float orthographicFar;
+  bool orthographicLookAt;
 };

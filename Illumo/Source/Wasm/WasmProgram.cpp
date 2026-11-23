@@ -38,7 +38,8 @@ describeCapabilities(std::uint32_t granted)
     { GuestCapability::Audio, "audio" },
     { GuestCapability::HostRender, "host render world" },
     { GuestCapability::Launch, "launch apps" },
-    { GuestCapability::Project, "projects" }
+    { GuestCapability::Project, "projects" },
+    { GuestCapability::DebugTools, "debug tools" }
   };
   std::string text;
   for (const std::pair<GuestCapability, const char*>& name : names) {
@@ -254,6 +255,9 @@ WasmProgram::start(IllumoContext& host)
           (m_projectHost && m_projectHost->available()
              ? static_cast<std::uint32_t>(GuestCapability::Project)
              : 0u) |
+#if defined(ILLUMO_ENABLE_DEBUG_TOOLS)
+          static_cast<std::uint32_t>(GuestCapability::DebugTools) |
+#endif
           static_cast<std::uint32_t>(GuestCapability::Messages),
         m_startup,
         response)) {

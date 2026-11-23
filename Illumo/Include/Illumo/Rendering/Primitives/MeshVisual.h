@@ -95,6 +95,8 @@ public:
   float getRoughness() const { return roughness; }
   void setEmissiveFactor(const glm::vec3& value);
   const glm::vec3& getEmissiveFactor() const { return emissiveFactor; }
+  void setOpacity(float value);
+  float getOpacity() const { return opacity; }
 
   void clearPrimitives();
   size_t addQuad(const glm::vec3& center,
@@ -283,6 +285,7 @@ private:
   float metallic = 0.0f;
   float roughness = 0.8f;
   glm::vec3 emissiveFactor = glm::vec3(0.0f);
+  float opacity = 1.0f;
 
   void emitPbrMaterialTokens(Renderer* renderer, bool bindLightBlock) const;
 

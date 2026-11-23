@@ -1495,13 +1495,18 @@ struct WasmFrameRenderer::State
     // scratch and keeps its capacity (its references drop on release).
     for (std::size_t index = 0; index < proposed.batches.size(); ++index) {
       const GuestBatch& nextBatch = proposed.batches[index];
-      if (nextBatch.style != GuestBatchStyle::LitMesh) {
+      const bool worldShape = nextBatch.style == GuestBatchStyle::Shape &&
+                              nextBatch.layer == GuestLayer::World;
+      if (nextBatch.style != GuestBatchStyle::LitMesh && !worldShape) {
         continue;
       }
       prepared[index].prevMvp = nextBatch.mvp;
+      bool matchedPrev = false;
       for (std::size_t prev = 0; prev < frame.batches.size(); ++prev) {
         const GuestBatch& prevBatch = frame.batches[prev];
-        if (prevBatch.style != GuestBatchStyle::LitMesh ||
+        if (prevBatch.style != nextBatch.style ||
+            prevBatch.layer != nextBatch.layer ||
+            prevBatch.primitive != nextBatch.primitive ||
             prevBatch.firstIndex != nextBatch.firstIndex) {
           continue;
         }
@@ -1509,11 +1514,17 @@ struct WasmFrameRenderer::State
           prepared[index].retained
             ? payloads[prev].retained == prepared[index].retained
             : (!payloads[prev].retained &&
+               batchSlots[prev].pool == slots[index].pool &&
                batchSlots[prev].index == slots[index].index);
         if (sameMesh) {
           prepared[index].prevMvp = prevBatch.mvp;
+          matchedPrev = true;
           break;
         }
+      }
+      if (!matchedPrev && worldShape && frame.hasCamera && proposed.hasCamera &&
+          nextBatch.mvp == proposed.camera) {
+        prepared[index].prevMvp = frame.camera;
       }
     }
     std::swap(frame, proposed);
@@ -1898,6 +1909,14 @@ struct WasmFrameRenderer::State
     renderer.pushSetMesh(mesh);
     renderer.pushUniformVec2(WorldLook::kResolutionUniform, width, height);
     renderer.pushUniformMat4(WorldLook::kMvpUniform, batch.mvp.data());
+    if (batch.style == GuestBatchStyle::Shape) {
+      const bool worldMotion = batch.layer == GuestLayer::World;
+      renderer.pushUniformMat4(WorldLook::kPrevMvpUniform,
+                               worldMotion ? payload.prevMvp.data()
+                                           : batch.mvp.data());
+      renderer.pushUniformInt(WorldLook::kMotionBlurEnabledUniform,
+                              worldMotion ? 1 : 0);
+    }
     if (payload.texture) {
       renderer.pushUniformInt(WorldLook::kTextureUniform, 0);
       renderer.pushSetTexture(

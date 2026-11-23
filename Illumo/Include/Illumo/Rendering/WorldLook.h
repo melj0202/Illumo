@@ -38,6 +38,7 @@ struct WorldLook
   static constexpr const char* kEmissiveMapUniform = "uEmissiveMap";
   static constexpr const char* kMaterialFactorsUniform = "uMaterialFactors";
   static constexpr const char* kEmissiveFactorUniform = "uEmissiveFactor";
+  static constexpr const char* kDitherAlphaUniform = "uDitherAlpha";
   static constexpr const char* kShadowQuadrantUniform = "uShadowQuadrant";
   static constexpr int kTextureUnit = 0;
   static constexpr int kShadowTextureUnit = 1;

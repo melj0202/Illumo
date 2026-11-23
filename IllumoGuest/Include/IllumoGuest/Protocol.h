@@ -40,7 +40,10 @@ enum class GuestCapability : std::uint32_t
   // Project folders (Project service): the host's recent list, folder
   // dialogs, and a restart of the runtime on a chosen project; offered only
   // when the host keeps projects for this application.
-  Project = 1u << 14u
+  Project = 1u << 14u,
+  // Host was built with ILLUMO_ENABLE_DEBUG_TOOLS (Debug / RelWithDebInfo);
+  // guests gate debug-only overlays and tools behind it.
+  DebugTools = 1u << 15u
 };
 
 enum class GuestCall : std::uint32_t
@@ -76,7 +79,7 @@ struct GuestEnvelope
 {
   static constexpr std::uint32_t Magic = 0x31474c49u; // ILG1
   static constexpr std::uint32_t Version = 1;
-  static constexpr std::uint32_t KnownCapabilities = (1u << 15u) - 1u;
+  static constexpr std::uint32_t KnownCapabilities = (1u << 16u) - 1u;
   static constexpr std::size_t HeaderBytes = 32;
 
   GuestCall call = GuestCall::Init;

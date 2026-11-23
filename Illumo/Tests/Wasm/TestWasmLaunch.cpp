@@ -166,8 +166,8 @@ testLaunchServiceDecoder()
   testTrue(counters,
            (GuestEnvelope::KnownCapabilities &
             static_cast<std::uint32_t>(GuestCapability::Launch)) != 0 &&
-             (GuestEnvelope::KnownCapabilities >> 15u) == 0,
-           "Project is the newest known capability");
+             (GuestEnvelope::KnownCapabilities >> 16u) == 0,
+           "DebugTools is the newest known capability");
   return counters.failures;
 }
 

@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <map>
 
 // Serves in-memory bytes by virtual path, like the guest package cache, and
@@ -1190,6 +1191,215 @@ testInstancePunctualLightsAndPbr()
   return counters.failures;
 }
 
+struct RecordingTintWorld final : IRenderWorld
+{
+  size_t tintCalls = 0;
+  std::unordered_map<RenderInstanceId, std::array<float, 4>> tints;
+
+  bool createMaterial(RenderMaterialId, const RenderMaterialDesc&) override
+  {
+    return true;
+  }
+  bool updateMaterial(RenderMaterialId, const RenderMaterialDesc&) override
+  {
+    return true;
+  }
+  bool destroyMaterial(RenderMaterialId) override { return true; }
+  bool createInstance(RenderInstanceId id,
+                      const RenderInstanceDesc& desc) override
+  {
+    tints[id] = desc.tint;
+    return true;
+  }
+  bool setInstanceTransform(RenderInstanceId,
+                            const std::array<float, 16>&) override
+  {
+    return true;
+  }
+  bool setInstanceTint(RenderInstanceId id,
+                       const std::array<float, 4>& tint) override
+  {
+    tints[id] = tint;
+    tintCalls += 1;
+    return true;
+  }
+  bool setInstanceVisible(RenderInstanceId, bool) override { return true; }
+  bool destroyInstance(RenderInstanceId id) override
+  {
+    tints.erase(id);
+    return true;
+  }
+  void setEnvironment(const RenderEnvironment&) override {}
+  bool setSkybox(const RenderSkyboxDesc&) override { return true; }
+};
+
+static int
+testInstanceViewOpacity()
+{
+  TestCounters counters;
+  HeadlessRenderFixture fixture(640, 480);
+  fixture.mock.Initialize();
+  AssetManager assets(&fixture.renderer, false);
+  SceneDocument document;
+  document.worldMode = SceneWorldMode::World3D;
+  document.nodes.push_back(primitiveNode(
+    "wall", "", ScenePrimitiveShape::Cube, Vector3(0.0f, 0.0f, 0.0f)));
+
+  RecordingTintWorld world;
+  SceneInstance instance(&assets);
+  instance.setRenderer(&fixture.renderer);
+  instance.setRenderWorld(&world);
+  std::string error;
+  testTrue(counters,
+           instance.load(document, "/app", error) && world.tints.size() == 1,
+           "scene loads and binds wall instance");
+
+  const std::uint64_t revisionBefore = instance.revision();
+  const RenderInstanceId wallId = world.tints.begin()->first;
+
+  // Unknown id and NaN are ignored; valid fade updates tint without editing
+  // the document or hiding from picking.
+  instance.setViewOpacity("missing", 0.3f);
+  instance.setViewOpacity("wall", std::numeric_limits<float>::quiet_NaN());
+  instance.setViewOpacity("wall", 0.25f);
+  instance.update();
+  const size_t callsAfterFade = world.tintCalls;
+  instance.update();
+  std::string picked;
+  testTrue(counters,
+           instance.revision() == revisionBefore &&
+             instance.viewOpacities().size() == 1 &&
+             std::fabs(instance.viewOpacity("wall") - 0.25f) < 1.0e-5f &&
+             std::fabs(world.tints[wallId][3] - 0.25f) < 1.0e-5f &&
+             callsAfterFade == 1 && world.tintCalls == 1 &&
+             instance.pickRay(Vector3(0.0f, 0.0f, 5.0f),
+                              Vector3(0.0f, 0.0f, -1.0f),
+                              &picked) &&
+             picked == "wall",
+           "setViewOpacity fades RenderWorld tint once without editing "
+           "document or breaking picking");
+
+  // Restoring to 1 clears the override and syncs opaque alpha once.
+  instance.setViewOpacity("wall", 1.0f);
+  instance.update();
+  const size_t callsAfterRestore = world.tintCalls;
+  instance.update();
+  testTrue(counters,
+           instance.viewOpacities().empty() &&
+             std::fabs(world.tints[wallId][3] - 1.0f) < 1.0e-5f &&
+             callsAfterRestore == 2 && world.tintCalls == 2,
+           "restoring opacity to 1 removes override and syncs opaque tint");
+
+  // Reloading clears active view opacities.
+  instance.setViewOpacity("wall", 0.4f);
+  testTrue(counters,
+           instance.load(document, "/app", error) &&
+             instance.viewOpacities().empty(),
+           "loading a scene clears transient view opacities");
+
+  // Unbound MeshVisual fallback receives faded uTint.a and uDitherAlpha = 1.
+  instance.setRenderWorld(nullptr);
+  instance.setViewOpacity("wall", 0.3f);
+  instance.update();
+  fixture.camera.setProjectionType(ProjectionType::Perspective);
+  fixture.camera.setPerspective(60.0f, 0.1f, 100.0f);
+  fixture.camera.lookAt(
+    Vector3(0.0f, 0.0f, 5.0f), Vector3(0.0f), Vector3(0.0f, 1.0f, 0.0f));
+  DrawList drawList(&fixture.window, &fixture.camera);
+  drawList.AddDrawable(&instance.drawable(), RenderLayerId::World);
+  fixture.renderer.BeginFrame();
+  fixture.renderer.RenderScene(&drawList, &fixture.camera);
+  fixture.renderer.EndFrame();
+  bool sawDitherOn = false;
+  bool sawFadedTint = false;
+  for (size_t i = 0; i < fixture.mock.getLastNonEmptySubmittedCount(); ++i) {
+    const RenderCommand& cmd = fixture.mock.getLastNonEmptySubmitted(i);
+    if (cmd.commandType == CommandType::SetUniformInt &&
+        std::string(cmd.uniformInt.name) == WorldLook::kDitherAlphaUniform &&
+        cmd.uniformInt.value == 1) {
+      sawDitherOn = true;
+    }
+    if (cmd.commandType == CommandType::SetUniformVec4 &&
+        std::string(cmd.uniformVec4.name) == WorldLook::kTintUniform &&
+        std::fabs(cmd.uniformVec4.w - 0.3f) < 1.0e-4f) {
+      sawFadedTint = true;
+    }
+  }
+  testTrue(counters,
+           sawDitherOn && sawFadedTint,
+           "MeshVisual fallback submits uDitherAlpha=1 and faded uTint.a");
+  return counters.failures;
+}
+
+static int
+testInstanceOrthographic3DCamera()
+{
+  TestCounters counters;
+  testSection("SceneInstance: World3D orthographic camera preserves 3D pose");
+  HeadlessRenderFixture fixture(1280, 720);
+  fixture.mock.Initialize();
+  AssetManager assets(&fixture.renderer, false);
+  SceneInstance instance(&assets);
+  instance.setRenderer(&fixture.renderer);
+
+  SceneDocument document;
+  document.worldMode = SceneWorldMode::World3D;
+  SceneNode cameraNode;
+  cameraNode.id = "cam3d";
+  cameraNode.name = "Ortho 3D";
+  cameraNode.transform.position = Vector3(2.598076f, 2.598076f, 2.598076f);
+  cameraNode.transform.rotation =
+    Quaternion(0.880476f, -0.279848f, 0.364705f, 0.115917f);
+  SceneCamera camComp;
+  camComp.projection = SceneProjection::Orthographic;
+  camComp.nearPlane = 0.1f;
+  camComp.farPlane = 100.0f;
+  camComp.zoom = 180.0f;
+  camComp.primary = true;
+  cameraNode.components.push_back(SceneComponent{ camComp });
+  document.nodes.push_back(cameraNode);
+
+  std::string error;
+  testTrue(counters,
+           instance.load(document, "/app", error),
+           ("load 3D ortho scene: " + error).c_str());
+  testTrue(counters,
+           instance.applyCamera("cam3d", fixture.camera),
+           "applyCamera succeeds for World3D orthographic camera");
+  testTrue(counters,
+           fixture.camera.getProjectionType() == ProjectionType::Orthographic &&
+             fixture.camera.isOrthographicLookAt() &&
+             std::fabs(fixture.camera.GetZoom() - 180.0f) < 1.0e-4f,
+           "camera enters 3D orthographic look-at mode with requested zoom");
+
+  const glm::vec3 eye = fixture.camera.getEye();
+  const glm::vec3 look =
+    glm::normalize(fixture.camera.getTarget() - fixture.camera.getEye());
+  const float invSqrt3 = 1.0f / std::sqrt(3.0f);
+  testTrue(counters,
+           std::fabs(eye.x - 2.598076f) < 0.01f &&
+             std::fabs(look.x + invSqrt3) < 0.01f &&
+             std::fabs(look.y + invSqrt3) < 0.01f &&
+             std::fabs(look.z + invSqrt3) < 0.01f,
+           "3D orthographic camera looks along node's -Z axis");
+
+  const glm::mat4 mvp = fixture.camera.GetMVPMatrix(16.0f / 9.0f);
+  const glm::vec4 originClip = mvp * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+  const glm::vec4 upClip = mvp * glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+  fixture.env.setVar("WinX", 2560);
+  fixture.env.setVar("WinY", 1440);
+  const glm::mat4 mvp1440 = fixture.camera.GetMVPMatrix(16.0f / 9.0f);
+  const glm::vec4 upClip1440 = mvp1440 * glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+  testTrue(counters,
+           std::fabs(originClip.x) < 0.01f && std::fabs(originClip.y) < 0.01f &&
+             std::fabs(originClip.w - 1.0f) < 1.0e-4f && upClip.y > 0.3f &&
+             std::fabs(upClip.w - 1.0f) < 1.0e-4f &&
+             std::fabs(upClip1440.y - upClip.y) < 1.0e-4f,
+           "orthographic MVP centers origin with unit w, positive Y "
+           "projection, and resolution-independent framing");
+  return counters.failures;
+}
+
 void
 registerSceneInstanceTests(IllumoTestRegistry& registry)
 {
@@ -1199,6 +1409,10 @@ registerSceneInstanceTests(IllumoTestRegistry& registry)
                []() { return testInstanceNonCastingShadowReceiver(); });
   registry.add("Illumo.Content.InstancePunctualLightsAndPbr",
                []() { return testInstancePunctualLightsAndPbr(); });
+  registry.add("Illumo.Content.InstanceViewOpacity",
+               []() { return testInstanceViewOpacity(); });
+  registry.add("Illumo.Content.InstanceOrthographic3DCamera",
+               []() { return testInstanceOrthographic3DCamera(); });
   registry.add("Illumo.Content.InstancePrimitives",
                []() { return testInstancePrimitives(); });
   registry.add("Illumo.Content.InstanceEnvironmentLight",

@@ -195,6 +195,18 @@ public:
   {
     return m_viewHidden;
   }
+  // Transient per-node view opacity in [0, 1] (1 = normal). Multiplies the
+  // rendered tint alpha without modifying the document, revision, observers,
+  // bounds, or picking. Opaque materials render alpha < 1 with screen-door
+  // dithering. Unknown ids and non-finite values are ignored; values >= 1
+  // clear the override. Loading or clearing the scene clears all overrides.
+  void setViewOpacity(std::string_view id, float opacity);
+  float viewOpacity(std::string_view id) const;
+  void clearViewOpacities();
+  const std::unordered_map<std::string, float>& viewOpacities() const
+  {
+    return m_viewOpacities;
+  }
   // One observer at a time (nullptr removes it); it must outlive the
   // binding or unbind itself.
   void setContentObserver(ISceneContentObserver* observer)
@@ -256,6 +268,7 @@ private:
   bool m_lightingDirty = true;
   std::vector<std::string> m_warnings;
   std::unordered_set<std::string> m_viewHidden;
+  std::unordered_map<std::string, float> m_viewOpacities;
   uint64_t m_revision = 1;
   uint64_t m_idCounter = 0;
   MeshHandle m_primitiveMeshes[6]{};

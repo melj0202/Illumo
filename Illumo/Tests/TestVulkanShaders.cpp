@@ -508,6 +508,9 @@ testEngineShadersCompile()
     testTrue(counters,
              findUniform(instanced, "uViewProjection") == nullptr,
              "named block members stay out of the default block");
+    testTrue(counters,
+             findUniform(instanced, "uDitherAlpha") != nullptr,
+             "screen-door dither uniform is reflected in the default block");
   }
   GlslProgram skybox;
   if (compileFiles("skybox_vertex.glsl", "skybox_frag.glsl", &skybox, &error)) {
